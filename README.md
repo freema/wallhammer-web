@@ -82,6 +82,10 @@ Co při přenosu změnit:
 
 Dokumentace enginu už o příkladech mluví jako o `examples/<jméno>` v tomto repozitáři.
 
+## Kopie v repozitáři města
+
+Repozitář modelu města Ústí má ve `web/packages/wallhammer-web` tvrdou kopii verze 0.4.0 a smí si ji pro své potřeby upravit. Aby se obě kopie nerozešly naslepo, platí tam pravidlo: každá změna té kopie se zároveň pošle sem jako issue nebo pull request (co se změnilo, proč, odkaz na commit). Tady se rozhodne, jestli ji engine převezme, a odpověď se zapíše do téhož issue. Opačným směrem se novější engine do repozitáře města přebírá jen vědomě, jedním pull requestem s tamními kontrolami.
+
 ## Licence
 
-AGPL-3.0-or-later, plný text v [`LICENSE`](LICENSE).
+MIT, plný text v [`LICENSE`](LICENSE). Stejný soubor je i v balíčku (`packages/wallhammer-web/LICENSE`).

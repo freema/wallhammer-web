@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.4.0",
   "type": "module",
-  "license": "AGPL-3.0-or-later",
+  "license": "MIT",
   "description": "Workspace of the wallhammer-web engine (packages/wallhammer-web), its checks (tools/) and its examples (examples/).",
   "scripts": {
     "typecheck": "pnpm -r typecheck",

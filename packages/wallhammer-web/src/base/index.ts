@@ -1,0 +1,21 @@
+// Layer 0, base: types and the smallest vector and matrix math. No browser, no GPU, no time.
+
+export { DEG, add, clamp, cross, crossInto, dot, lerp, normalize, orthoMatrix, scale, smoothstep } from './math.ts';
+export type { OrthoFrame, RGB, Vec3 } from './math.ts';
+export { boxInVolume, depthViewProj, distanceToBox, newCornerRays, newOrthoFrame, snapRenderOrigin, toRenderSpace } from './view.ts';
+export type { Box3, CullBox, CullFrustum, CullVolume, DepthMode, DepthProjection, OriginAxes, Ray, View } from './view.ts';
+export { primitiveCount, texelBytes } from './data.ts';
+export type { InstanceBounds, InstanceData, MeshData, Primitive, ScalarType, TextureData, TextureFormat, TextureSampling, VertexAttrib, VertexLayout } from './data.ts';
+export type { BakeDesc, BakeTarget, BlendFactor, BlendSpec, DrawState, MaterialDesc, PassName, ShaderSource, UniformValue, Uniforms } from './material.ts';
+export type { EnvSlot, FogLayer, FrameEnvironment, FrameField, FrameRegion, LightMode } from './env-slot.ts';
+export { DAMAGE, PART_FLAG, PART_ROLE, RUBBLE, entryDir, entryRung, entryVariant, packEntry } from './destructible.ts';
+export type { ConvexPiece, DamageEntry, DamageRung, DestructibleMaterial, DestructionEvent, PartRole, RubbleArchetype, RubbleFootprint, StructureBond, StructureDesc, StructurePart, StructureState } from './destructible.ts';
+export { RIG_ATTRIBS, RIG_BEND_AXIS, RIG_FINISH, RIG_INSTANCE_FLOATS, RIG_INSTANCE_LAYOUT, RIG_MOTION, RIG_VERTEX_FLOATS, RIG_VERTEX_LAYOUT, packRgb, rigExtended, writeRigInstance } from './rig.ts';
+export type { RigDesc, RigFinish, RigInstance, RigMotion, RigPart, RigSegment, RigShape } from './rig.ts';
+export { Progress } from './progress.ts';
+export type { ProgressReport, ProgressStage } from './progress.ts';
+export { RAD_PER_TURN, detAcos, detAsin, detAtan, detAtan2, detCos, detCosTurns, detSin, detSinCos, detSinCosTurns, detSinTurns } from './trig.ts';
+export { FRAME_NONE, FrameSet, directionFromDeg, directionToDeg, quatAxisTurns, quatConj, quatFromAxes, quatIdentity, quatMul, quatNormalize, quatRotate, relativeMatrix, relativePoints, tangentPose } from './frames.ts';
+export type { FrameBearing, FramePose, FrameState, Quat } from './frames.ts';
+export { radialHeight, radialUpAt, toFramePlane, upFrame } from './up.ts';
+export type { RadialUp, UpFrame } from './up.ts';

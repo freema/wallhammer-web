@@ -1,0 +1,6 @@
+**/node_modules
+**/dist
+.git
+*.tgz
+tools/shot/out
+tools/bench/out

@@ -1,0 +1,38 @@
+# Wallhammer Web: the engine, its checks and its examples. `docker compose up -d` in this folder is enough, Node is
+# not needed on the host.
+# The `dev` service installs the dependencies and stays up for the checks:
+#   docker compose exec -T dev sh -c 'cd /app && pnpm typecheck'
+# It publishes no port. Services of examples (one per example, each with its own port on 127.0.0.1) start once `dev`
+# is healthy; they are added here together with the examples.
+name: wallhammer-web
+
+services:
+  dev:
+    image: wallhammer-web-engine:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    init: true
+    volumes:
+      - .:/app
+      # Dependencies and the pnpm store stay in the container, they are not written to the host.
+      # Each workspace package has its own node_modules (add one volume per example).
+      - node_modules:/app/node_modules
+      - engine_node_modules:/app/packages/wallhammer-web/node_modules
+      - pnpm_store:/pnpm-store
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges
+    healthcheck:
+      # The entrypoint writes the marker once the dependencies are installed.
+      test: ["CMD", "test", "-f", "/tmp/wallhammer-ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+      start_interval: 2s
+
+volumes:
+  node_modules:
+  engine_node_modules:
+  pnpm_store:

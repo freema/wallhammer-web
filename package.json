@@ -1,0 +1,21 @@
+{
+  "name": "wallhammer-web-workspace",
+  "private": true,
+  "version": "0.4.0",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Workspace of the wallhammer-web engine (packages/wallhammer-web), its checks (tools/) and its examples (examples/).",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "check:layers": "node tools/layers/check.ts",
+    "check:layers:test": "node tools/layers/test.ts",
+    "test:golden": "node tools/golden/engine/golden.ts",
+    "check:docs": "node tools/docs/check.ts",
+    "build": "pnpm --filter wallhammer-web build",
+    "check:pack": "sh tools/pack/check.sh"
+  },
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=22.18"
+  }
+}

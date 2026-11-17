@@ -1,0 +1,153 @@
+{
+  "name": "wallhammer-web",
+  "version": "0.4.0",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Small general-purpose WebGL2 engine: plain WebGL2, layered modules, stateless randomness, all graphics from code.",
+  "keywords": [
+    "webgl2",
+    "3d",
+    "engine",
+    "procedural",
+    "rendering",
+    "simulation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freema/wallhammer-web.git",
+    "directory": "packages/wallhammer-web"
+  },
+  "homepage": "https://github.com/freema/wallhammer-web#readme",
+  "bugs": {
+    "url": "https://github.com/freema/wallhammer-web/issues"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./base": "./src/base/index.ts",
+    "./platform": "./src/platform/index.ts",
+    "./core": "./src/core/index.ts",
+    "./gen-core": "./src/gen-core/index.ts",
+    "./gen-mesh": "./src/gen-mesh/index.ts",
+    "./gen-tex": "./src/gen-tex/index.ts",
+    "./gen-arch": "./src/gen-arch/index.ts",
+    "./gen-ground": "./src/gen-ground/index.ts",
+    "./gen-vegetation": "./src/gen-vegetation/index.ts",
+    "./gen-plan": "./src/gen-plan/index.ts",
+    "./gpu": "./src/gpu/index.ts",
+    "./render": "./src/render/index.ts",
+    "./camera": "./src/camera/index.ts",
+    "./env": "./src/env/index.ts",
+    "./world": "./src/world/index.ts",
+    "./sim": "./src/sim/index.ts",
+    "./sim/destruction": "./src/sim/destruction/index.ts",
+    "./runtime": "./src/runtime/index.ts",
+    "./tools": "./src/tools/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./base": {
+        "types": "./dist/base/index.d.ts",
+        "default": "./dist/base/index.js"
+      },
+      "./platform": {
+        "types": "./dist/platform/index.d.ts",
+        "default": "./dist/platform/index.js"
+      },
+      "./core": {
+        "types": "./dist/core/index.d.ts",
+        "default": "./dist/core/index.js"
+      },
+      "./gen-core": {
+        "types": "./dist/gen-core/index.d.ts",
+        "default": "./dist/gen-core/index.js"
+      },
+      "./gen-mesh": {
+        "types": "./dist/gen-mesh/index.d.ts",
+        "default": "./dist/gen-mesh/index.js"
+      },
+      "./gen-tex": {
+        "types": "./dist/gen-tex/index.d.ts",
+        "default": "./dist/gen-tex/index.js"
+      },
+      "./gen-arch": {
+        "types": "./dist/gen-arch/index.d.ts",
+        "default": "./dist/gen-arch/index.js"
+      },
+      "./gen-ground": {
+        "types": "./dist/gen-ground/index.d.ts",
+        "default": "./dist/gen-ground/index.js"
+      },
+      "./gen-vegetation": {
+        "types": "./dist/gen-vegetation/index.d.ts",
+        "default": "./dist/gen-vegetation/index.js"
+      },
+      "./gen-plan": {
+        "types": "./dist/gen-plan/index.d.ts",
+        "default": "./dist/gen-plan/index.js"
+      },
+      "./gpu": {
+        "types": "./dist/gpu/index.d.ts",
+        "default": "./dist/gpu/index.js"
+      },
+      "./render": {
+        "types": "./dist/render/index.d.ts",
+        "default": "./dist/render/index.js"
+      },
+      "./camera": {
+        "types": "./dist/camera/index.d.ts",
+        "default": "./dist/camera/index.js"
+      },
+      "./env": {
+        "types": "./dist/env/index.d.ts",
+        "default": "./dist/env/index.js"
+      },
+      "./world": {
+        "types": "./dist/world/index.d.ts",
+        "default": "./dist/world/index.js"
+      },
+      "./sim": {
+        "types": "./dist/sim/index.d.ts",
+        "default": "./dist/sim/index.js"
+      },
+      "./sim/destruction": {
+        "types": "./dist/sim/destruction/index.d.ts",
+        "default": "./dist/sim/destruction/index.js"
+      },
+      "./runtime": {
+        "types": "./dist/runtime/index.d.ts",
+        "default": "./dist/runtime/index.js"
+      },
+      "./tools": {
+        "types": "./dist/tools/index.d.ts",
+        "default": "./dist/tools/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "earcut": "^3.2.4"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

@@ -10,7 +10,7 @@ importers:
     devDependencies:
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/destruction:
     dependencies:
@@ -23,7 +23,7 @@ importers:
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/endless:
     dependencies:
@@ -32,14 +32,14 @@ importers:
         version: link:../../packages/wallhammer-web
     devDependencies:
       '@types/node':
-        specifier: ^22.20.5
-        version: 22.20.5
+        specifier: ^26.6.6
+        version: 26.6.6
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/fantasy-village:
     dependencies:
@@ -52,7 +52,7 @@ importers:
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/minimal-3d:
     dependencies:
@@ -65,7 +65,7 @@ importers:
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/outpost:
     dependencies:
@@ -78,7 +78,7 @@ importers:
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/planet:
     dependencies:
@@ -87,14 +87,14 @@ importers:
         version: link:../../packages/wallhammer-web
     devDependencies:
       '@types/node':
-        specifier: ^22.20.5
-        version: 22.20.5
+        specifier: ^26.6.6
+        version: 26.6.6
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/system:
     dependencies:
@@ -103,14 +103,14 @@ importers:
         version: link:../../packages/wallhammer-web
     devDependencies:
       '@types/node':
-        specifier: ^22.20.5
-        version: 22.20.5
+        specifier: ^26.6.6
+        version: 26.6.6
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   examples/walk:
     dependencies:
@@ -123,7 +123,7 @@ importers:
         version: 7.0.2
       vite:
         specifier: ^8.3.7
-        version: 8.3.7(@types/node@22.20.5)
+        version: 8.3.7(@types/node@26.6.6)
 
   packages/wallhammer-web:
     dependencies:
@@ -239,8 +239,8 @@ packages:
   '@rolldown/pluginutils@1.1.0':
     resolution: {integrity: sha512-K+NU2HDCEem4sClgHH4ZZXwdJeNFkJo+hRk479DIwdIviAPN2hFJH1KHHwg8CxHQXvi0M5XY4deTXINfIiSG6w==}
 
-  '@types/node@22.20.5':
-    resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
+  '@types/node@26.6.6':
+    resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -491,8 +491,8 @@ packages:
     engines: {node: '>=16.20.0'}
     hasBin: true
 
-  undici-types@6.21.0:
-    resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+  undici-types@8.9.0:
+    resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
   vite@8.3.7:
     resolution: {integrity: sha512-oxh0dMxrayBr33ScJvvBJ2HBQ2jc1TBrXKR2NyL/MJ9WPuX19mN2DXWUmywKdyw5RFVQBo8hmtb2FMC0LHrnng==}
@@ -588,9 +588,9 @@ snapshots:
 
   '@rolldown/pluginutils@1.1.0': {}
 
-  '@types/node@22.20.5':
+  '@types/node@26.6.6':
     dependencies:
-      undici-types: 6.21.0
+      undici-types: 8.9.0
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -775,9 +775,9 @@ snapshots:
       '@typescript/typescript-win32-arm64': 7.0.2
       '@typescript/typescript-win32-x64': 7.0.2
 
-  undici-types@6.21.0: {}
+  undici-types@8.9.0: {}
 
-  vite@8.3.7(@types/node@22.20.5):
+  vite@8.3.7(@types/node@26.6.6):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -785,5 +785,5 @@ snapshots:
       rolldown: 1.2.18
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 22.20.5
+      '@types/node': 26.6.6
       fsevents: 2.3.3

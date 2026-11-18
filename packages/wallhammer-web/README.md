@@ -9,6 +9,8 @@ A 3D engine for the browser where the whole world is written in code: no model f
 [![TypeScript: strict](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![WebGL2](https://img.shields.io/badge/WebGL2-plain-990000)](https://developer.mozilla.org/docs/Web/API/WebGL2RenderingContext)
 
+**[Live demos](https://freema.github.io/wallhammer-web/)**: the examples of the repository running in the browser, nothing to install.
+
 A small WebGL2 engine for the browser, written in strict TypeScript. It uses plain WebGL2 and no graphics library. All graphics come from code; the engine loads no images. One world unit is one metre, and y points up.
 
 The engine knows nothing about any particular project. It provides a renderer that draws the layers it is given, view rigs, an environment model (time, sun, sky, weather) that projects extend with environment slots, stateless randomness, generic geometry, a deterministic fixed-step simulation and world streaming. Ground, vegetation and structures come from three optional content modules, `gen-arch`, `gen-ground` and `gen-vegetation`. Nothing else in the engine depends on them.

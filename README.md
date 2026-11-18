@@ -10,6 +10,8 @@ A 3D engine for the browser where the whole world is written in code: no model f
 [![TypeScript: strict](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![WebGL2](https://img.shields.io/badge/WebGL2-plain-990000)](https://developer.mozilla.org/docs/Web/API/WebGL2RenderingContext)
 
+**[Live demos](https://freema.github.io/wallhammer-web/)**: every example runs in the browser, nothing to install (WebGL2 needed).
+
 Wallhammer Web draws with plain WebGL2 and no graphics library, and it loads no images: every mesh and texture comes from code, from generators that are pure functions of their input and a seed, so the same seed always gives the same world. Its simulation runs on integer ticks and millimetres, so the same commands give the same state hash on every machine. World streaming takes a scene from one house up to a solar system, where the camera flies from orbit to a few metres above a surface in one shot, without a loading screen. It is written in strict TypeScript, and its only runtime dependency is `earcut`.
 
 ## Install
@@ -109,7 +111,7 @@ The [documentation](packages/wallhammer-web/docs/) goes on from there: concepts,
 
 ## Try the examples
 
-Everything runs in Docker; the host needs no Node. From the repository root:
+Every example runs live at <https://freema.github.io/wallhammer-web/>, built from `main`. To run them locally, everything runs in Docker; the host needs no Node. From the repository root:
 
 ```sh
 docker compose up -d
@@ -117,14 +119,14 @@ docker compose up -d
 
 Then open <http://localhost:5281/>. It lists the examples, each at `http://localhost:5281/<name>/`:
 
-- [`fantasy-village`](examples/fantasy-village/): a living fantasy village made by code (architecture, terrain, vegetation, villagers, smoke and fire, late afternoon to evening). Engine only, with its own content modules in the example.
-- [`outpost`](examples/outpost/): a lunar research station in a comic look (flat colours, outlines, hard shadows). Engine only, with its own materials, a rover and astronauts on a skeleton.
-- [`system`](examples/system/): a sun and several bodies on orbits, with one continuous flight from the surface of one body to another. Uses the content modules for its structures and their destruction.
-- [`planet`](examples/planet/): a flight from the surface of a small planet up to orbit and back. Engine only.
-- [`endless`](examples/endless/): an endless streamed world in quadtree cells, generated in workers or read from baked files. Engine only. A second page, `sphere.html`, shows the sphere world.
-- [`destruction`](examples/destruction/): generated structures on plain ground that break part by part. Uses the content modules (`gen-arch`, `sim/destruction`).
-- [`walk`](examples/walk/): a walking test course: a collision world, a walker and a follow camera.
-- [`minimal-3d`](examples/minimal-3d/): a perspective orbit view of an island with standing stones. Engine only.
+- [`fantasy-village`](examples/fantasy-village/) ([live](https://freema.github.io/wallhammer-web/fantasy-village/)): a living fantasy village made by code (architecture, terrain, vegetation, villagers, smoke and fire, late afternoon to evening). Engine only, with its own content modules in the example.
+- [`outpost`](examples/outpost/) ([live](https://freema.github.io/wallhammer-web/outpost/)): a lunar research station in a comic look (flat colours, outlines, hard shadows). Engine only, with its own materials, a rover and astronauts on a skeleton.
+- [`system`](examples/system/) ([live](https://freema.github.io/wallhammer-web/system/)): a sun and several bodies on orbits, with one continuous flight from the surface of one body to another. Uses the content modules for its structures and their destruction.
+- [`planet`](examples/planet/) ([live](https://freema.github.io/wallhammer-web/planet/)): a flight from the surface of a small planet up to orbit and back. Engine only.
+- [`endless`](examples/endless/) ([live](https://freema.github.io/wallhammer-web/endless/)): an endless streamed world in quadtree cells, generated in workers or read from baked files. Engine only. A second page, `sphere.html` ([live](https://freema.github.io/wallhammer-web/endless/sphere.html)), shows the sphere world.
+- [`destruction`](examples/destruction/) ([live](https://freema.github.io/wallhammer-web/destruction/)): generated structures on plain ground that break part by part. Uses the content modules (`gen-arch`, `sim/destruction`).
+- [`walk`](examples/walk/) ([live](https://freema.github.io/wallhammer-web/walk/)): a walking test course: a collision world, a walker and a follow camera.
+- [`minimal-3d`](examples/minimal-3d/) ([live](https://freema.github.io/wallhammer-web/minimal-3d/)): a perspective orbit view of an island with standing stones. Engine only.
 
 ## Repository
 
@@ -132,7 +134,7 @@ The repository is a pnpm workspace:
 
 - `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/).
 - `examples/`: the example pages above, each with its own `README.md`.
-- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugin (`vite`), pictures in Docker (`shot/page-shot.mjs`) and host tools (`shot/shot.mjs`, `bench`).
+- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`) and host tools (`shot/shot.mjs`, `bench`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
 - `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending).
 - `internal/`: internal working material, ignored by git (see [Internal notes](#internal-notes)).
@@ -165,6 +167,14 @@ In general `http://localhost:5281/<name>/` serves `examples/<name>`. Another hos
 How it works: after the install, `scripts/dev-entrypoint.sh` starts `tools/serve/serve.ts`, one Node process with one HTTP server. Each example has its own Vite dev server in it (with its own `vite.config.ts`), in middleware mode with the base path `/<name>/`. That server starts when the example is first opened, so examples nobody opens cost nothing (no file watching). Source edits reload the page. A restart (`docker compose restart dev`) is needed only after a change of dependencies. Dependencies live in named volumes; nothing is installed on the host disk.
 
 A new example (a folder with `index.html`) shows up in the index by itself. It still needs a volume for its `node_modules` in `docker-compose.yml` and a directory in `Dockerfile.dev`.
+
+### Live demos
+
+```sh
+docker compose exec -T dev sh -c 'cd /app && pnpm build:examples'   # dist-pages/: every example and the index, base /
+```
+
+`tools/pages/build.ts` builds every example with its own `vite.config.ts` into `dist-pages/<name>/` (ignored by git), every `.html` page of its folder included, and writes the index next to them. `WH_PAGES_BASE` sets the path the site is served under (default `/`). [`pages.yml`](.github/workflows/pages.yml) runs it with `/wallhammer-web/` on every push to `main` that touches the examples, the engine or the tools (or by hand) and deploys the result to <https://freema.github.io/wallhammer-web/>. GitHub Pages sends no special headers; nothing in the examples needs them. The baked cells of `endless` are not in git, so they are not published and `src=files` has nothing to read there.
 
 ## Checks
 

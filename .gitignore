@@ -1,6 +1,8 @@
 # Wallhammer Web workspace
 node_modules/
 dist/
+# Static build of the examples for GitHub Pages (pnpm build:examples).
+dist-pages/
 *.tgz
 **/.vite/
 .pnpm-store/

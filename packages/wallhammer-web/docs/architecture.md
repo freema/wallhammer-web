@@ -106,6 +106,7 @@ tools/golden/                golden hashes that need example code
 tools/docs/                  the documentation check
 tools/pack/                  the check of the published package
 tools/walk/, tools/follow-check/   the walking and follow-camera checks (plain Node)
-tools/serve/, tools/vite/    the example server (one port for all examples) and its dev-server plugin
+tools/serve/, tools/vite/    the example server (one port for all examples) and the Vite plugins of the examples
+tools/pages/                 the static build of the examples (the live demos on GitHub Pages)
 tools/shot/, tools/bench/    screenshots and measurements of the example pages (run on the host)
 ```

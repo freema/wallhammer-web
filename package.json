@@ -19,6 +19,7 @@
     "check:follow": "node tools/follow-check/check.ts",
     "serve": "node tools/serve/serve.ts",
     "build": "pnpm --filter wallhammer-web build",
+    "build:examples": "node tools/pages/build.ts",
     "check:pack": "sh tools/pack/check.sh"
   },
   "devDependencies": {

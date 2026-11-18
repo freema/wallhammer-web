@@ -1,0 +1,29 @@
+# Dependency updates once a week, at most one pull request per ecosystem: every update of the week is grouped.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    groups:
+      npm:
+        patterns:
+          - "*"
+    ignore:
+      # The types follow the Node version of Dockerfile.dev (22), not the newest Node.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major

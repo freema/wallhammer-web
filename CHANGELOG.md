@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+## 0.4.1
+
+### Changed
+
+- The package README opens with an animation recorded from the `fantasy-village` example and a one-line summary. No change to the code of the package.
+
 ## 0.4.0
 
 First public release. Earlier versions were never published.

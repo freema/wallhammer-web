@@ -1,0 +1,60 @@
+name: Feature request
+description: Propose a new mechanism or a change to the engine.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first, then the mechanism. The engine stays general: content of one project or one game belongs in that project, not in the engine.
+        Proposals must fit the rules in [CONTRIBUTING.md](https://github.com/freema/wallhammer-web/blob/main/CONTRIBUTING.md#rules): modules in layers, WebGL only in `gpu`, DOM only in `platform`, no graphics library, no loaded images, deterministic generators.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, and why the engine does not let you do it today.
+    validations:
+      required: true
+  - type: textarea
+    id: mechanism
+    attributes:
+      label: Proposed mechanism
+      description: The mechanism you propose, described in neutral terms. Sketch the API if you can (names, plain-data inputs and outputs).
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      description: Which module and layer it would live in. See [Architecture](https://github.com/freema/wallhammer-web/blob/main/packages/wallhammer-web/docs/architecture.md).
+      multiple: true
+      options:
+        - base (layer 0)
+        - platform (layer 1)
+        - core (layer 2)
+        - gen-core (layer 2)
+        - motion (layer 2)
+        - gen-mesh (layer 3)
+        - gen-tex (layer 3)
+        - gen-plan (layer 3)
+        - gen-arch (layer 3, content)
+        - gen-ground (layer 3, content)
+        - gen-vegetation (layer 3, content)
+        - gpu (layer 4)
+        - render (layer 5)
+        - camera (layer 5)
+        - env (layer 5)
+        - world (layer 5)
+        - sim (layer 5)
+        - runtime (layer 6)
+        - tools (layer 7)
+        - a new module
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you considered, including doing it in your own project on top of the engine.
+    validations:
+      required: false

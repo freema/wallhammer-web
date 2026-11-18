@@ -8,6 +8,13 @@
 
 A web 3D engine in which the whole world is made by code: plain WebGL2, no graphics library, no loaded images. Strict TypeScript, modules in layers, a deterministic simulation, a streamed world from one house up to a solar system.
 
+| | |
+| --- | --- |
+| ![A village street in the afternoon: timber-framed houses, cobbles, villagers](.github/media/fantasy-village-street.jpg) | ![The same village from above in the evening, windows and lanterns lit](.github/media/fantasy-village-evening.jpg) |
+| ![A research station on the Moon in a comic look, the Earth above the horizon](.github/media/outpost.jpg) | ![A generated planet from orbit with rivers and settlements](.github/media/system-planet.jpg) |
+
+Pictures of the examples [`fantasy-village`](examples/fantasy-village/), [`outpost`](examples/outpost/) and [`system`](examples/system/). Everything in them is built by code at start: no models, no textures, no image files.
+
 The repository is a pnpm workspace:
 
 - `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/) (code samples there are type-checked).
@@ -136,6 +143,10 @@ The two copies are synchronised by hand, never automatically, and only when the 
 ## Internal notes
 
 `internal/` at the repository root is ignored by git, as are files named `*.local.md`. Internal working material goes there: notes, plans, research, reports and drafts. It is never committed.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the setup, the checks and the rules, [`SECURITY.md`](SECURITY.md) for reporting a vulnerability and [`CHANGELOG.md`](CHANGELOG.md) for what changed between versions.
 
 ## Licence
 

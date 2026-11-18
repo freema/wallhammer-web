@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/freema/wallhammer-web/tree/main/packages/wallhammer-web/docs
+    about: Getting started, the architecture, the guides and the reference of every entry.
+  - name: Security vulnerability
+    url: https://github.com/freema/wallhammer-web/security/policy
+    about: Report vulnerabilities privately as described in the security policy, not in a public issue.

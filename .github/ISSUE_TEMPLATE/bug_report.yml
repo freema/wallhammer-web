@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in the engine does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not report security vulnerabilities here; follow the [security policy](https://github.com/freema/wallhammer-web/security/policy) instead.
+        A small, self-contained reproduction makes a bug much faster to fix.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version of `wallhammer-web`, or the commit if you use the repository.
+      placeholder: 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser, GPU and operating system
+      description: For example the browser and its version, the GPU (shown by `rendererName`) and the OS. For code that runs in plain Node, the Node version.
+      placeholder: Chrome 131, Apple M2, macOS 15
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest code that shows the problem, which entries it imports, and the steps to run it. A link to a small repository works too.
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen, with a link to the documentation if it describes it.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead. A screenshot helps for a rendering problem.
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: Errors and warnings from the browser console or the terminal, including WebGL and shader compile messages.
+      render: text
+    validations:
+      required: false

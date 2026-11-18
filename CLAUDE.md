@@ -26,4 +26,5 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 - `tools/serve` (one server for all examples), `tools/vite` (dev-server plugin), `tools/shot` (pictures: `page-shot.mjs` in the `shot` service, `shot.mjs` on the host), `tools/bench` (performance, on the host).
 - `.claude/skills/`: `wallhammer-run` (running), `wallhammer-verify` (checks), `wallhammer-extend` (where things go when extending).
 - `internal/`: internal working material, never committed.
-- `README.md`: running, checks, pictures, npm publishing, origin, the copy in the city repository.
+- `.github/workflows/`: `checks.yml` (all checks on push and pull request), `publish.yml` (npm publish when a GitHub release is published).
+- `README.md`: running, checks, pictures, npm publishing and release, origin, the copy in the city repository.

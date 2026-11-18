@@ -1,0 +1,52 @@
+name: Publish to npm
+
+# Publishes packages/wallhammer-web when a GitHub release is published. The release tag must be `v<version>` of
+# packages/wallhammer-web/package.json; the version is set by hand before the release (it is never bumped here).
+# Needs the repository secret NPM_TOKEN (an npm automation token with the right to publish `wallhammer-web`).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.23.5
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: The tag matches the package version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION=$(node -p "require('./packages/wallhammer-web/package.json').version")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::release tag $TAG does not match the package version $VERSION (expected v$VERSION)"
+            exit 1
+          fi
+
+      - name: Publish
+        working-directory: packages/wallhammer-web
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # pnpm, not npm: only pnpm applies publishConfig.exports (dist/ instead of src/).
+          # A prerelease version (1.2.3-beta.1) goes under the `beta` dist-tag, so `latest` stays the stable one.
+          VERSION=$(node -p "require('./package.json').version")
+          case "$VERSION" in
+            *-*) pnpm publish --no-git-checks --access public --tag beta ;;
+            *)   pnpm publish --no-git-checks --access public ;;
+          esac

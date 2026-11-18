@@ -1,5 +1,11 @@
 # Wallhammer Web
 
+[![checks](https://github.com/freema/wallhammer-web/actions/workflows/checks.yml/badge.svg)](https://github.com/freema/wallhammer-web/actions/workflows/checks.yml)
+[![npm](https://img.shields.io/npm/v/wallhammer-web?logo=npm)](https://www.npmjs.com/package/wallhammer-web)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![TypeScript: strict](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![WebGL2](https://img.shields.io/badge/WebGL2-plain-990000)](https://developer.mozilla.org/docs/Web/API/WebGL2RenderingContext)
+
 A web 3D engine in which the whole world is made by code: plain WebGL2, no graphics library, no loaded images. Strict TypeScript, modules in layers, a deterministic simulation, a streamed world from one house up to a solar system.
 
 The repository is a pnpm workspace:
@@ -88,7 +94,19 @@ In the workspace the package exports the TypeScript sources (`exports` → `src/
 
 Only `packages/wallhammer-web` is published. The examples are private workspace packages: they are never published and import the engine source through the workspace.
 
-A person with an npm account publishes. Login and publishing run in the container; the host has no Node:
+### Release
+
+Publishing runs on GitHub ([`publish.yml`](.github/workflows/publish.yml)) when a release is published:
+
+1. Set the version in `packages/wallhammer-web/package.json`, commit and push to `main`.
+2. Publish a GitHub release with the tag `v<version>`, e.g. `gh release create v0.4.0 --generate-notes`.
+3. The workflow runs all checks ([`checks.yml`](.github/workflows/checks.yml), the same ones that run on every push and pull request), compares the tag with the package version and runs `pnpm publish`. A prerelease version (`1.2.3-beta.1`) goes under the `beta` dist-tag.
+
+It needs the repository secret `NPM_TOKEN`: an npm automation token allowed to publish `wallhammer-web` (`gh secret set NPM_TOKEN`).
+
+### By hand
+
+Publishing by hand stays possible. Login and publishing run in the container; the host has no Node:
 
 ```sh
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'                          # check first

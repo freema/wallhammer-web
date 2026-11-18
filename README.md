@@ -100,9 +100,9 @@ Publishing runs on GitHub ([`publish.yml`](.github/workflows/publish.yml)) when 
 
 1. Set the version in `packages/wallhammer-web/package.json`, commit and push to `main`.
 2. Publish a GitHub release with the tag `v<version>`, e.g. `gh release create v0.4.0 --generate-notes`.
-3. The workflow runs all checks ([`checks.yml`](.github/workflows/checks.yml), the same ones that run on every push and pull request), compares the tag with the package version and runs `pnpm publish`. A prerelease version (`1.2.3-beta.1`) goes under the `beta` dist-tag.
+3. The workflow runs all checks ([`checks.yml`](.github/workflows/checks.yml), the same ones that run on every push and pull request), compares the tag with the package version, packs with `pnpm pack` and publishes the tarball with `npm publish`. A prerelease version (`1.2.3-beta.1`) goes under the `beta` dist-tag.
 
-It needs the repository secret `NPM_TOKEN`: an npm automation token allowed to publish `wallhammer-web` (`gh secret set NPM_TOKEN`).
+It signs in through npm trusted publishing (OIDC), so there is no token and no secret. This is set once on npmjs.com, in the settings of the package under "Trusted Publisher": GitHub Actions, owner `freema`, repository `wallhammer-web`, workflow `publish.yml`. npm offers that setting only for a package that exists, so the very first version is published by hand (below).
 
 ### By hand
 

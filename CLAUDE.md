@@ -17,6 +17,6 @@ Webový 3D engine nad čistým WebGL2 (`packages/wallhammer-web`, npm balíček 
 ## Kde co je
 
 - `packages/wallhammer-web/src/<modul>/` moduly enginu, `packages/wallhammer-web/docs/` dokumentace (ukázky v ní se typově kontrolují).
-- `tools/layers`, `tools/golden/engine`, `tools/docs`, `tools/pack`: kontroly enginu.
+- `tools/layers`, `tools/golden/engine`, `tools/docs`, `tools/pack`, `tools/mesh`, `tools/motion`: kontroly enginu.
 - `.claude/skills/`: `wallhammer-run` (spuštění), `wallhammer-verify` (kontroly), `wallhammer-extend` (kam co patří při rozšiřování).
 - `README.md`: spuštění, kontroly, zveřejnění na npm a co zbývá přenést (příklady).

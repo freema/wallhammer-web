@@ -12,6 +12,7 @@ A module may import only modules of a **lower** layer. It may not import a modul
 | 1 | `platform` | The only place that touches the browser: canvas size, pointer, key and gamepad input (`bindWalkInput`), the frame loop, workers, `fetchBytes`. |
 | 2 | `core` | `Clock`, the palette (`definePalette`), closed-form ballistic tracks for falling pieces, orbits and spin as functions of time (`BodySystem`). |
 | 2 | `gen-core` | Hash-based randomness with named streams, value noise, polygon geometry, spatial fields (`HeightField`, `SegmentField`, `OutlineField`, `Occupancy`), instance cells (`splitInstanceCells`), cell ids and the flat world shape for streaming. |
+| 2 | `motion` | Skeletons and poses as data (`Skeleton`, `Pose`, `boneMask`), blend and additive operations, world matrices (`solvePose`), a motion graph of states, transitions, layers, parameters, triggers and events at marks over motions the game writes (`MotionGraph`), a two-bone reach and ends kept on the ground. No motion of its own. See [Motion](motion.md). |
 | 3 | `gen-mesh` | Mesh generators: `heightFieldMesh`, `lineMesh`, `cellSurfaceMesh`, `cellMorphMesh`. |
 | 3 | `gen-tex` | Texture generators: `codeTexture`, `colorTable`, `boxBlur`. |
 | 3 | `gen-arch` | Content module: structures from recipes, destructible descriptions, damaged meshes, interiors, rubble, falling pieces and their materials. Subfolders `structure/`, `interior/` and `damage/` in that one-way order, root files `build.ts` and `index.ts`; one entry. |
@@ -27,7 +28,7 @@ A module may import only modules of a **lower** layer. It may not import a modul
 | 6 | `runtime` | `createEngine`, `createHeadlessEngine`, `EnvironmentLink`, `SkyLayer`, `PrecipitationLayer`, `StreamedWorld`. |
 | 7 | `tools` | Debugging aids: the data view, the frame profile. |
 
-The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. It does **not** re-export `render`, `sim`, `runtime`, `gen-arch`, `gen-ground`, `gen-vegetation` or `gen-plan`. Import those from their own entries.
+The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. It does **not** re-export `motion`, `render`, `sim`, `runtime`, `gen-arch`, `gen-ground`, `gen-vegetation` or `gen-plan`. Import those from their own entries.
 
 `sim/destruction` is a folder inside `sim`. The layer check treats it as part of `sim`.
 

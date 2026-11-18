@@ -89,6 +89,22 @@ float whShadowFar(vec3 worldPos, float baked) {
   return baked * t * t * (3.0 - 2.0 * t);
 }
 
+// whShadowArea with a hard edge: one depth comparison at the centre of the map texel under the point, no softening.
+float whShadowAreaSharp(sampler2DShadow map, int i, vec3 worldPos, vec3 n, float normalOffsetTexels) {
+  vec4 part = u_shadowPart[i];
+  vec3 p = worldPos + n * (u_shadowReach[i].z * normalOffsetTexels);
+  vec3 s = (u_shadowArea[i] * vec4(p, 1.0)).xyz;
+  if (s.z >= 1.0) return 1.0;
+#if WH_SHADOW_AREAS == 1
+  vec2 uv = s.xy + part.xy;
+#else
+  float edge = u_view.w / part.z;
+  vec2 uv = part.xy + clamp(s.xy, vec2(edge), vec2(1.0 - edge)) * part.z;
+#endif
+  uv = (floor(uv / u_view.w) + 0.5) * u_view.w;
+  return texture(map, vec3(uv, s.z));
+}
+
 // Share of the light that reaches a point, 0–1. The finest area whose reach around the focus holds the point answers;
 // in the outer band of its reach it blends into the next area, the last one into the far term. The reach is measured
 // from the focus of the frame, not from where the area happens to lie, so nothing jumps when an area moves.
@@ -107,6 +123,28 @@ float whShadow(sampler2DShadow map, vec3 worldPos, vec3 n, float normalOffsetTex
 #if WH_SHADOW_AREAS > 1
     // The index stays inside the arrays also in the branch that is never taken (a compiler may unroll the loop).
     if (i + 1 < WH_SHADOW_AREAS) next = whShadowArea(map, min(i + 1, WH_SHADOW_AREAS - 1), worldPos, n, normalOffsetTexels);
+    else
+#endif
+    next = whShadowFar(worldPos, baked);
+    return mix(lit, next, t);
+  }
+  return whShadowFar(worldPos, baked);
+}
+
+// whShadow with a hard edge: the same choice and blending of areas, each area asked by whShadowAreaSharp.
+float whShadowSharp(sampler2DShadow map, vec3 worldPos, vec3 n, float normalOffsetTexels, float baked) {
+  vec2 lp = vec2(dot(u_shadowRight.xyz, worldPos), dot(u_shadowUp.xyz, worldPos)) - u_shadowFocus.xy;
+  float d = max(abs(lp.x), abs(lp.y));
+  for (int i = 0; i < WH_SHADOW_AREAS; i++) {
+    vec4 reach = u_shadowReach[i];
+    if (d >= reach.x) continue;
+    float lit = whShadowAreaSharp(map, i, worldPos, n, normalOffsetTexels);
+    float t = clamp(1.0 - (reach.x - d) * reach.y, 0.0, 1.0);
+    if (t <= 0.0) return lit;
+    t = t * t * (3.0 - 2.0 * t);
+    float next;
+#if WH_SHADOW_AREAS > 1
+    if (i + 1 < WH_SHADOW_AREAS) next = whShadowAreaSharp(map, min(i + 1, WH_SHADOW_AREAS - 1), worldPos, n, normalOffsetTexels);
     else
 #endif
     next = whShadowFar(worldPos, baked);

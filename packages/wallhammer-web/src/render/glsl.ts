@@ -125,6 +125,27 @@ void main() {
 }
 `;
 
+/**
+ * Pixel size functions, appended to every program header (after the Frame block, which they read):
+ * `metresPerPixelAt(p)` (metres one screen pixel covers at a world point), `detailVisible(cellM)` and
+ * `detailVisibleAt(cellM, p)` (1 while a detail of that size is still sharp, 0 where it should vanish). They were
+ * part of `<noise>` before; `<noise>` keeps them for sources without the header, guarded by `WH_PIXEL_SIZE`.
+ */
+export const PIXEL_SIZE_GLSL = /* glsl */ `
+#ifndef WH_PIXEL_SIZE
+#define WH_PIXEL_SIZE 1
+float detailVisible(float cellM) {
+  return 1.0 - smoothstep(0.5, 0.9, u_view.x / cellM);
+}
+float metresPerPixelAt(vec3 worldPos) {
+  return max(u_view.x + u_camRight.w * (dot(worldPos, u_camForward.xyz) - u_camForward.w), 1e-4);
+}
+float detailVisibleAt(float cellM, vec3 worldPos) {
+  return 1.0 - smoothstep(0.5, 0.9, metresPerPixelAt(worldPos) / cellM);
+}
+#endif
+`;
+
 export const NOISE = /* glsl */ `
 // Noise from an integer hash. Never from the sine function: it gives different results on different GPUs.
 uint hashU(uint x) {
@@ -161,6 +182,10 @@ float vnoise3(vec3 p, uint seed) {
   float d = mix(hash3(i + ivec3(0, 1, 1), seed), hash3(i + ivec3(1, 1, 1), seed), t.x);
   return mix(mix(a, b, t.y), mix(c, d, t.y), t.z);
 }
+// The pixel size functions (detailVisible, metresPerPixelAt, detailVisibleAt) come with the header now
+// (PIXEL_SIZE_GLSL); a source that includes noise without the header still gets them here.
+#ifndef WH_PIXEL_SIZE
+#define WH_PIXEL_SIZE 1
 // How visible a detail of size cellM metres still is: 1 = sharp, 0 = the pattern should vanish.
 // Applies to smooth noise: fully visible from two pixels per cell, around one pixel not at all,
 // because it would fight with the screen grid and flicker when panning. Patterns with a sharp edge
@@ -176,4 +201,5 @@ float metresPerPixelAt(vec3 worldPos) {
 float detailVisibleAt(float cellM, vec3 worldPos) {
   return 1.0 - smoothstep(0.5, 0.9, metresPerPixelAt(worldPos) / cellM);
 }
+#endif
 `;

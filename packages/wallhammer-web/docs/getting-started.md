@@ -116,7 +116,7 @@ Things to notice:
 
 ## Where to look next
 
-- [Recipes](recipes.md) has short, checked samples for the common extensions.
+- [Recipes](recipes.md) has short, checked samples for the common extensions; [Draw moving copies with instance sets](recipes.md#draw-moving-copies-with-instance-sets) shows `instanceSet`, `writeInstance`, `pushInstance` and `InstanceSetLayer` with their material.
 - `examples/minimal-3d/src/main.ts` is the same pattern with instancing, an environment slot, the sky and the simulation.
 - `examples/endless/src/main.ts` streams an endless world.
 - `examples/planet/src/main.ts` joins the sphere world, the atmosphere and the free camera in one flight ([The planet example](planet.md)).

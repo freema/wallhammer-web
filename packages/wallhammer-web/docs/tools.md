@@ -10,6 +10,8 @@ Dev tools live in `tools/`. Run the checks inside the `dev` container from the r
 | `pnpm test:golden` | Output hashes of the engine's generators and deterministic systems. | 1 on `CHANGED` or `MISSING` |
 | `pnpm check:docs` | This documentation: code samples, links, entry names. | 1 on any finding |
 | `pnpm check:pack` | The package as it would be published: it packs, installs into an empty project, loads in Node and type-checks. | 1 when a step fails |
+| `pnpm check:mesh` | The mesh builder core and the bare shapes in plain Node: vertex and index counts, closed shapes (every edge twice, once each way), outward winding (positive volume near the analytic one), mirroring flips the winding, `append` keeps payloads, two different vertex formats, determinism (`tools/mesh/check.ts`; see [Generators](generators.md#building-meshes-in-your-own-vertex-format)). | 1 when a case fails |
+| `pnpm check:motion` | The motion module in plain Node on made-up bone chains: blends and masks, automatic weights, transitions, marks and events, reach and ground fit, saved state, determinism, layer stacks, processor time for many figures (`tools/motion/check.ts`; see [Motion](motion.md)). | 1 when a scenario fails or the run takes over 5 s |
 | `pnpm check:walk` | The collision world, the walker and the walking example's course in plain Node (comes with the examples, `tools/walk`). | 1 when a scenario fails |
 | `pnpm check:follow` | The following view (`FollowRig`) in plain Node: the boom cut to the clearance, its smooth return, the pivot reaching its target, `forward` against the heading, first person, the cached key, processor time per frame (comes with the examples, `tools/follow-check`; `runFollowChecks()` is exported for other check scripts). | 1 when a case fails |
 
@@ -75,6 +77,39 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'
 ```
 
 A package of scenarios is a file `tools/walk/<package>-scenarios.ts` exporting an array of `Scenario` (`tools/walk/scenario.ts`: a unique name, an optional `kind: 'timing'` and `run()` returning `{ ok, detail }`), imported in `check.ts` and appended to its `PACKAGES`. See [Walking](walking.md).
+
+## Mesh checks
+
+Checks of built geometry without a browser, in `wallhammer-web/tools`, for a project's own inspection script (plain
+Node, they allocate):
+
+- `meshParts(positions, indices, { heightAt, label?, stride?, transform?, weld? })` splits a triangle mesh into
+  connected parts (triangles sharing a vertex, or vertices within `weld`, default 1 cm, of each other). Each
+  `MeshPart` has its world bounds, its lowest `gap` over the ground and where (`at`), its vertex count and `label`.
+- `floatingParts(parts, { groundTolerance?, touchTolerance? })` returns the parts that hang in the air: neither within
+  `groundTolerance` (5 cm) of the ground nor touching (bounds within `touchTolerance`, 2 cm), directly or through a
+  chain, a part that is. Pass the parts of every mesh that may hold another up.
+- `routeClearance(world, route, { closed?, step?, minY?, maxY?, ignore? })` samples a route (x, z pairs) every `step`
+  (25 cm) and returns the least horizontal distance to the side of a solid of a `CollisionWorld` (negative: inside),
+  with the point, the solid's id and tag. `minY`/`maxY` keep only solids that overlap the walking body's height;
+  `ignore(id, tag)` leaves some out.
+
+<!-- check: wrap -->
+```ts
+import { CollisionWorld } from 'wallhammer-web/world';
+import { floatingParts, meshParts, routeClearance } from 'wallhammer-web/tools';
+declare const positions: Float32Array;
+declare const indices: Uint32Array;
+declare const heightAt: (x: number, z: number) => number;
+
+const parts = meshParts(positions, indices, { heightAt, label: 'props' });
+for (const p of floatingParts(parts)) console.log(`${p.label}: ${p.gap.toFixed(2)} m over the ground at ${p.at.join(', ')}`);
+
+const world = new CollisionWorld({ heightAt });
+world.addCylinder(5, 0, 0.5, 0, 2);
+const near = routeClearance(world, [0, 0, 10, 0, 10, 10], { minY: 0, maxY: 1.8 });
+console.log(near.distance, near.solid);
+```
 
 ## Pack check
 

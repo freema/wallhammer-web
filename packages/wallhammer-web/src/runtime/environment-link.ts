@@ -1,13 +1,14 @@
 // Ties an environment to a renderer: every frame computes the environment for the view, hands the light direction,
 // background and shadow key to the renderer and fills the environment's part of the Frame block from its slots.
-// Programs that read the environment include `header` and `lighting`; a slot with GLSL is included by its name.
+// Programs that read the environment include `header` and `lighting` (or only `shadow`, the sun visibility without the
+// light model); a slot with GLSL is included by its name.
 
 import type { RGB } from '../base/math.ts';
 import type { View } from '../base/view.ts';
 import type { EnvSlot, FrameEnvironment } from '../base/env-slot.ts';
 import type { Renderer } from '../render/index.ts';
 import type { EnvFrameBlock, Environment } from '../env/index.ts';
-import { ATMOSPHERE_FALLBACK, CLOUD_FIELD_SLOT, LIGHTING, SKY_FALLBACK, lightingGlsl } from '../env/index.ts';
+import { ATMOSPHERE_FALLBACK, CLOUD_FIELD_SLOT, LIGHTING, SHADOW_QUERY, SKY_FALLBACK, lightingGlsl, shadowGlsl } from '../env/index.ts';
 
 export interface EnvironmentLinkOptions {
   /** Background colour in full daylight; the environment darkens it at night. */
@@ -35,6 +36,7 @@ export class EnvironmentLink {
     // A cloud cover by place (its slot) brings its functions with the lighting include.
     const byPlace = block.slots.some((s) => s.name === CLOUD_FIELD_SLOT);
     renderer.includes.set('lighting', byPlace ? lightingGlsl({ cloudField: true }) : LIGHTING);
+    renderer.includes.set('shadow', byPlace ? shadowGlsl({ cloudField: true }) : SHADOW_QUERY);
     // `<sky>` always resolves: the sky slot's functions when it is registered, otherwise stand-ins without haze.
     renderer.includes.set('sky', SKY_FALLBACK);
     // The same for `<atmosphere>`: without the atmosphere slot `atmosphereApply` passes the colour unchanged.

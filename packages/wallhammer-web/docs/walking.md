@@ -146,6 +146,7 @@ console.log(body.position, body.velocity, body.grounded, body.steep, body.yaw, b
 | `position`, `velocity` | Feet and velocity (x, y, z), `Float64Array`s; read them, change them through `teleport`. |
 | `yaw`, `grounded`, `steep` | Heading in radians; standing on ground; standing on a base too steep to climb (sliding). |
 | `travelled`, `steps` | Horizontal metres moved (for the stride of an animation); fixed steps since the last `teleport`. |
+| `renderTravelled(alpha?)`, `lastStepDistance` | `travelled` between the last two steps for drawing (a stride in step with `renderPosition`); horizontal metres of the last step (÷ `stepSeconds`: the speed), 0 after a `teleport`. |
 | `advance(dt, intent)` | Runs the fixed steps due in `dt` real seconds; returns how many ran. |
 | `step(intent)`, `stepSeconds` | One fixed step, for scripts and tests; its length in seconds. |
 | `renderPosition(out)`, `renderYaw()`, `alpha` | The pose between the last two steps for drawing; the share of the way to the next step. |
@@ -154,6 +155,76 @@ console.log(body.position, body.velocity, body.grounded, body.steep, body.yaw, b
 
 CPU time of one step in plain Node in the development container, in a world of 2,000 solids, mean of 10,000 steps
 (`pnpm check:walk` prints it each run): 3–4 µs, up to 15 µs measured while the machine was heavily loaded (target 20 µs).
+
+### Saving and restoring
+
+`saveState(out?, offset?)` writes the walker's whole moving state (position, velocity, yaw, ground and jump flags,
+travelled distance, step count, the previous pose and distance for interpolation and the step remainder) as `WALKER_STATE_BYTES`
+(160) bytes: 20 doubles, the first a format version. `loadState(bytes, offset?)` restores it into a walker of the same
+setup and world. Without `out` the bytes are the walker's own scratch: copy them to keep them.
+
+`simState(name)` wraps both as a part of a fixed-step simulation's state (the shape of `SimState` of `sim`; `world`
+does not import `sim`, the two only agree on `bytes` and `into`), so `Simulation.addState(walker.simState('walker'))`
+saves, restores and hashes it with the rest. Step the walker from a system of that simulation with `step(intent)`, one
+step per tick, and draw it with the simulation's alpha: `renderPosition(out, alpha)`, `renderYaw(alpha)` and
+`renderTravelled(alpha)` take an external share of the way (clamped to 0..1) in place of the walker's own `alpha`. A
+stride animation reads its phase from `renderTravelled` and its weight from the speed of the last step,
+`lastStepDistance / stepSeconds`, so nothing outside the simulation's state has to be kept or reset.
+
+<!-- check: wrap -->
+```ts
+import { Simulation } from 'wallhammer-web/sim';
+import { CollisionWorld, Walker, newWalkIntent } from 'wallhammer-web/world';
+
+const world = new CollisionWorld({ heightAt: () => 0 });
+const walker = new Walker(world, { stepHz: 60 });
+const sim = new Simulation({ seed: 'walk', hz: 60 });
+sim.addState(walker.simState('walker'));
+const intent = newWalkIntent();
+intent.moveX = 1;
+sim.addSystem('walk', () => walker.step(intent));
+const kept = walker.saveState().slice();
+walker.loadState(kept);
+const at = [0, 0, 0];
+walker.renderPosition(at, sim.alpha);
+const stride = walker.renderTravelled(sim.alpha) / 1.4; // passes of a 1.4 m walk cycle
+const speed = walker.lastStepDistance / walker.stepSeconds; // m/s over the last tick
+```
+
+### Solids from a mesh
+
+For compact things whose solid is roughly their footprint, `meshPrismFootprint(positions, options?)` gives the
+upright prism over the convex hull (in x, z) of a mesh's vertices, from its lowest to its highest vertex, and
+`meshCylinderFootprint` the upright cylinder round the centroid of that hull reaching its farthest corner.
+`addMeshSolid(world, positions, options?)` adds either (`shape: 'prism'` default, or `'cylinder'`) to a
+`CollisionWorld` with the usual `SolidOptions` and returns the id (−1 for no footprint). Options (`MeshFootprintOptions`):
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `stride` | 3 | Numbers per vertex, the position first. |
+| `indices` | none | Only the vertices these name count. |
+| `from`, `to` | whole buffer | A vertex range (a group in a shared buffer); ignored with `indices`. |
+| `transform` | none | 12 numbers, mesh → world (a `Mat34`, the same layout as an instance record). |
+| `below` | all | Only vertices at most this far above the lowest one shape the outline: an overhang the body passes under is left out. |
+| `grow` | 0 | Moves the corners outward (negative: inward), metres. |
+| `snap` | 0.05 | Outline points are rounded to this grid before the hull (0: exact). |
+
+`convexHullXZ(points)` is the hull itself (x, z pairs, counter-clockwise, no collinear points). These run at build time
+and allocate. A hull fills in concave shapes: an L-shaped thing needs one solid per arm.
+
+<!-- check: wrap -->
+```ts
+import { mat34Translation } from 'wallhammer-web/base';
+import { CollisionWorld, addMeshSolid, meshCylinderFootprint } from 'wallhammer-web/world';
+declare const positions: Float32Array; // x, y, z per vertex
+
+const world = new CollisionWorld({ heightAt: () => 0 });
+const place = mat34Translation(10, 0, 4);
+const id = addMeshSolid(world, positions, { transform: place, below: 2.2, grow: 0.05, standable: false });
+const round = meshCylinderFootprint(positions, { transform: place });
+if (round) world.addCylinder(round.x + 3, round.z, round.radius, round.minY, round.maxY);
+console.log(id);
+```
 
 ### Seeing the solids
 

@@ -11,6 +11,8 @@
     "check:layers:test": "node tools/layers/test.ts",
     "test:golden": "node tools/golden/engine/golden.ts",
     "check:docs": "node tools/docs/check.ts",
+    "check:mesh": "node tools/mesh/check.ts",
+    "check:motion": "node tools/motion/check.ts",
     "build": "pnpm --filter wallhammer-web build",
     "check:pack": "sh tools/pack/check.sh"
   },

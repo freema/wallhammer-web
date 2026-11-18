@@ -8,7 +8,12 @@
 
 import type { RGB, Vec3 } from './math.ts';
 
-export type LightMode = 'studio' | 'day';
+/**
+ * - `studio`: the light turns with the view
+ * - `day`: the sun follows its path for a place, date and hour
+ * - `fixed`: the light stands in one world direction with colours given directly (no camera, place or hour)
+ */
+export type LightMode = 'studio' | 'day' | 'fixed';
 
 /** Vertical extent of the fog layer: it is densest at `bottomY` and thins out toward `topY`. */
 export interface FogLayer {
@@ -21,7 +26,7 @@ export interface FrameEnvironment {
   mode: LightMode;
   /** Unit direction toward the light (sun or moon). */
   toSun: Vec3;
-  /** Height of the sun above the horizon in degrees (in studio mode the studio light's height). */
+  /** Height of the sun above the horizon in degrees (in studio mode the studio light's height, in fixed mode the height above the xz plane). */
   sunElevationDeg: number;
   sun: RGB;
   ambient: RGB;

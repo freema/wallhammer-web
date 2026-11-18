@@ -28,6 +28,7 @@
     "./platform": "./src/platform/index.ts",
     "./core": "./src/core/index.ts",
     "./gen-core": "./src/gen-core/index.ts",
+    "./motion": "./src/motion/index.ts",
     "./gen-mesh": "./src/gen-mesh/index.ts",
     "./gen-tex": "./src/gen-tex/index.ts",
     "./gen-arch": "./src/gen-arch/index.ts",
@@ -67,6 +68,10 @@
       "./gen-core": {
         "types": "./dist/gen-core/index.d.ts",
         "default": "./dist/gen-core/index.js"
+      },
+      "./motion": {
+        "types": "./dist/motion/index.d.ts",
+        "default": "./dist/motion/index.js"
       },
       "./gen-mesh": {
         "types": "./dist/gen-mesh/index.d.ts",

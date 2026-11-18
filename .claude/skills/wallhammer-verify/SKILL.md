@@ -17,6 +17,8 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:layers'
 docker compose exec -T dev sh -c 'cd /app && pnpm check:layers:test'
 docker compose exec -T dev sh -c 'cd /app && pnpm test:golden'
 docker compose exec -T dev sh -c 'cd /app && pnpm check:docs'
+docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'
+docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'
 ```
 
 Expected when everything is fine:
@@ -28,6 +30,8 @@ Expected when everything is fine:
 | `check:layers:test` | `ok: known-bad fixture fails with all 16 expected findings` |
 | `test:golden` | `golden: 72 of 72 generators unchanged` (the count grows when recipes are added) |
 | `check:docs` | `docs: N files, M code blocks type-checked, 0 finding(s)` |
+| `check:mesh` | `check:mesh: N/N ok in … ms` (mesh builder and bare shapes) |
+| `check:motion` | `motion: N of N scenarios ok, … ms` (fails also over 5 s; a `slow` line is a missed timing target and does not fail) |
 
 Before a release, or after a change to `package.json`, `tsconfig.build.json` or the entries of the package, also run the check of the published shape (needs the network):
 

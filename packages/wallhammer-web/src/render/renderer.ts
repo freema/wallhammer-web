@@ -25,7 +25,7 @@ import type { InstanceBounds, InstanceData, MeshData, TextureData } from '../bas
 import type { BakeDesc, DrawState, MaterialDesc, PassName, ShaderSource, Uniforms } from '../base/material.ts';
 import type { DepthTarget, Device, InstanceBuffer, MainSamples, Mesh, Program, Texture, UniformBlock } from '../gpu/index.ts';
 import { UBO_BINDING } from '../gpu/index.ts';
-import { LOCAL_UP_DEFINE, LOCAL_UP_FLOATS, LOCAL_UP_GLSL, LOCAL_UP_MEMBER, LOG_DEPTH_EPILOGUE, LOG_DEPTH_PRELUDE, NOISE, frameBlockFloats, shaderHeader } from './glsl.ts';
+import { LOCAL_UP_DEFINE, LOCAL_UP_FLOATS, LOCAL_UP_GLSL, LOCAL_UP_MEMBER, LOG_DEPTH_EPILOGUE, LOG_DEPTH_PRELUDE, NOISE, PIXEL_SIZE_GLSL, frameBlockFloats, shaderHeader } from './glsl.ts';
 import type { RadialUp } from '../base/up.ts';
 import type { FrameSlotSizes, FrameSlotsGlsl } from './glsl.ts';
 import { DEPTH_FS, DEPTH_VS, SHADOW_AREAS_GLSL, SHADOW_AREAS_MAX, SHADOW_HORIZON_UNIT, shadowAreaFloats, shadowAreaMembers } from './shadow-glsl.ts';
@@ -303,6 +303,7 @@ const BASE_STATE: Required<DrawState> = {
   depthFunc: 'less',
   depthWrite: true,
   cullBack: true,
+  cull: 'back',
   blend: null,
   alphaToCoverage: false,
   polygonOffset: null,
@@ -410,7 +411,7 @@ export class Renderer {
     const upMember = this.radialUp ? LOCAL_UP_MEMBER : '';
     const upFloats = this.radialUp ? LOCAL_UP_FLOATS : 0;
     if (this.shadowMode === 'single') {
-      this.includes.set('header', shaderHeader(slots.glsl, this.depthMode, this.radialUp ? { defines: upDefines, frameTail: upMember } : {}) + LOCAL_UP_GLSL);
+      this.includes.set('header', shaderHeader(slots.glsl, this.depthMode, this.radialUp ? { defines: upDefines, frameTail: upMember } : {}) + LOCAL_UP_GLSL + PIXEL_SIZE_GLSL);
       this.frameData = new Float32Array(frameBlockFloats(slots) + upFloats);
     } else {
       // One area fills the map and is addressed around its edges; several share it in a 2 × 2 grid of parts.
@@ -433,7 +434,7 @@ export class Renderer {
         noHorizon: device.pixelTexture([0, 0, 0, 0]),
       };
       const header = shaderHeader(slots.glsl, this.depthMode, { defines: `#define WH_SHADOW_AREAS ${count}\n` + upDefines, frameTail: shadowAreaMembers(count) + upMember });
-      this.includes.set('header', header + LOCAL_UP_GLSL + SHADOW_AREAS_GLSL);
+      this.includes.set('header', header + LOCAL_UP_GLSL + PIXEL_SIZE_GLSL + SHADOW_AREAS_GLSL);
       this.frameData = new Float32Array(frameBlockFloats(slots) + shadowAreaFloats(count) + upFloats);
       device.fixSampler('u_shadowHorizonMap', SHADOW_HORIZON_UNIT);
     }

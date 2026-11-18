@@ -5,7 +5,7 @@ Webový 3D engine, ve kterém celý svět vzniká z kódu: čisté WebGL2, žád
 Repozitář je pracovní prostor pnpm:
 
 - `packages/wallhammer-web/`: engine, npm balíček `wallhammer-web`. Popis je v jeho [`README.md`](packages/wallhammer-web/README.md), dokumentace v [`docs/`](packages/wallhammer-web/docs/) (anglicky, ukázky kódu se typově kontrolují).
-- `tools/`: kontroly enginu (`layers`, `golden/engine`, `docs`, `pack`).
+- `tools/`: kontroly enginu (`layers`, `golden/engine`, `docs`, `pack`, `mesh`, `motion`).
 - `examples/`: příklady nad enginem. Zatím tu nejsou, viz [Co zbývá přenést](#co-zbývá-přenést).
 - `.claude/skills/` a `CLAUDE.md`: pravidla a postupy pro práci s agentem (spuštění, kontroly, rozšiřování).
 
@@ -28,12 +28,15 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:layers'       # layers: 
 docker compose exec -T dev sh -c 'cd /app && pnpm check:layers:test'  # ok: known-bad fixture fails with all 16 expected findings
 docker compose exec -T dev sh -c 'cd /app && pnpm test:golden'        # golden: 72 of 72 generators unchanged
 docker compose exec -T dev sh -c 'cd /app && pnpm check:docs'         # docs: … 0 finding(s)
+docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'         # check:mesh: 27/27 ok in … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'       # motion: 26 of 26 scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the packed package installs, loads and type-checks
 ```
 
 - `check:layers` hlídá vrstvy modulů, hranici mezi enginem, obsahovými moduly a příklady a to, že WebGL je jen v `gpu` a DOM jen v `platform`. Výjimky nejsou.
 - `test:golden` spustí generátory a deterministické systémy enginu s pevným vstupem a porovná otisk výstupu s `tools/golden/engine/hashes.json`. Záměrnou změnu přijmeš `node tools/golden/engine/golden.ts --accept` v kontejneru; přepíše všechny otisky najednou, proto nejdřív přečti, co se změnilo. Pravidla: [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
 - `check:docs` typově zkontroluje ukázky v dokumentaci a ověří odkazy.
+- `check:mesh` a `check:motion` prověří v čistém Node stavitele sítí s holými tvary (`gen-mesh`) a modul pohybu (`motion`).
 - `check:pack` zkontroluje balíček ve tvaru, v jakém půjde na npm (viz níže). Potřebuje síť.
 
 ## Balíček npm
@@ -55,7 +58,7 @@ docker compose exec dev sh -c 'cd /app/packages/wallhammer-web && pnpm publish -
 
 ## Odkud to je
 
-Engine vznikl v repozitáři modelu města Ústí ve složce `web/packages/wallhammer-web`. Tento repozitář je jeho tvrdá kopie ze stavu commitu `aba73fe` (verze 0.4.0, včetně chůze světem) a od teď jediné místo, kde se engine vyvíjí. V repozitáři města zůstává zmrazená kopie téže verze pro tamní aplikaci; novější verzi si odtud převezme, až ji bude potřebovat.
+Engine vznikl v repozitáři modelu města Ústí ve složce `web/packages/wallhammer-web`. Tento repozitář je jeho tvrdá kopie ze stavu commitu `aba73fe` (verze 0.4.0, včetně chůze světem) a od teď jediné místo, kde se engine vyvíjí. Po založení sem přešla ještě práce, která v repozitáři města zůstala rozpracovaná nad touto verzí: modul pohybu `motion` (kostry, pózy, graf pohybů), stavitel sítí s holými tvary (`gen-mesh`), matice 3×4 (`base`), kostí řízené instance (`render`), pevná tělesa ze sítí a uložení stavu chodce (`world`), kontroly sítí (`tools`) a k nim kontroly `check:mesh` a `check:motion`. V repozitáři města zůstává zmrazená kopie téže verze pro tamní aplikaci; novější verzi si odtud převezme, až ji bude potřebovat.
 
 Věrnost kopie hlídají zlaté otisky: 72 receptů enginu dává zde stejné otisky jako v původním repozitáři. Čtyři recepty tam závisely na kódu aplikace (postavy, vozidla, zastávky, významné stavby), ty zůstaly u aplikace.
 
@@ -74,7 +77,7 @@ Příklady enginu a jejich nástroje se vyvíjely ve vedlejší složce, která 
 Co při přenosu změnit:
 
 1. **Engine už se nepřipojuje.** Ze všech služeb pryč s řádkem `- ../usti/web/packages/wallhammer-web:/app/packages/wallhammer-web` a u `dev` i s připojením `../usti/web/tools/docs`. Engine i kontrola dokumentace jsou v tomto repozitáři. Z `.gitignore` příkladů nepřebírej řádky `packages/wallhammer-web/` a `tools/docs/` (tam to byly přípojné body).
-2. **`tools/layers/` nepřepisovat naslepo.** Zdejší kontrola vrstev je kopie té z příkladů (zná `examples/*` i pravidlo `example-imports`). Když je tamní novější (seznam `ENGINE_ONLY_EXAMPLES`), převezmi ji celou.
+2. **`tools/layers/` nepřepisovat naslepo.** Zdejší kontrola vrstev je kopie té z příkladů (zná `examples/*` i pravidlo `example-imports`). Když je tamní novější (seznam `ENGINE_ONLY_EXAMPLES`), převezmi ji celou. Tamní vrstva `motion: 2` už tu je. `tools/mesh/` a `tools/motion/` jsou také už tady (testují jen engine), znovu je nepřenášej.
 3. **`package.json` v kořeni:** `test:golden` má pustit obě sady (`node tools/golden/engine/golden.ts && node tools/golden/golden.ts`), přidat `check:walk` a `check:follow`. Jméno projektu v `docker-compose.yml` je tu `wallhammer-web`, obraz `wallhammer-web-engine:dev`.
 4. **Služba `shot`** se stavěla z nástroje vizuální kontroly v repozitáři města (`../usti/web/tools/visual`, obraz `usti-visual:1`). Sem je potřeba přenést její `Dockerfile`, nebo ji stavět z vlastního.
 5. **Texty.** README, dovednosti a komentáře příkladů mluví o „repozitáři Ústí“ a „složce Wallhammer“. Zdejší dovednosti (`.claude/skills/`) už jsou přepsané na tento repozitář; po přenosu doplň tabulku služeb ve `wallhammer-run` a počet otisků ve `wallhammer-verify`.

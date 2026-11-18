@@ -133,7 +133,8 @@ export const RIG_VERTEX_FLOATS = 19;
  * - 4–7: leading direction x, z, trailing direction x, z
  * - 8–11: trailing segment anchor x, y, z, slope
  * - 12–15: distance travelled (m), speed (m/s), turn rate (rad/s, positive right), seed 0–1
- * - 16–19: state (0 moving, 1 standing, 2 parked), height scale, width scale, variant bits
+ * - 16–19: state (0 moving, 1 standing, 2 parked; kept for the owner, no shader of the engine reads it), height scale,
+ *   width scale, variant bits
  * - 20–23: four colours, each 0xRRGGBB as a float
  */
 export const RIG_INSTANCE_FLOATS = 24;
@@ -194,7 +195,10 @@ export interface RigInstance {
   turnRate: number;
   /** 0–1, varies idle motion between instances. */
   seed: number;
-  /** 0 moving, 1 standing, 2 parked. */
+  /**
+   * 0 moving, 1 standing, 2 parked. Stored in the record for the owner (and a game material); no shader of the engine
+   * reads it: the pose follows from speed and distance alone.
+   */
   state: number;
   heightScale: number;
   widthScale: number;

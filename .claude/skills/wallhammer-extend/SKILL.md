@@ -15,6 +15,7 @@ Read the matching page first; every sample there is type-checked:
 | Generator | `packages/wallhammer-web/docs/generators.md` |
 | Simulation system, commands, movers | `packages/wallhammer-web/docs/simulation.md` |
 | Walking: collision world, walker, follow camera | `packages/wallhammer-web/docs/walking.md` |
+| Motion: skeletons, poses, motion graph, reach | `packages/wallhammer-web/docs/motion.md` |
 | Destruction | `packages/wallhammer-web/docs/destruction.md` |
 | Streaming, cell providers | `packages/wallhammer-web/docs/streaming.md` |
 | Worked samples of all of the above | `packages/wallhammer-web/docs/recipes.md` |
@@ -22,7 +23,7 @@ Read the matching page first; every sample there is type-checked:
 
 ## Placement in one minute
 
-- Layers: `base` 0, `platform` 1, `core`/`gen-core` 2, `gen-mesh`/`gen-tex`/`gen-arch`/`gen-ground`/`gen-vegetation`/`gen-plan` 3, `gpu` 4, `render`/`camera`/`env`/`world`/`sim` 5, `runtime` 6, `tools` 7. Import only lower layers, never the same layer.
+- Layers: `base` 0, `platform` 1, `core`/`gen-core`/`motion` 2, `gen-mesh`/`gen-tex`/`gen-arch`/`gen-ground`/`gen-vegetation`/`gen-plan` 3, `gpu` 4, `render`/`camera`/`env`/`world`/`sim` 5, `runtime` 6, `tools` 7. Import only lower layers, never the same layer.
 - WebGL only in `gpu`. DOM, workers and `window` only in `platform`.
 - Engine modules outside the content modules (`gen-arch`, `gen-ground`, `gen-vegetation`) must not name a use case (city, building, roof, facade, tree, car, road, window, …) in file names, exported names or comments. Name the mechanism instead; the project gives it meaning.
 - Content (structures, ground and markings, vegetation) goes to `gen-arch`, `gen-ground` or `gen-vegetation`. They import only `base`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, never each other. A module may group its files in subfolders behind one `index.ts`. In `gen-arch` they depend one way, `structure` <- `interior` <- `damage` <- root files (`build.ts`, `index.ts`): a file imports only its own subfolder and earlier ones (layer rule `subfolder-order`, table `SUBFOLDER_ORDER`).

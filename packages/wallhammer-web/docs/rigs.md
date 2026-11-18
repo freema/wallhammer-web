@@ -147,9 +147,56 @@ function frame(alpha: number, lamps: number): void {
 }
 ```
 
-`RIG_INSTANCE_FLOATS` (24) floats per record; `staging` + `commit` fill in place, `set(kind, data, count)` copies. The layer culls each kind against the view every frame and splits it into near (all parts, animated), far (fewer parts, still) and hidden by the size on screen (`farPx`, `hidePx`). Rigs receive shadows and stand on a soft contact shadow; they do not cast into the shadow map.
+`RIG_INSTANCE_FLOATS` (24) floats per record; `staging` + `commit` fill in place, `set(kind, data, count)` copies. The layer culls each kind against the view every frame and splits it into near (all parts, animated), far (fewer parts, still) and hidden by the size on screen (`farPx`, `hidePx`). Rigs receive shadows and stand on a soft contact shadow; by default they do not cast into the shadow map (see below).
 
 A rig that never moves (stop furniture, a parked vehicle) is written once with state 2 and committed once; the layer still culls it every frame.
+
+The field `state` (float 16, `i_look.x` in GLSL) is **not read by any shader of the engine**: a standing rig stands because its speed is 0, not because of its state. It is kept in the record for the owner and for a game material that wants it.
+
+## A material of the game, shadows into the map
+
+The posing is a vertex include of its own, `RIG_POSE_GLSL`, which `RigLayer` registers as `<rig-pose>`. It declares the attributes and the instance record (`RIG_ATTRIBS`), the uniforms the layer sets (`u_rig`, `u_rig2`, and `u_rig3` where `WH_RIG_EXT` is defined) and two functions: `bool rigPose(out vec3 pos, out vec3 nrm)`, the world position and normal of the vertex in its instance's pose (false: the instance lacks the part's variant, collapse the vertex), and `vec3 rigColor()`, the part's colour times its instance colour slot. Write it after `<header>` and `<noise>`.
+
+`new RigLayer(renderer, options)` takes `RigLayerOptions`:
+
+- `material`: the game's `MaterialDesc` for the bodies (attributes `RIG_ATTRIBS`), with its own look in the fragment shader. Kinds with a free gait or chains get the same description with `WH_RIG_EXT` defined after the header line. Without it the engine's material draws exactly as before.
+- `castShadow` (default false): the posed bodies are drawn into the shadow map, every instance at near detail, as a dynamic caster (`shadowCasters: 'dynamic'`, `shadowDirty()` true after `set` or `commit`). The depth program is the `shadow` pass of the game's material when it has one, otherwise the engine's (`rigPose` and `u_lightRender`).
+- `contactShadows` (default true): the soft shadow under every rig.
+
+<!-- check: wrap -->
+```ts
+import type { MaterialDesc } from 'wallhammer-web/base';
+import { RIG_ATTRIBS } from 'wallhammer-web/base';
+import { RigLayer } from 'wallhammer-web/render';
+import type { Renderer } from 'wallhammer-web/render';
+declare const renderer: Renderer;
+
+const flat: MaterialDesc = {
+  name: 'flat-rig',
+  attribs: RIG_ATTRIBS,
+  passes: {
+    color: {
+      vs: `#include <header>
+#include <noise>
+#include <rig-pose>
+out vec3 v_color;
+void main() {
+  vec3 pos, nrm;
+  if (!rigPose(pos, nrm)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  v_color = rigColor() * (0.6 + 0.4 * max(nrm.y, 0.0));
+  gl_Position = u_viewProj * vec4(pos, 1.0);
+}`,
+      fs: `#include <header>
+in vec3 v_color;
+out vec4 o_color;
+void main() { o_color = vec4(v_color, 1.0); }`,
+    },
+  },
+  state: { color: { depthTest: true, depthWrite: true, cullBack: true, blend: null, polygonOffset: null } },
+};
+const rigs = new RigLayer(renderer, { material: flat, castShadow: true });
+renderer.add(rigs);
+```
 
 Vehicles with a trailing segment: the anchors sit on the rear axle of the leading segment and on the trailing segment's own axle. To place one, sample its path at the anchor and at the trailing distance behind it, and turn the trailing heading toward the joint.
 

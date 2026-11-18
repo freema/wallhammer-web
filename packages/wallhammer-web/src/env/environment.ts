@@ -1,10 +1,12 @@
 // Scene environment: light, time of day, date, weather, wind and clouds. Holds two clocks (animation time and hour of day)
 // and for every frame computes from them what the shaders need to know. The app only sets values and runs the clocks.
 //
-// Two lighting modes:
+// Three lighting modes:
 //  - 'studio': the sun rotates with the camera, the scene is always lit from the left. The hour of day does not matter.
 //  - 'day': the sun follows its real path for the given place and date, light colours change with its height,
 //    the moon shines at night and the sky is blue.
+//  - 'fixed': the light stands in one world direction (`fixed.toLight`) with the colours and strengths given in
+//    `fixed`; neither the camera, the place nor the hour change it. Change `fixed` at any time.
 //
 // Weather (cloud cover, precipitation, snow, wetness, fog) and the date apply in both modes. Everything is a pure
 // function of the clocks and the given numbers: the same values give the same frame. What content makes of it (foliage
@@ -51,6 +53,24 @@ export interface StudioLight {
   warmTint: RGB;
   /** Overall brightness before the output curve. */
   exposure: number;
+}
+
+/** Light of the 'fixed' mode: a direction in the world and the light's numbers as they are. Colours are multiples of the surface colour. */
+export interface FixedLight {
+  /** Direction toward the light in world axes; need not be unit (it is normalised each frame). */
+  toLight: Vec3;
+  sun: RGB;
+  ambient: RGB;
+  /** Sky light from above, at full strength on horizontal surfaces. */
+  skyFill: RGB;
+  /** Light from below, at full strength on vertical walls. */
+  bounce: RGB;
+  /** Multiplies the surface colour. */
+  warmTint: RGB;
+  /** Overall brightness before the output curve. */
+  exposure: number;
+  /** Multiple of the renderer's background colour. */
+  backdrop: RGB;
 }
 
 /** Light colours during the day. Values blend between day and night according to the sun height. */
@@ -128,6 +148,8 @@ export interface WeatherState {
 export interface EnvironmentConfig {
   mode?: LightMode;
   studio?: Partial<StudioLight>;
+  /** Direction and numbers of the 'fixed' mode. */
+  fixed?: Partial<FixedLight>;
   /** Place and date for 'day' mode. */
   site?: Partial<SunSite>;
   day?: Partial<DayLight>;
@@ -154,6 +176,18 @@ export const DEFAULT_STUDIO: StudioLight = {
   bounce: [0.05, 0.04, 0.02],
   warmTint: [1.02, 1.0, 0.93],
   exposure: 1.0,
+};
+
+/** The 'fixed' light: the studio colours, from the south-west, 44° high. */
+export const DEFAULT_FIXED: FixedLight = {
+  toLight: [-0.5, 0.7, 0.5],
+  sun: DEFAULT_STUDIO.sun,
+  ambient: DEFAULT_STUDIO.ambient,
+  skyFill: DEFAULT_STUDIO.skyFill,
+  bounce: DEFAULT_STUDIO.bounce,
+  warmTint: DEFAULT_STUDIO.warmTint,
+  exposure: DEFAULT_STUDIO.exposure,
+  backdrop: [1, 1, 1],
 };
 
 export const DEFAULT_SITE: SunSite = { latitudeDeg: 50, longitudeDeg: 15, dayOfYear: 172, utcOffsetHours: 2 };
@@ -324,6 +358,8 @@ function liftedAbove(up: Vec3, dir: Vec3, e: number, minDeg: number): Vec3 {
 export class Environment {
   mode: LightMode;
   studio: StudioLight;
+  /** The 'fixed' mode's light; its fields may be changed (or the object replaced) at any time. */
+  fixed: FixedLight;
   site: SunSite;
   dayLight: DayLight;
   wind: WindConfig;
@@ -348,6 +384,7 @@ export class Environment {
   constructor(config: EnvironmentConfig = {}) {
     this.mode = config.mode ?? 'studio';
     this.studio = { ...DEFAULT_STUDIO, ...config.studio };
+    this.fixed = { ...DEFAULT_FIXED, ...config.fixed };
     this.site = { ...DEFAULT_SITE, ...config.site };
     this.dayLight = { ...DEFAULT_DAY, ...config.day };
     this.wind = { ...DEFAULT_WIND, ...config.wind };
@@ -364,10 +401,16 @@ export class Environment {
     return [this.time, this.day];
   }
 
-  /** Switches the lighting mode. In studio the hour of day means nothing, so its run is stopped. */
+  /** Switches the lighting mode. In studio and fixed the hour of day means nothing, so its run is stopped. */
   setMode(mode: LightMode): void {
     this.mode = mode;
-    if (mode === 'studio') this.day.pause();
+    if (mode !== 'day') this.day.pause();
+  }
+
+  /** Switches to the 'fixed' mode with the light toward `toLight` (world axes) and, optionally, other numbers of it. */
+  setFixedLight(toLight: Vec3, light: Partial<Omit<FixedLight, 'toLight'>> = {}): void {
+    this.fixed = { ...this.fixed, ...light, toLight: [toLight[0], toLight[1], toLight[2]] };
+    this.setMode('fixed');
   }
 
   /** Day of year (1–366). Drives the sun path; slots may read it too. */
@@ -468,7 +511,7 @@ export class Environment {
     };
   }
 
-  /** Light without the influence of cloud cover: studio, or day according to the sun position. */
+  /** Light without the influence of cloud cover: fixed, studio, or day according to the sun position. */
   private lightFrame(
     heading: number,
     shared: Omit<
@@ -479,6 +522,29 @@ export class Environment {
     const d = this.dayLight;
     const obs = this.mode === 'day' ? this.observer : null;
     const moonDir = obs ? inUpFrame(obs.up, skyDirection(d.moonAzimuthDeg, d.moonElevationDeg)) : skyDirection(d.moonAzimuthDeg, d.moonElevationDeg);
+    if (this.mode === 'fixed') {
+      const x = this.fixed;
+      const toSun = normalize([x.toLight[0], x.toLight[1], x.toLight[2]]);
+      return {
+        sunDir: toSun,
+        moonDir,
+        skyZenith: d.skyZenithDay,
+        skyHorizon: d.skyHorizonDay,
+        sunGlow: d.sunGlowHigh,
+        ...shared,
+        mode: 'fixed',
+        fogColor: FOG_DAY,
+        toSun,
+        sunElevationDeg: Math.asin(clamp(toSun[1], -1, 1)) / DEG,
+        sun: x.sun,
+        ambient: x.ambient,
+        skyFill: x.skyFill,
+        bounce: x.bounce,
+        warmTint: x.warmTint,
+        exposure: x.exposure,
+        backdrop: x.backdrop,
+      };
+    }
     if (this.mode === 'studio') {
       const s = this.studio;
       const toSun = studioLightDirection(heading, s.sunAzimuthFromViewDeg, s.sunElevationDeg);

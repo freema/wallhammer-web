@@ -59,6 +59,148 @@ for (let i = 0; i < 20; i++) {
 | `bisectSurface(heights, options)` | A square height grid (`quads` a power of two, one extra sample all round for the normals) as a packed mesh within `toleranceM` of the grid: flat ground becomes a few large triangles. Outer edges get a skirt `skirtM` deep; a side listed in `cuts` is a cut through the ground down to a height; `clip` cuts the square off at a rectangle. Returns `{ mesh, triangles, gridTriangles, minY, maxY }`. Layout `BISECT_SURFACE_LAYOUT` (packed position, normal as 3 × int16 plus a kind), drawn by a height field material through `packedMaterial`. See [A surface within a tolerance](streaming.md#a-surface-within-a-tolerance). |
 | `chunkMeshes(meshes, { cellM?, cellKey?, position?, padM? })` | Static meshes cut into spatial chunks: every triangle goes to the cell of its centroid (square cells of `cellM`, 64 m, or any cell from `cellKey(x, y, z)`), the triangles of one cell from all meshes are merged with whole vertex records copied byte for byte. All meshes share one layout with a three-float position (`a_pos`). Returns `MeshChunk[]` (`{ key, min, max, data, triangles }`, boxes widened by `padM`), ready for `PieceLayer`: one draw per visible chunk. See [Point lights, particles and instance sets](rendering.md#point-lights-particles-and-instance-sets). |
 | `PropBox` (type) | A small oriented box prop. `gen-arch` re-exports the same type. |
+| `MeshBuilder<V>`, `VertexFormat<V>`, `faceNormal` | Building meshes by hand in a vertex format of the caller's: a transform stack, triangles, mirroring, `append`, bounds, the positions and indices for collisions and checks. See [Building meshes in your own vertex format](#building-meshes-in-your-own-vertex-format). |
+| `revolve`, `sweep`, `extrude`, `polygon`, `gridSurface`, `box`, `cylinder`, `pathFrames`, `smoothPath` | Bare shapes for `MeshBuilder<V>` that ask the caller for every vertex payload. See [Bare shapes](#bare-shapes). |
+
+## Building meshes in your own vertex format
+
+What a vertex carries besides its position and normal decides what a material can draw, so it belongs to the game:
+one game stores colour, occlusion and a few flag bytes, another stores panel coordinates for ink lines and a direction
+for an outline. `MeshBuilder<V>` (`gen-mesh/mesh-builder.ts`) builds triangles in any such format. It knows only the
+position, the normal, the transforms and the indices; the rest is a payload `V` per vertex, stored by reference and
+handed back to the format when the mesh is packed. The engine never looks inside it.
+
+<!-- check: skip -->
+```ts
+interface VertexFormat<V> {
+  readonly layout: VertexLayout;   // attributes, including position and normal; layout.stride === stride
+  readonly stride: number;         // bytes per vertex
+  /** One vertex at `offset`; `p` and `n` are already in mesh space (n unit length). `index` is the vertex number. */
+  write(view: DataView, offset: number, p: ArrayLike<number>, n: ArrayLike<number>, v: V, index: number): void;
+}
+```
+
+| Member | What it does |
+| --- | --- |
+| `new MeshBuilder(format)` | An empty builder; throws when `format.layout.stride` differs from `format.stride`. |
+| `push(m)`, `pop()`, `with(m, fn)` | The transform stack: `m` is a 3 × 4 matrix (12 numbers, column by column, as `Mat34` in [Concepts](concepts.md#3--4-matrices)); `push` multiplies the current transform by `m` (`m` applies first). `transform` and `mirrored` read the current state; `pop` without `push` throws. |
+| `vertex(p, n, v)` | Adds a vertex through the current transform (normals by the cofactor matrix, unit length, outward also under a mirror); returns its index. |
+| `tri(a, b, c)`, `quad(a, b, c, d)` | Triangles counter-clockwise seen from outside; under a mirroring transform the winding is reversed so faces stay outward. |
+| `append(other, m?)` | Another builder's vertices (through the current transform, then `m`) and triangles; payloads are kept, a mirroring result flips the winding. |
+| `bounds(first?)`, `vertexCount`, `indexCount`, `triangleCount` | Box and counts. |
+| `position(i)`, `normal(i)`, `payload(i)`, `setPayload(i, v)`, `edit(fn, first?, end?)` | Read or change single vertices; `edit` visits a range with the position and normal to change in place and may return a new payload (displacing, recolouring, filling data that depends on the finished mesh). |
+| `positions()`, `normals()`, `indices({ index? })` | New typed arrays: for collision solids (`addMeshSolid` in [Walking](walking.md)), checks ([Mesh checks](tools.md#mesh-checks)), or a second index order. |
+| `positionData`, `normalData`, `indexData`, `setTriangle(t, a, b, c)` | The same numbers without a copy (read only, live), for passes over a large builder; `setTriangle` rewrites one triangle as given, for example to turn its winding after the fact (a triangle or vertex out of range throws `RangeError`). |
+| `vertices()`, `build({ index? })` | The packed bytes (`write` once per vertex, in order) and the `MeshData`. Indices are 16-bit up to 65,536 vertices, else 32-bit; `index: 32` forces 32 bits. |
+| `faceNormal(points, out?)` | The unit normal of a flat polygon given counter-clockwise from its front (Newell's method). |
+
+A game defines its format once, next to its material:
+
+```ts
+import type { VertexLayout } from 'wallhammer-web/base';
+import { MeshBuilder } from 'wallhammer-web/gen-mesh';
+import type { VertexFormat } from 'wallhammer-web/gen-mesh';
+
+/** This game's payload: an albedo and a glow strength. */
+interface Paint {
+  rgb: readonly [number, number, number];
+  glow: number;
+}
+
+const LAYOUT: VertexLayout = {
+  stride: 20,
+  attribs: [
+    { name: 'a_pos', size: 3, type: 'f32', offset: 0 },
+    { name: 'a_normal', size: 4, type: 'i8', normalized: true, offset: 12 },
+    { name: 'a_paint', size: 4, type: 'u8', normalized: true, offset: 16 },
+  ],
+};
+
+const byte = (x: number): number => Math.max(0, Math.min(255, Math.round(x * 255)));
+
+const FORMAT: VertexFormat<Paint> = {
+  layout: LAYOUT,
+  stride: 20,
+  write(view, o, p, n, v) {
+    for (let k = 0; k < 3; k++) view.setFloat32(o + k * 4, p[k]!, true);
+    for (let k = 0; k < 3; k++) view.setInt8(o + 12 + k, Math.round(n[k]! * 127));
+    for (let k = 0; k < 3; k++) view.setUint8(o + 16 + k, byte(v.rgb[k]!));
+    view.setUint8(o + 19, byte(v.glow));
+  },
+};
+
+const b = new MeshBuilder(FORMAT);
+const red: Paint = { rgb: [0.8, 0.2, 0.1], glow: 0 };
+const a = b.vertex([0, 0, 0], [0, 1, 0], red);
+const c = b.vertex([1, 0, 0], [0, 1, 0], red);
+const d = b.vertex([0, 0, -1], [0, 1, 0], red);
+b.tri(a, c, d);
+const mesh = b.build();
+```
+
+Data that depends on the finished mesh (a direction averaged over all faces meeting at a point, baked occlusion) is
+filled afterwards: read `positions()` and `normals()`, compute, and write it into the payloads with `edit` or
+`setPayload` before `build`. The format's `write` also gets the vertex number, for a format that keeps such data in an
+array of its own.
+
+### Bare shapes
+
+`gen-mesh/bare-shapes.ts` writes plain geometry into a `MeshBuilder<V>` at its current transform. None of these shapes
+carries a look: no colour, no seams, no bevels, no irregularity. For every vertex they call the caller's payload
+function with its geometric facts, a `ShapeVertex` (one object reused for the whole call: read it, do not keep it):
+
+| Field | Meaning |
+| --- | --- |
+| `p`, `n` | Position and unit normal in the shape's own frame (before the builder's transform). |
+| `part` | `'side'`, `'start'` / `'end'` for the caps, `'cut'` for the two meridian planes of a partial revolution (`j` 0 at `from`, 1 at `to`). |
+| `i`, `j` | Grid indices: `i` across (around a revolution, along a section or an outline), `j` along (profile point, path point, 0 / 1 at the two ends of an extrusion). On a cap `i` is the rim corner. |
+| `u`, `v` | Shares 0–1 matching `i` and `j` (by angle around a revolution, by arc length elsewhere). On a cap `u` runs round the rim, `v` is 1 on the rim and 0 at a fan centre. |
+| `face`, `corner` | On flat faces: the face number within the call and the corner 0, 1, 2, … in winding order; −1 on smooth surfaces. |
+| `centre` | True for the centre vertex of a fan. |
+
+| Function | Shape |
+| --- | --- |
+| `revolve(b, profile, payload, { segments?, from?, to?, smooth?, capStart?, capEnd?, capFan?, sides?, warp? })` | A surface of revolution about +y from `[radius, y]` points; a point is `(r sin θ, y, r cos θ)`, θ from +z toward +x. A profile from bottom to top faces outward. Radius 0 is an apex. A partial angle range is open unless `sides` closes its two meridian planes; caps close the profile's ends with discs. |
+| `sweep(b, path, section, payload, { closed?, loop?, caps?, capFan?, scale?, twist?, up?, smooth?, subdivide?, warp? })` | A section (`[x, y]` in the frame u–v across the path) pulled along 3D points with rotation-minimising frames (`pathFrames`). `scale` and `twist` vary with the share of the length; `subdivide` first smooths the path (`smoothPath`, centripetal Catmull–Rom through the points); `loop` closes the path into a ring. A clockwise section is turned around, so faces point away from the path. |
+| `extrude(b, outline, z0, z1, payload, { capStart?, capEnd?, capFan?, smooth? })` | An outline in the x–y plane pushed along +z; flat side quads with corners (p, z0) (q, z0) (q, z1) (p, z1), or smooth sides. Push a rotation first to extrude another way. |
+| `polygon(b, points, payload, { fan?, part?, face? })` | A flat simple polygon: a fan from its first corner when convex, ear clipping when concave, or a fan from an extra centre vertex with `fan`. |
+| `gridSurface(b, cols, rows, at, payload, { smooth?, wrapI?, wrapJ?, flip?, u?, v?, normalAt?, part?, faceBase? })` | Any parametric grid of points stitched into quads facing d/di × d/dj; the base of the others. |
+| `box(b, min, max, payload)`, `cylinder(b, radius, y0, y1, payload, { radiusTop?, segments?, capStart?, capEnd?, smooth? })` | The two special cases: an extrusion of a rectangle and a revolution of two points. |
+
+`smooth` picks the normals: `true` (shared vertices, normals from the grid), `false` (every cell a flat face of its
+own) or `'along'` (`GridSmooth`: flat across, smooth along, a section with hard corners bent along a path). `warp(p, i,
+j)` may move every grid point before the normals are taken: that is where a game adds its own irregularity, from its
+own seeded stream. All functions return the index of the first vertex they wrote.
+
+A styled shape of a game is a bare shape plus a payload function. Here a game adds panel lines around a body of
+revolution (its shader draws a line where a coordinate crosses an integer) and paints its start cap darker:
+
+```ts
+import { MeshBuilder, revolve } from 'wallhammer-web/gen-mesh';
+import type { ShapeVertex, VertexFormat } from 'wallhammer-web/gen-mesh';
+
+/** This game's payload: panel coordinates and a palette index. */
+interface Ink {
+  line: readonly [number, number];
+  colour: number;
+}
+declare const INK_FORMAT: VertexFormat<Ink>;
+
+/** The game's styled shape: `ribs` vertical seams and a seam at every listed profile point. */
+function seamedBody(b: MeshBuilder<Ink>, profile: readonly (readonly [number, number])[], ribs: number, seams: readonly number[], colour: number): void {
+  const along = (j: number): number => seams.filter((s) => s <= j).length - 0.5;
+  revolve(b, profile, (s: ShapeVertex): Ink => {
+    if (s.part !== 'side') return { line: [0.5, 0.5], colour: colour + 1 };
+    return { line: [s.u * ribs, along(s.j)], colour };
+  }, { segments: 32, capStart: true });
+}
+
+const b = new MeshBuilder(INK_FORMAT);
+seamedBody(b, [[1, 0], [1.2, 1], [0.6, 2], [0, 2.4]], 6, [1, 2], 3);
+const mesh = b.build();
+```
+
+`pnpm check:mesh` (`tools/mesh/check.ts`) checks the core and the shapes without a browser ([Tools](tools.md)).
 
 ## Strips along a surface
 

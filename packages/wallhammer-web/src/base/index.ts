@@ -2,11 +2,30 @@
 
 export { DEG, add, clamp, cross, crossInto, dot, lerp, normalize, orthoMatrix, scale, smoothstep } from './math.ts';
 export type { OrthoFrame, RGB, Vec3 } from './math.ts';
+export {
+  MAT34_FLOATS,
+  mat34Copy,
+  mat34Determinant,
+  mat34Direction,
+  mat34FromQuat,
+  mat34Identity,
+  mat34Invert,
+  mat34Multiply,
+  mat34Normal,
+  mat34Point,
+  mat34RotationAxis,
+  mat34RotationX,
+  mat34RotationY,
+  mat34RotationZ,
+  mat34Scaling,
+  mat34Translation,
+} from './mat34.ts';
+export type { Mat34, Vec3Out } from './mat34.ts';
 export { boxInVolume, depthViewProj, distanceToBox, newCornerRays, newOrthoFrame, snapRenderOrigin, toRenderSpace } from './view.ts';
 export type { Box3, CullBox, CullFrustum, CullVolume, DepthMode, DepthProjection, OriginAxes, Ray, View } from './view.ts';
 export { primitiveCount, texelBytes } from './data.ts';
 export type { InstanceBounds, InstanceData, MeshData, Primitive, ScalarType, TextureData, TextureFormat, TextureSampling, VertexAttrib, VertexLayout } from './data.ts';
-export type { BakeDesc, BakeTarget, BlendFactor, BlendSpec, DrawState, MaterialDesc, PassName, ShaderSource, UniformValue, Uniforms } from './material.ts';
+export type { BakeDesc, BakeTarget, BlendFactor, BlendSpec, CullMode, DrawState, MaterialDesc, PassName, ShaderSource, UniformValue, Uniforms } from './material.ts';
 export type { EnvSlot, FogLayer, FrameEnvironment, FrameField, FrameRegion, LightMode } from './env-slot.ts';
 export { DAMAGE, PART_FLAG, PART_ROLE, RUBBLE, entryDir, entryRung, entryVariant, packEntry } from './destructible.ts';
 export type { ConvexPiece, DamageEntry, DamageRung, DestructibleMaterial, DestructionEvent, PartRole, RubbleArchetype, RubbleFootprint, StructureBond, StructureDesc, StructurePart, StructureState } from './destructible.ts';

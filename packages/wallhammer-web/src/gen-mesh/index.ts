@@ -23,3 +23,7 @@ export { STRIP_ATTRIBS, STRIP_GLSL, STRIP_LAYOUT, stripGrow, stripMesh } from '.
 export type { StripMesh, StripMeshOptions } from './strip-mesh.ts';
 export { chunkMeshes } from './chunk-mesh.ts';
 export type { ChunkOptions, MeshChunk } from './chunk-mesh.ts';
+export { MeshBuilder, faceNormal } from './mesh-builder.ts';
+export type { MeshBounds, MeshBuildOptions, VertexEdit, VertexFormat } from './mesh-builder.ts';
+export { box, cylinder, extrude, gridSurface, pathFrames, polygon, revolve, smoothPath, sweep } from './bare-shapes.ts';
+export type { CylinderOptions, ExtrudeOptions, GridOptions, GridSmooth, PathFrame, PolygonOptions, RevolveOptions, ShapePart, ShapePayload, ShapeVertex, ShapeWarp, SweepOptions } from './bare-shapes.ts';

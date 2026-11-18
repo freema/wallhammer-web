@@ -158,7 +158,8 @@ A material is data (`MaterialDesc` in `base`) and is compiled by `renderer.mater
 
 - `attribs`: fixed attribute locations. The mesh layout and every program of the material share them.
 - `passes`: GLSL (`{ vs, fs }`) per pass, or `'depth'` for the shared shadow programs (`DEPTH_VS`, `DEPTH_FS`). A material with instanced or displaced vertices needs its own shadow program; `'depth'` only transforms `a_pos`.
-- `state`: extra draw state per pass (`DrawState`: depth test and function, depth write, back-face culling, blending, alpha to coverage, polygon offset). The device applies only what changes.
+- `state`: extra draw state per pass (`DrawState`: depth test and function, depth write, face culling, blending, alpha to coverage, polygon offset). The device applies only what changes.
+- Face culling: `cull: 'none' | 'back' | 'front'` (type `CullMode`). The older `cullBack` (true: `'back'`, false: `'none'`) keeps working; when one state object has both, `cull` wins. The pass base state is `'back'`. The device switches `CULL_FACE` and `cullFace` only when they change. `'front'` draws only the back faces, for example an inflated copy of a mesh drawn behind it as a silhouette.
 
 Uniforms are tagged values (`UniformValue`): `{ int }`, `{ float }`, `{ vec2 }`, `{ vec3 }`, `{ vec4 }`, `{ ivec4 }`, `{ mat4 }`.
 
@@ -174,8 +175,9 @@ Built-in and engine-registered includes:
 
 | Include | Registered by | Provides |
 | --- | --- | --- |
-| `header` | renderer | `#version 300 es`, precision, the `Frame` block, the `Palette` block (`u_palette[64]`). Also `localUp`, `localHeight`, `localFrame` (see [Local up](#local-up)). In the logarithmic depth mode a fragment shader also gets its depth output here (see [Depth modes](#depth-modes)). |
-| `noise` | renderer | `hashU`, `hash1/2/3`, `vnoise`, `vnoise3`, `detailVisible`, `metresPerPixelAt`, `detailVisibleAt`. |
+| `header` | renderer | `#version 300 es`, precision, the `Frame` block, the `Palette` block (`u_palette[64]`). Also `localUp`, `localHeight`, `localFrame` (see [Local up](#local-up)) and the pixel size helpers `detailVisible`, `metresPerPixelAt`, `detailVisibleAt` (`PIXEL_SIZE_GLSL`), so a material without `<noise>` can fade detail by its size on screen. In the logarithmic depth mode a fragment shader also gets its depth output here (see [Depth modes](#depth-modes)). |
+| `noise` | renderer | `hashU`, `hash1/2/3`, `vnoise`, `vnoise3`. It still contains the pixel size helpers, behind the guard `WH_PIXEL_SIZE`, so including it after the header defines nothing twice. |
+| `shadow` | `EnvironmentLink` | The sun visibility alone, without colours of light: `u_shadowMap`, `cloudLight`, `sunVisibility(worldPos, n, offsetTexels)`, `sunVisibilityBaked(…, baked)`, and the sharp variants `sunVisibilitySharp(worldPos, n, offsetTexels)` and `sunVisibilityBakedSharp(…, baked)`: one depth compare at the centre of the shadow map texel, no filter, so the edge is a hard step (stepped light, toon shading). Guarded by `WH_SHADOW_QUERY`: `<lighting>` contains the same text, so a material may include both, in either order. Needs `<noise>` before it (for `cloudLight`). |
 | `lighting` | `EnvironmentLink` | `u_shadowMap`, `cloudLight`, `sunVisibility(worldPos, n, offsetTexels)`, `sunVisibilityBaked(worldPos, n, offsetTexels, baked)` (see [Shadow modes](#shadow-modes)), `lightOn(n, sun, ao)`, `lightOnAt(worldPos, n, sun, ao)` (see [Local up](#local-up)), `applyFog(display, worldPos)`, `toDisplay(c)`. Needs `<noise>` first. |
 | `sky` | `EnvironmentLink` (stand-ins) or the sky slot | `skyToEye`, `skyColorDir`, `aerialPerspective`. Without the sky slot, stand-ins (no haze, fog colour as sky) keep the same material working. |
 | `atmosphere` | `EnvironmentLink` (stand-in) or the atmosphere slot | `atmosphereAir(worldPos, through)` for the vertex shader and `atmosphereApply(display, worldPos, air, through)` for the fragment shader; `atmosphereApply(display, worldPos)` integrates in the fragment shader instead. With the slot it also defines `WH_ATMOSPHERE` and provides `atmosphereLight(worldPos, n, sun, ao)`, `atmosphereSun(worldPos)` and `atmosphereSky(dir, through, ground)`. Without it `atmosphereApply` returns its input and `atmosphereAir` gives no air. See [The atmosphere](#the-atmosphere). |
@@ -238,9 +240,29 @@ slot.params.patchOffset = [0, 0, 3 * engine.env.time.time];
 
 `Environment` (in `env`) holds:
 
-- `mode`: `'studio'` (default, fixed light) or `'day'` (sun from `site`, date and hour).
+- `mode`: `'studio'` (default, fixed light), `'day'` (sun from `site`, date and hour) or `'fixed'` (a light given directly, see below).
 - Two clocks. `time` drives wind, clouds and transient pieces; it plays by default (`animate: true`). `day` is the hour; it wraps at 24 and is **paused** by default. Default hour 13.
 - `weather` (`cloudCover`, `precipitation`, `precipitationKind`, `snowCover`, `wetness`, `fog`, all 0..1), `wind`, `clouds`, `fogLayer`, `site`.
+
+### A fixed light
+
+`env.setFixedLight(toLight, light?)` switches to `mode: 'fixed'`: the sun stands in the world direction `toLight`
+(toward the light, need not be unit, normalised each frame; the sun's height is its angle over the horizontal plane) and the colours and
+strengths are the ones given, not derived from a sun position. `light` (type `FixedLight` without `toLight`) may set
+`sun`, `ambient`, `skyFill`, `bounce`, `warmTint` (RGB), `exposure` and `backdrop`; what it leaves out keeps its value.
+Call it again at any time to move or recolour the light (a new direction refits the shadow map as any sun movement
+does). `EnvironmentConfig.fixed` gives the starting values (`DEFAULT_FIXED`); the day clock is paused in this mode.
+Sky colour and fog are the day values of the weather. `'studio'` and `'day'` are unchanged.
+
+<!-- check: wrap -->
+```ts
+import { Environment } from 'wallhammer-web/env';
+
+const env = new Environment({ fixed: { exposure: 1.1 } });
+env.setFixedLight([-0.4, 0.8, 0.3], { sun: [1.0, 0.95, 0.85], ambient: [0.30, 0.32, 0.38] });
+env.setFixedLight([0.6, 0.5, -0.2]); // later: only the direction
+console.log(env.mode, env.fixed.exposure);
+```
 
 ## Shadows
 
@@ -563,6 +585,35 @@ locations after the mesh's own attributes.
 The layer is a dynamic shadow caster: `shadowCasters` is `'dynamic'` and `shadowDirty()` is true when a set that casts
 shadows was uploaded, added, removed, shown or hidden since the layer was last drawn into the shadow map. The renderer
 then draws only the dynamic layers over the kept static shadow map; the app never calls `invalidateShadows` for it.
+A layer whose material has no shadow pass, or whose sets never cast shadows, never reports `shadowDirty()`, so it
+costs no shadow redraw.
+
+One set may be added to several layers of one renderer, for example one material for the surface and another (with
+`cull: 'front'`) for an outline. The layers share the set's GPU instance buffer: whichever layer uploads first writes
+the records once and clears `dirty`, the others only take the new count. Each layer keeps its own vertex binding of the
+mesh, because each material has its own attribute locations. The buffer is deleted when the last layer removes the set.
+
+The layer does not cull, but `cull` returns the records of its visible sets, so `FrameStats.instancesVisible` counts
+them.
+
+<!-- check: wrap -->
+```ts
+import type { MeshData } from 'wallhammer-web/base';
+import { InstanceSetLayer, instanceSet } from 'wallhammer-web/render';
+import type { Material, Renderer } from 'wallhammer-web/render';
+declare const renderer: Renderer;
+declare const surface: Material;
+declare const outline: Material;
+declare const shape: MeshData;
+
+const set = instanceSet(shape, 64, { name: 'props' });
+const fill = new InstanceSetLayer(renderer, { material: surface });
+const edge = new InstanceSetLayer(renderer, { material: outline, passes: ['color'], state: { color: { cull: 'front' } } });
+fill.add(set);
+edge.add(set); // the same records, uploaded once
+renderer.add(fill);
+renderer.add(edge);
+```
 
 ## Instances near the viewer
 

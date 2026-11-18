@@ -24,12 +24,21 @@ export interface BlendSpec {
   dstAlpha?: BlendFactor;
 }
 
+/** Faces skipped by a draw. */
+export type CullMode = 'none' | 'back' | 'front';
+
 /** Fixed-function state of a draw. Fields left out keep their current value. */
 export interface DrawState {
   depthTest?: boolean;
   depthFunc?: 'less' | 'lequal';
   depthWrite?: boolean;
+  /** True culls back faces, false culls nothing. `cull`, when given in the same state, wins over it. */
   cullBack?: boolean;
+  /**
+   * Which faces are not drawn: none, the back faces (counter-clockwise is front) or the front faces (for example an
+   * outline hull drawn from the inside of an enlarged copy). Wins over `cullBack` in the same state object.
+   */
+  cull?: CullMode;
   /** `null` = no blending. */
   blend?: BlendSpec | null;
   /** Multisample coverage from fragment alpha. */

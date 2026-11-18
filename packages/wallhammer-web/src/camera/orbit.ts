@@ -15,6 +15,13 @@ export interface OrbitSetup {
   maxDistance: number;
   /** Radians of turn per CSS pixel of drag. */
   turnPerPx: number;
+  /**
+   * Height of the ground under a point (x, z), for keeping the eye above it. Optional: without it nothing is kept
+   * and the rig behaves as it always did.
+   */
+  groundAt?: ((x: number, z: number) => number) | null;
+  /** Least height of the eye over `groundAt`, metres. Default 1. Read only when `groundAt` is set. */
+  minEyeHeight?: number;
 }
 
 export const DEFAULT_ORBIT: OrbitSetup = { fovYDeg: 45, minPitchDeg: 5, maxPitchDeg: 85, minDistance: 2, maxDistance: 500, turnPerPx: 0.006 };
@@ -56,6 +63,47 @@ export class PerspectiveOrbitRig implements View {
     if (s.yawDeg !== undefined) this.yaw = s.yawDeg * DEG;
     if (s.pitchDeg !== undefined) this.pitch = clamp(s.pitchDeg, this.setup.minPitchDeg, this.setup.maxPitchDeg) * DEG;
     if (s.distance !== undefined) this.distance = clamp(s.distance, this.setup.minDistance, this.setup.maxDistance);
+    this.keepAboveGround();
+  }
+
+  /**
+   * With `setup.groundAt`: raises the pitch (never above `maxPitchDeg`) until the eye stands at least `minEyeHeight`
+   * over the ground, the least raise that does it (to a hundredth of a degree). `setState`, `orbitPixels` and `zoomBy`
+   * call it; call it yourself when the ground under the eye changed. Returns whether the pitch changed. Allocates
+   * nothing; without `groundAt` it does nothing.
+   */
+  keepAboveGround(): boolean {
+    const ground = this.setup.groundAt;
+    if (!ground) return false;
+    const min = this.setup.minEyeHeight ?? 1;
+    const maxPitch = this.setup.maxPitchDeg * DEG;
+    const start = this.pitch;
+    if (this.eyeClear(ground, min, start) >= 0 || start >= maxPitch) return false;
+    if (this.eyeClear(ground, min, maxPitch) < 0) {
+      this.pitch = maxPitch;
+      return true;
+    }
+    // Bisection between a pitch that is too low and one that clears the ground.
+    let lo = start;
+    let hi = maxPitch;
+    while (hi - lo > 1e-4) {
+      const mid = (lo + hi) / 2;
+      if (this.eyeClear(ground, min, mid) >= 0) hi = mid;
+      else lo = mid;
+    }
+    this.pitch = hi;
+    return true;
+  }
+
+  /** Height of the eye over the ground minus `min` for the pitch `p`, the rest of the state as it is. */
+  private eyeClear(ground: (x: number, z: number) => number, min: number, p: number): number {
+    const t = this.target;
+    const d = this.distance;
+    const h = Math.cos(p) * d;
+    const x = t[0] + Math.sin(this.yaw) * h;
+    const y = t[1] + Math.sin(p) * d;
+    const z = t[2] + Math.cos(this.yaw) * h;
+    return y - ground(x, z) - min;
   }
 
   state(): OrbitState {
@@ -242,10 +290,12 @@ export class PerspectiveOrbitRig implements View {
     const k = this.setup.turnPerPx / this.dpr;
     this.yaw -= dx * k;
     this.pitch = clamp(this.pitch + dy * k, this.setup.minPitchDeg * DEG, this.setup.maxPitchDeg * DEG);
+    this.keepAboveGround();
   }
 
   /** Multiplies the distance to the target (below 1 comes closer). */
   zoomBy(factor: number): void {
     this.distance = clamp(this.distance * factor, this.setup.minDistance, this.setup.maxDistance);
+    this.keepAboveGround();
   }
 }

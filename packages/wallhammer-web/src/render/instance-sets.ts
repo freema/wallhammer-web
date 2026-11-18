@@ -6,7 +6,12 @@
 // The owner writes a set's `data` (`writeInstance`, `pushInstance`) and `count`, and sets `dirty`; the layer uploads
 // dirty sets at the start of the next frame (`Renderer.beforeFrame`) with `Device.writeBuffer` over the set's own
 // array, so nothing is allocated per frame. The layer is a dynamic shadow caster: `shadowDirty()` tells the renderer
-// whether a set that casts shadows changed since the layer was last drawn into the shadow map.
+// whether a set that casts shadows changed since the layer was last drawn into the shadow map (never, when the
+// layer has no shadow pass or none of its sets casts shadows).
+//
+// One set may be drawn by several layers (for example one material for the surface and another for an outline):
+// layers of one renderer share the set's GPU instance buffer. Whichever layer sees `dirty` first uploads it once and
+// clears it; a version number tells the other layers that the records changed.
 //
 // Record layout (`INSTANCE_SET_FLOATS` = 16 floats): the 3 × 4 matrix as its four columns (linear part column by
 // column, then the translation: 12 floats), then the four free numbers. The vertex include `INSTANCE_SET_GLSL`
@@ -122,10 +127,27 @@ export interface InstanceSetLayerOptions extends Omit<MeshLayerOptions, 'mesh'> 
   lights?: PointLightSet | null;
 }
 
+/** The GPU side of one set, shared by every layer of one device that draws it. */
+interface SharedInstances {
+  device: Device;
+  instances: InstanceBuffer;
+  /** Layers that hold the set. */
+  users: number;
+  /** Grows with every upload. */
+  version: number;
+  /** Records uploaded last. */
+  count: number;
+}
+
+/** Set → its shared GPU buffer. A set added to layers of another device gets a buffer of its own there. */
+const sharedOf = new WeakMap<InstanceSet, SharedInstances>();
+
 interface Entry {
   set: InstanceSet;
   mesh: Mesh;
-  instances: InstanceBuffer;
+  shared: SharedInstances;
+  /** `shared.version` this layer has seen. */
+  version: number;
   /** `visible` at the last upload. */
   shown: boolean;
 }
@@ -146,7 +168,8 @@ export class InstanceSetLayer extends MeshLayer {
   private readonly entries: Entry[] = [];
   private readonly renderer: Renderer;
   private readonly device: Device;
-  private shadowChanged = true;
+  /** A caster was added, removed, moved, shown or hidden since the last shadow pass. */
+  private shadowChanged = false;
   private readonly hook: () => void;
 
   constructor(renderer: Renderer, o: InstanceSetLayerOptions) {
@@ -165,25 +188,38 @@ export class InstanceSetLayer extends MeshLayer {
     return out;
   }
 
-  /** Adds a set (uploads its buffer). Empty meshes and sets without capacity are ignored. */
+  /**
+   * Adds a set (uploads its buffer, unless another layer of the same renderer already holds the set: then the two
+   * share it). Empty meshes and sets without capacity are ignored.
+   */
   add(set: InstanceSet): void {
     if (set.mesh.count === 0 || set.capacity === 0) return;
-    const instances = this.renderer.createInstances({ layout: INSTANCE_SET_LAYOUT, data: set.data });
-    const mesh = this.renderer.createMesh(set.mesh, this.material, instances);
-    mesh.instances = Math.min(set.count, set.capacity);
-    set.dirty = false;
-    this.entries.push({ set, mesh, instances, shown: set.visible });
+    let shared = sharedOf.get(set);
+    if (!shared || shared.device !== this.device) {
+      const instances = this.renderer.createInstances({ layout: INSTANCE_SET_LAYOUT, data: set.data });
+      const count = Math.min(set.count, set.capacity);
+      shared = { device: this.device, instances, users: 0, version: 0, count };
+      set.dirty = false;
+      if (!sharedOf.has(set)) sharedOf.set(set, shared);
+    }
+    shared.users++;
+    const mesh = this.renderer.createMesh(set.mesh, this.material, shared.instances);
+    mesh.instances = shared.count;
+    this.entries.push({ set, mesh, shared, version: shared.version, shown: set.visible });
     if (set.castShadow) this.shadowChanged = true;
   }
 
-  /** Takes a set out and deletes its GPU objects. Returns whether it was there. */
+  /** Takes a set out and deletes its GPU objects (the instance buffer once no layer holds the set). Returns whether it was there. */
   remove(set: InstanceSet): boolean {
     const i = this.entries.findIndex((e) => e.set === set);
     if (i < 0) return false;
     const e = this.entries[i]!;
     this.entries.splice(i, 1);
     this.device.deleteMesh(e.mesh);
-    this.device.deleteInstances(e.instances);
+    if (--e.shared.users <= 0) {
+      this.device.deleteInstances(e.shared.instances);
+      if (sharedOf.get(set) === e.shared) sharedOf.delete(set);
+    }
     if (set.castShadow) this.shadowChanged = true;
     return true;
   }
@@ -199,11 +235,17 @@ export class InstanceSetLayer extends MeshLayer {
     let tris = 0;
     for (const e of this.entries) {
       const s = e.set;
+      const sh = e.shared;
       if (s.dirty) {
         const n = Math.min(s.count, s.capacity);
-        this.device.writeBuffer(e.instances.buffer, s.data, n * INSTANCE_SET_FLOATS);
-        e.mesh.instances = n;
+        this.device.writeBuffer(sh.instances.buffer, s.data, n * INSTANCE_SET_FLOATS);
+        sh.count = n;
+        sh.version++;
         s.dirty = false;
+      }
+      if (e.version !== sh.version) {
+        e.version = sh.version;
+        e.mesh.instances = sh.count;
         if (s.castShadow && s.visible) this.shadowChanged = true;
       }
       if (s.visible !== e.shown) {
@@ -215,9 +257,22 @@ export class InstanceSetLayer extends MeshLayer {
     this.triangles = tris;
   }
 
-  /** True when a shadow-casting set changed since the layer was last drawn into the shadow map. */
+  /**
+   * True when a shadow-casting set changed since the layer was last drawn into the shadow map. Always false for a
+   * layer that does not draw in the shadow pass, and for one none of whose sets ever cast shadows.
+   */
   shadowDirty(): boolean {
-    return this.shadowChanged;
+    return this.shadowChanged && this.passes.has('shadow');
+  }
+
+  /**
+   * Sets are not culled: everything visible is kept. Returns the records of the visible sets, so the renderer's
+   * `instancesVisible` counts them with the instances of the culled layers.
+   */
+  cull(): number {
+    let n = 0;
+    for (const e of this.entries) if (e.set.visible) n += e.mesh.instances;
+    return n;
   }
 
   override draw(ctx: DrawContext): void {

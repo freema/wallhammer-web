@@ -1,7 +1,7 @@
 // Layer 5, render: the renderer (passes, shadow map, layers), materials, texture bakes, shared GLSL pieces, the
 // shadow pass shaders, culled mesh pieces, instances in cells with levels of detail and instanced rigs.
 
-export { NOISE, frameBlockFloats, shaderHeader } from './glsl.ts';
+export { NOISE, PIXEL_SIZE_GLSL, frameBlockFloats, shaderHeader } from './glsl.ts';
 export type { FrameSlotSizes, FrameSlotsGlsl, HeaderExtra } from './glsl.ts';
 export { DEPTH_FS, DEPTH_VS, SHADOW_AREAS_MAX, SHADOW_HORIZON_UNIT } from './shadow-glsl.ts';
 export { InstancedLayer, Material, MeshLayer, Renderer, SHADOW_MAP_UNIT, cullInstances } from './renderer.ts';
@@ -33,8 +33,10 @@ export type {
 } from './renderer.ts';
 export { DUST_LIFE_S, TransientLayer } from './transient.ts';
 export type { TransientBatch, TransientStats } from './transient.ts';
-export { RigLayer } from './rig.ts';
-export type { RigCounts } from './rig.ts';
+export { RIG_POSE_GLSL, RigLayer } from './rig.ts';
+export type { RigCounts, RigLayerOptions } from './rig.ts';
+export { BoneInstances } from './bone-instances.ts';
+export type { BonePart } from './bone-instances.ts';
 export { POINT_VALUE_ATTRIBS, POINT_VALUE_MATERIAL, RASTER_VALUE_MATERIAL, SHAPE_VALUE_MATERIAL, VALUE_GLSL } from './value-glsl.ts';
 export { POINT_VALUE_LAYOUT, PointValueLayer, RasterValueLayer, ShapeValueLayer, ValueSteps } from './value-layers.ts';
 export type { PointValueOptions, RasterValueOptions, ShapeValueOptions, ValueGrid, ValueSheetTile, ValueStyle } from './value-layers.ts';

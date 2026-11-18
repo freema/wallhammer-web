@@ -51,14 +51,14 @@ export function windowShare(hour: number, table: WindowLight['shareByHour'] = DE
   return hour < table[0]![0] ? table[0]![1] : table[table.length - 1]![1];
 }
 
-/** Window light slot: fills the free lanes of the engine's `u_time` member. Nothing glows in studio light. */
+/** Window light slot: fills the free lanes of the engine's `u_time` member. Nothing glows in studio or fixed light. */
 export function windowLightSlot(windows: Partial<WindowLight> = {}): EnvSlot<WindowLight, WindowLightState> {
   return {
     name: 'window-light',
     params: { ...DEFAULT_WINDOWS, ...windows },
     fields: [{ member: 'u_time', lanes: 'zw', doc: 'z window glow 0–1, w share of lit windows' }],
     compute: (env, p) =>
-      env.mode === 'studio'
+      env.mode !== 'day'
         ? { glow: 0, share: 0 }
         : { glow: (1 - smoothstep(GLOW_FROM, GLOW_TO, env.sunElevationDeg)) * p.strength, share: windowShare(env.hour, p.shareByHour) },
     lanes: (s) => [s.glow, s.share],

@@ -112,6 +112,99 @@ void main() {
 
 Draw it with an `InstancedLayer` whose `bounds` is `{ position: 0, radius: 0.3, height: 3 }` for this layout. GLSL errors appear only in the browser; the type check does not see them.
 
+## Draw moving copies with instance sets
+
+For things the app moves itself (parts posed by its own code, props that spin or swing), use an `InstanceSet` and an
+`InstanceSetLayer` ([Rendering](rendering.md#instance-sets)). A set is one mesh and up to `capacity` records; each
+record is a 3 × 4 matrix (the layout of a `Mat34`, [Concepts](concepts.md#3--4-matrices)) and four free numbers. One
+instanced draw per visible set, shadows included, no culling.
+
+Where: the app or example. The material is the app's; it only adds the instance attributes.
+
+1. Make the set: `instanceSet(mesh, capacity, { name?, castShadow?, visible? })`.
+2. Give the material the attributes: `INSTANCE_SET_GLSL` in the vertex shaders of every pass it draws (the shadow pass
+   too, `'depth'` does not know instances) and `instanceSetAttribs(first)` in its `attribs`, `first` being the count of
+   the mesh's own attributes.
+3. Add the set to an `InstanceSetLayer` and the layer to the renderer.
+4. Each frame (or tick) write the records with `writeInstance(set, i, m, a, b, c, d)` (or append with
+   `pushInstance`, which sets `dirty` and grows `count`), set `count`, and set `dirty = true`. The layer uploads at the
+   start of the next frame; nothing is allocated.
+
+<!-- check: wrap -->
+```ts
+import { mat34FromQuat, quatAxisTurns } from 'wallhammer-web/base';
+import type { MaterialDesc, MeshData } from 'wallhammer-web/base';
+import { DEPTH_FS, INSTANCE_SET_GLSL, InstanceSetLayer, instanceSet, instanceSetAttribs, writeInstance } from 'wallhammer-web/render';
+import type { Renderer } from 'wallhammer-web/render';
+declare const renderer: Renderer;
+declare const shape: MeshData; // a_pos, a_normal
+
+const SPIN_MATERIAL: MaterialDesc = {
+  name: 'spin',
+  attribs: { a_pos: 0, a_normal: 1, ...instanceSetAttribs(2) },
+  passes: {
+    shadow: {
+      vs: `#include <header>
+uniform mat4 u_lightRender;
+in vec3 a_pos;
+${INSTANCE_SET_GLSL}
+void main() { gl_Position = u_lightRender * vec4(instancePoint(a_pos), 1.0); }`,
+      fs: DEPTH_FS,
+    },
+    color: {
+      vs: `#include <header>
+in vec3 a_pos;
+in vec3 a_normal;
+${INSTANCE_SET_GLSL}
+out vec3 v_world;
+out vec3 v_normal;
+out vec3 v_tint;
+void main() {
+  v_world = instancePoint(a_pos);
+  v_normal = instanceNormal(a_normal);
+  v_tint = i_extra.rgb;
+  gl_Position = u_viewProj * vec4(v_world, 1.0);
+}`,
+      fs: `#include <header>
+#include <noise>
+#include <lighting>
+in vec3 v_world;
+in vec3 v_normal;
+in vec3 v_tint;
+out vec4 o_color;
+void main() {
+  vec3 n = normalize(v_normal);
+  o_color = vec4(applyFog(toDisplay(v_tint * lightOn(n, sunVisibility(v_world, n, 1.0), 1.0)), v_world), 1.0);
+}`,
+    },
+  },
+};
+
+const set = instanceSet(shape, 8, { name: 'spinners' });
+const layer = new InstanceSetLayer(renderer, { material: renderer.material(SPIN_MATERIAL) });
+layer.add(set);
+renderer.add(layer);
+
+const m = new Float32Array(12);
+/** Call once per tick with the simulation time in seconds. */
+function pose(seconds: number): void {
+  for (let i = 0; i < set.capacity; i++) {
+    mat34FromQuat(quatAxisTurns([0, 1, 0], seconds * 0.25 + i / set.capacity), m, i * 3, 0, 0);
+    writeInstance(set, i, m, 0.8, 0.6 + 0.05 * i, 0.4);
+  }
+  set.count = set.capacity;
+  set.dirty = true;
+}
+pose(0);
+```
+
+Checklist:
+
+- Keep sets few: each visible set is a draw call per pass.
+- A set may be added to several layers (another material for an outline); the records are uploaded once.
+- `castShadow: false` keeps a set out of the shadow pass; a layer without a shadow pass never redraws shadows.
+- The layer does not cull. For many still copies spread over a large area use `InstancedLayer` or `InstanceCellLayer`.
+
 ## Add an environment slot
 
 Where: the content module or app that uses the value. Slots are fixed when the engine is created.

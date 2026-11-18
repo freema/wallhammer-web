@@ -16,7 +16,7 @@
 
 import { texelBytes } from '../base/data.ts';
 import type { InstanceData, MeshData, ScalarType, TextureData, TextureFormat, TextureSampling, VertexLayout } from '../base/data.ts';
-import type { BlendFactor, BlendSpec, DrawState, Uniforms } from '../base/material.ts';
+import type { BlendFactor, BlendSpec, CullMode, DrawState, Uniforms } from '../base/material.ts';
 import type { DepthMode } from '../base/view.ts';
 import type { GL, GpuBuffer, MainSamples, Mesh, Texture } from './gl.ts';
 import { Program, bindAttribs, createBuffer, createTexture, drawMesh, forgetContextExtensions, rendererName } from './gl.ts';
@@ -159,15 +159,17 @@ export class Device {
   private readonly gl: GL;
   readonly name: string;
   private emptyVao: WebGLVertexArrayObject;
-  private readonly state: Required<DrawState> = {
+  private readonly state: Required<Omit<DrawState, 'cullBack' | 'cull'>> & { cull: CullMode } = {
     depthTest: false,
     depthFunc: 'less',
     depthWrite: true,
-    cullBack: false,
+    cull: 'none',
     blend: null,
     alphaToCoverage: false,
     polygonOffset: null,
   };
+  /** The face `gl.cullFace` names now; it is switched only when a draw culls the other one. */
+  private cullSide: 'back' | 'front' = 'back';
 
   private depth: DepthMode = 'standard';
   /** Samples of the offscreen main target, and whether the standard mode draws offscreen too (`setMainSamples`). */
@@ -225,6 +227,7 @@ export class Device {
     if (!vao) throw new Error('Cannot create a VAO');
     this.emptyVao = vao;
     gl.cullFace(gl.BACK);
+    this.cullSide = 'back';
     this.setState({ ...this.state }, true);
   }
 
@@ -426,6 +429,7 @@ export class Device {
     if (!vao) throw new Error('Cannot create a VAO');
     this.emptyVao = vao;
     gl.cullFace(gl.BACK);
+    this.cullSide = 'back';
     // The offscreen main target is gone with the context; `target` allocates it again.
     if (this.scene) {
       this.untrack(this.scene);
@@ -781,7 +785,6 @@ export class Device {
       if (s.depthTest !== undefined) c.depthTest = !s.depthTest;
       if (s.depthFunc !== undefined) c.depthFunc = s.depthFunc === 'less' ? 'lequal' : 'less';
       if (s.depthWrite !== undefined) c.depthWrite = !s.depthWrite;
-      if (s.cullBack !== undefined) c.cullBack = !s.cullBack;
       if (s.blend !== undefined) c.blend = s.blend ? null : { src: 'one', dst: 'one' };
       if (s.alphaToCoverage !== undefined) c.alphaToCoverage = !s.alphaToCoverage;
       if (s.polygonOffset !== undefined) c.polygonOffset = s.polygonOffset ? null : [0, 0];
@@ -799,10 +802,19 @@ export class Device {
       gl.depthMask(s.depthWrite);
       c.depthWrite = s.depthWrite;
     }
-    if (s.cullBack !== undefined && s.cullBack !== c.cullBack) {
-      if (s.cullBack) gl.enable(gl.CULL_FACE);
-      else gl.disable(gl.CULL_FACE);
-      c.cullBack = s.cullBack;
+    // `cull` wins over `cullBack`; true culls the back faces, false nothing. The face is switched only on a change.
+    const cull = s.cull ?? (s.cullBack === undefined ? undefined : s.cullBack ? 'back' : 'none');
+    if (cull !== undefined) {
+      const on = cull !== 'none';
+      if (force || on !== (c.cull !== 'none')) {
+        if (on) gl.enable(gl.CULL_FACE);
+        else gl.disable(gl.CULL_FACE);
+      }
+      if (on && (force || cull !== this.cullSide)) {
+        gl.cullFace(cull === 'front' ? gl.FRONT : gl.BACK);
+        this.cullSide = cull;
+      }
+      c.cull = cull;
     }
     if (s.blend !== undefined && !sameBlend(s.blend, c.blend)) {
       if (s.blend) {

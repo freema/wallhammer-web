@@ -84,6 +84,37 @@ The loop draws on demand. It runs continuously only while the simulation or an e
 
 The simulation never reads anything the image side owns. The image side reads the simulation only in extraction hooks.
 
+## 3 × 4 matrices
+
+An affine transform (rotation, scale, shear, then translation) on the CPU is a `Mat34` of `wallhammer-web/base`: 12
+numbers column by column, the three columns of the linear part and then the translation, the same layout as the first
+12 floats of an instance record (`writeInstance`). Every function takes `out` last and returns it; without `out` it
+returns a new `Float64Array` (or a `[x, y, z]` for points). `out` may be one of the inputs. Angles are radians,
+rotations right-handed, quaternions `[x, y, z, w]` as in `frames`.
+
+| Function | Result |
+| --- | --- |
+| `mat34Identity(out?)`, `mat34Copy(m, out?)` | Identity; a copy. |
+| `mat34Translation(x, y, z, out?)`, `mat34Scaling(sx, sy, sz, out?)` | Translation; scale. |
+| `mat34RotationX/Y/Z(rad, out?)`, `mat34RotationAxis(ax, ay, az, rad, out?)` | Rotation about an axis (normalised; a zero axis gives the identity). |
+| `mat34FromQuat(q, out?, tx?, ty?, tz?)` | Rotation of a unit quaternion, with an optional translation. |
+| `mat34Multiply(a, b, out?)` | `a · b`: `b` applied first. |
+| `mat34Determinant(m)`, `mat34Invert(m, out?)` | Determinant of the linear part; inverse, `null` when singular. |
+| `mat34Point(m, x, y, z, out?)`, `mat34Direction(m, x, y, z, out?)`, `mat34Normal(m, x, y, z, out?)` | A point (with translation); a direction (without); a normal (cofactor matrix, normalised, sign kept for mirrors, the same rule as `instanceNormal` in GLSL). |
+
+<!-- check: wrap -->
+```ts
+import { mat34Invert, mat34Multiply, mat34Point, mat34RotationY, mat34Scaling, mat34Translation } from 'wallhammer-web/base';
+
+const local = mat34Multiply(mat34RotationY(Math.PI / 4), mat34Scaling(2, 1, 2));
+const world = mat34Multiply(mat34Translation(10, 0, 5), local);
+const p = mat34Point(world, 1, 0, 0);
+const back = mat34Invert(world);
+const scratch = new Float32Array(12);
+mat34Multiply(world, mat34RotationY(0.1), scratch); // allocation-free with out
+console.log(p, back !== null && mat34Point(back, p[0], p[1], p[2]));
+```
+
 ## Units and axes
 
 - One unit is one metre. y is up.

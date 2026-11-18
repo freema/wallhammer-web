@@ -48,6 +48,7 @@ export const LAYERS: Readonly<Record<string, number>> = {
   platform: 1,
   core: 2,
   'gen-core': 2,
+  motion: 2,
   'gen-mesh': 3,
   'gen-tex': 3,
   'gen-arch': 3,

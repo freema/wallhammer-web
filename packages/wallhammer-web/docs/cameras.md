@@ -61,6 +61,24 @@ Setup (`OrbitSetup`, defaults in `DEFAULT_ORBIT`): `fovYDeg` 45, `minPitchDeg` 5
 
 `createEngine({ orbitControls: true })` calls `bindOrbitInput` for you: drag orbits, the wheel zooms.
 
+### Keeping the eye above the ground
+
+With `groundAt(x, z)` in the setup, the rig keeps the eye at least `minEyeHeight` (default 1 m) above that height:
+after `setState`, `orbitPixels` and `zoomBy` it raises the pitch (never over `maxPitchDeg`) as little as needed,
+found by halving the interval between the current pitch and `maxPitchDeg`. Yaw, distance and target stay as asked.
+When even `maxPitchDeg` is too low the pitch stays at `maxPitchDeg`. `keepAboveGround()` does the same on demand (after
+changing `target` directly) and returns whether it changed the pitch. Without `groundAt` nothing changes.
+
+<!-- check: wrap -->
+```ts
+import { PerspectiveOrbitRig } from 'wallhammer-web/camera';
+declare const heightAt: (x: number, z: number) => number;
+
+const rig = new PerspectiveOrbitRig({ groundAt: heightAt, minEyeHeight: 1.5 }, { yawDeg: 30, pitchDeg: 10, distance: 40 });
+rig.target = [12, heightAt(12, 8) + 1, 8];
+if (rig.keepAboveGround()) console.log('pitch raised to', rig.pitch);
+```
+
 ### Orbit paths
 
 `OrbitPath` moves an orbit rig along keyframes: orbit states (`OrbitKey`: `target`, `yawDeg`, `pitchDeg`, `distance`) at times `t` in seconds. Between the keys every channel is a cubic Hermite curve with Catmull-Rom tangents for uneven key spacing, so the velocity is continuous at every key. The yaw takes the shorter way round between neighbouring keys (more than 180° between two keys needs a key in between). The distance is interpolated in log space: equal zoom factors take equal time, and it never reaches zero. The target, pitch and distance may overshoot a little between keys, as any spline through the keys does; keep a margin to the limits that matter (the ground, the rig's pitch range, which `apply` clamps to).

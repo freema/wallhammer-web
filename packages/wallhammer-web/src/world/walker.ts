@@ -5,6 +5,11 @@
 // drawing. Plain Node, no DOM; only + − × ÷ and Math.sqrt in a step (detAtan2 for the heading), so the same inputs
 // give the same path bit for bit.
 //
+// State: everything a step reads or writes, also the drawing state between steps, saves to a fixed number of bytes
+// (`saveState`, `loadState`). `simState` wraps that as a part of a fixed-step simulation's state (the `SimState`
+// shape of sim, matched structurally, since world does not import sim), so a snapshot, `restore` and `rebase` bring the
+// walker back with everything else. A walker stepped by such a simulation draws with the simulation's `alpha`.
+//
 // Scope: a flat world with +y up. A curved world is not built; the places where a local up would replace y are
 // marked "UP:" below (gravity, the vertical span, the slope of the base and the heading plane).
 
@@ -72,6 +77,28 @@ export interface WalkIntent {
   jump: boolean;
 }
 
+/** Bytes of one saved walker state (`Walker.saveState`). */
+export const WALKER_STATE_BYTES = 20 * 8;
+/** First number of a saved state; another one is not a walker state of this layout. */
+const STATE_VERSION = 1;
+
+/** Where a state part writes its bytes (the `bytes` method of sim's `ByteWriter` fits). */
+export interface ByteSink {
+  bytes(a: ArrayBufferView): void;
+}
+
+/** Where a state part reads its bytes from (the `into` method of sim's `ByteReader` fits). */
+export interface ByteSource {
+  into(target: ArrayBufferView): void;
+}
+
+/** A walker as one part of a simulation's state: matches `SimState` of sim (`Simulation.addState`). */
+export interface WalkerSimState {
+  readonly name: string;
+  save(w: ByteSink): void;
+  load(r: ByteSource): void;
+}
+
 /** A fresh, idle `WalkIntent` (allocate once, reuse). */
 export function newWalkIntent(): WalkIntent {
   return { moveX: 0, moveZ: 0, run: false, jump: false };
@@ -121,6 +148,8 @@ export class Walker {
   private readonly smoothKeep: number;
   private readonly prev = new Float64Array(3);
   private prevYaw = 0;
+  /** `travelled` before the last step (drawing interpolates between the two). */
+  private prevTravelled = 0;
   private acc = 0;
   private pendingJump = false;
   private stepOffset = 0;
@@ -128,6 +157,8 @@ export class Walker {
   private readonly slid = newSlideResult();
   private readonly grad = new Float64Array(2);
   private readonly scratch: WalkIntent = newWalkIntent();
+  private readonly stateScratch = new Float64Array(WALKER_STATE_BYTES / 8);
+  private readonly stateBytes = new Uint8Array(this.stateScratch.buffer);
 
   constructor(world: CollisionWorld, setup?: Partial<WalkerSetup>) {
     this.world = world;
@@ -157,6 +188,7 @@ export class Walker {
     this.velocity.fill(0);
     if (yaw !== undefined) this.yaw = yaw;
     this.prevYaw = this.yaw;
+    this.prevTravelled = this.travelled;
     this.grounded = false;
     this.steep = false;
     this.acc = 0;
@@ -208,6 +240,7 @@ export class Walker {
     const g = this.grad;
     this.prev.set(p);
     this.prevYaw = this.yaw;
+    this.prevTravelled = this.travelled;
     this.prevStepOffset = this.stepOffset;
     this.stepOffset *= this.smoothKeep;
     this.steps++;
@@ -389,11 +422,93 @@ export class Walker {
   }
 
   /**
-   * Position between the last two steps for drawing, written to `out`. A step up or down is eased out over
-   * `stepSmoothing` seconds in y.
+   * Writes the whole state (position, velocity, heading, ground contact, distance, steps, the previous step for
+   * drawing, leftover time, a pending jump, the step easing) into `out` (at least `WALKER_STATE_BYTES` bytes from
+   * `offset`; default a new array) and returns it. The setup and the collision world are not state.
    */
-  renderPosition(out: Float64Array | number[]): void {
-    const a = this.alpha;
+  saveState(out?: Uint8Array, offset = 0): Uint8Array {
+    const f = this.stateScratch;
+    const p = this.position;
+    const v = this.velocity;
+    f[0] = STATE_VERSION;
+    f[1] = p[0]!;
+    f[2] = p[1]!;
+    f[3] = p[2]!;
+    f[4] = v[0]!;
+    f[5] = v[1]!;
+    f[6] = v[2]!;
+    f[7] = this.yaw;
+    f[8] = (this.grounded ? 1 : 0) + (this.steep ? 2 : 0) + (this.pendingJump ? 4 : 0);
+    f[9] = this.travelled;
+    f[10] = this.steps;
+    f[11] = this.prev[0]!;
+    f[12] = this.prev[1]!;
+    f[13] = this.prev[2]!;
+    f[14] = this.prevYaw;
+    f[15] = this.acc;
+    f[16] = this.stepOffset;
+    f[17] = this.prevStepOffset;
+    f[18] = this.prevTravelled;
+    f[19] = 0;
+    const o = out ?? new Uint8Array(WALKER_STATE_BYTES);
+    if (o.length < offset + WALKER_STATE_BYTES) throw new Error('Walker.saveState: the output is too short');
+    o.set(this.stateBytes, offset);
+    return o;
+  }
+
+  /** Restores a state written by `saveState` (of a walker with the same setup). */
+  loadState(bytes: Uint8Array, offset = 0): void {
+    if (bytes.length < offset + WALKER_STATE_BYTES) throw new Error('Walker.loadState: too few bytes');
+    const f = this.stateScratch;
+    this.stateBytes.set(bytes.subarray(offset, offset + WALKER_STATE_BYTES));
+    if (f[0] !== STATE_VERSION) throw new Error('Walker.loadState: not a walker state');
+    this.position[0] = f[1]!;
+    this.position[1] = f[2]!;
+    this.position[2] = f[3]!;
+    this.velocity[0] = f[4]!;
+    this.velocity[1] = f[5]!;
+    this.velocity[2] = f[6]!;
+    this.yaw = f[7]!;
+    const flags = f[8]!;
+    this.grounded = (flags & 1) !== 0;
+    this.steep = (flags & 2) !== 0;
+    this.pendingJump = (flags & 4) !== 0;
+    this.travelled = f[9]!;
+    this.steps = f[10]!;
+    this.prev[0] = f[11]!;
+    this.prev[1] = f[12]!;
+    this.prev[2] = f[13]!;
+    this.prevYaw = f[14]!;
+    this.acc = f[15]!;
+    this.stepOffset = f[16]!;
+    this.prevStepOffset = f[17]!;
+    this.prevTravelled = f[18]!;
+  }
+
+  /**
+   * This walker as a part of a simulation's state, for `Simulation.addState(walker.simState('walker'))`. Step it from a
+   * system of that simulation (`step` once per tick, with `stepHz` equal to the simulation's `hz`) and draw it with
+   * the simulation's `alpha`; snapshots, `restore`, `seek` and `rebase` then bring it back with everything else.
+   */
+  simState(name: string): WalkerSimState {
+    const buf = new Uint8Array(WALKER_STATE_BYTES);
+    return {
+      name,
+      save: (w) => w.bytes(this.saveState(buf)),
+      load: (r) => {
+        r.into(buf);
+        this.loadState(buf);
+      },
+    };
+  }
+
+  /**
+   * Position between the last two steps for drawing, written to `out`. A step up or down is eased out over
+   * `stepSmoothing` seconds in y. `alpha` is the share of the way to the next step; default the walker's own (from
+   * `advance`), a walker stepped by a simulation passes the simulation's `alpha`.
+   */
+  renderPosition(out: Float64Array | number[], alpha?: number): void {
+    const a = alpha === undefined ? this.alpha : alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
     const p = this.position;
     const q = this.prev;
     out[0] = q[0]! + (p[0]! - q[0]!) * a;
@@ -401,12 +516,27 @@ export class Walker {
     out[2] = q[2]! + (p[2]! - q[2]!) * a;
   }
 
-  /** Heading between the last two steps for drawing, radians. */
-  renderYaw(): number {
+  /** Heading between the last two steps for drawing, radians. `alpha` as for `renderPosition`. */
+  renderYaw(alpha?: number): number {
     let d = this.yaw - this.prevYaw;
     if (d > PI) d -= TWO_PI;
     else if (d < -PI) d += TWO_PI;
-    return this.prevYaw + d * this.alpha;
+    const a = alpha === undefined ? this.alpha : alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+    return this.prevYaw + d * a;
+  }
+
+  /**
+   * `travelled` between the last two steps for drawing (a stride kept in step with the drawn position). `alpha` as for
+   * `renderPosition`.
+   */
+  renderTravelled(alpha?: number): number {
+    const a = alpha === undefined ? this.alpha : alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+    return this.prevTravelled + (this.travelled - this.prevTravelled) * a;
+  }
+
+  /** Horizontal metres moved in the last step (divide by `stepSeconds` for the speed); 0 after a `teleport`. */
+  get lastStepDistance(): number {
+    return this.travelled - this.prevTravelled;
   }
 
   /** Whether the base rises more steeply than the limit on both sides of (x, z) along the uphill unit (ux, uz). */

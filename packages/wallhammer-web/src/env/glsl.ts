@@ -1,5 +1,6 @@
 // GLSL lighting functions over the environment's Frame members (see `ENV_CORE_SLOT`). They also read the renderer's
-// members (light matrix, shadow map, view) by name. Registered as the shader include `lighting`.
+// members (light matrix, shadow map, view) by name. Registered as the shader include `lighting`; its first part, the
+// shadow query without the light model, is also the include `shadow` (`shadowGlsl`).
 // With a shadow mode that keeps shadow areas the renderer's header defines `WH_SHADOW_AREAS` and brings `whShadow`.
 // With radial up (`WH_LOCAL_UP`, see the renderer's `radialUp`) the sky is over the local horizon: fill light, cloud
 // shadows and fog follow `localUp` and `localHeight`, and the side turned away from the light gets neither sun nor sky.
@@ -91,12 +92,18 @@ const CLOUD_LIGHT_FIELD = /* glsl */ `#ifdef WH_LOCAL_UP
 #endif`;
 
 /**
- * The lighting include. Without options it is `LIGHTING`. With `cloudField` (the block holds the slot
- * `CLOUD_FIELD_SLOT`) radial up gains `cloudFieldCover` and `cloudFieldAt`, and `cloudLight` reads the cover by place.
+ * The shadow query include `<shadow>`: how much sun reaches a point (scene shadows from the shadow map times cloud
+ * shadows) and nothing of the light model. `cloudLight`, `sunVisibility` and `sunVisibilityBaked` (soft edge, as
+ * `<lighting>` always had them) and `sunVisibilitySharp` and `sunVisibilityBakedSharp` (one depth comparison at the
+ * centre of the shadow map texel: a hard, unsoftened edge). `<lighting>` contains the same text; both are guarded by
+ * `WH_SHADOW_QUERY`, so a material may include `<shadow>`, `<lighting>` or both in any order. `cloudField` as for
+ * `lightingGlsl`.
  */
-export function lightingGlsl(o: { cloudField?: boolean } = {}): string {
+export function shadowGlsl(o: { cloudField?: boolean } = {}): string {
   const field = o.cloudField === true;
   return /* glsl */ `
+#ifndef WH_SHADOW_QUERY
+#define WH_SHADOW_QUERY 1
 uniform sampler2DShadow u_shadowMap;
 
 #ifdef WH_LOCAL_UP
@@ -160,6 +167,40 @@ float sunVisibilityBaked(vec3 worldPos, vec3 n, float normalOffsetTexels, float 
 #endif
 }
 
+// sunVisibilityBaked with a hard edge: one depth comparison at the centre of the shadow map texel under the point
+// (with linear filtering a lookup there weighs that texel alone), no softening.
+float sunVisibilityBakedSharp(vec3 worldPos, vec3 n, float normalOffsetTexels, float baked) {
+  float cloud = cloudLight(worldPos);
+#ifdef WH_SHADOW_AREAS
+  return whShadowSharp(u_shadowMap, worldPos, n, normalOffsetTexels, baked) * cloud;
+#else
+  vec3 p = worldPos + n * (u_view.y * normalOffsetTexels);
+  vec3 sc = (u_lightViewProj * vec4(p, 1.0)).xyz * 0.5 + 0.5;
+  float lim = u_sunDir.w;
+  if (sc.x <= 0.0 || sc.x >= lim || sc.y <= 0.0 || sc.y >= lim || sc.z >= 1.0) return baked * cloud;
+  vec2 uv = (floor(sc.xy / u_view.w) + 0.5) * u_view.w;
+  return texture(u_shadowMap, vec3(uv, sc.z)) * cloud;
+#endif
+}
+
+// sunVisibility with a hard edge (see sunVisibilityBakedSharp).
+float sunVisibilitySharp(vec3 worldPos, vec3 n, float normalOffsetTexels) {
+  return sunVisibilityBakedSharp(worldPos, n, normalOffsetTexels, 1.0);
+}
+#endif
+`;
+}
+
+/** `<shadow>` without the cloud cover by place (see `shadowGlsl`). */
+export const SHADOW_QUERY = shadowGlsl();
+
+/**
+ * The lighting include. Without options it is `LIGHTING`. With `cloudField` (the block holds the slot
+ * `CLOUD_FIELD_SLOT`) radial up gains `cloudFieldCover` and `cloudFieldAt`, and `cloudLight` reads the cover by place.
+ * It begins with the shadow query (`shadowGlsl`, guarded so `<shadow>` may be included as well).
+ */
+export function lightingGlsl(o: { cloudField?: boolean } = {}): string {
+  return /* glsl */ `${shadowGlsl(o)}
 // Light as a multiple of the surface colour: warm sun, cool shadow.
 vec3 lightOn(vec3 n, float sun, float ao) {
   float ndl = max(dot(n, u_sunDir.xyz), 0.0);

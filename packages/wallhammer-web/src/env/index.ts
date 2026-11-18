@@ -4,6 +4,7 @@
 export {
   Environment,
   DEFAULT_STUDIO,
+  DEFAULT_FIXED,
   DEFAULT_SITE,
   DEFAULT_DAY,
   DEFAULT_WIND,
@@ -13,7 +14,7 @@ export {
   studioLightDirection,
   cloudCoverTerms,
 } from './environment.ts';
-export { CLOUD_NOISE, CLOUD_NOISE_RADIAL, CLOUD_OCTAVES, LIGHTING, lightingGlsl } from './glsl.ts';
+export { CLOUD_NOISE, CLOUD_NOISE_RADIAL, CLOUD_OCTAVES, LIGHTING, SHADOW_QUERY, lightingGlsl, shadowGlsl } from './glsl.ts';
 export { CLOUD_FIELD_SLOT, cloudFieldCover, cloudFieldSlot, cloudFieldSun } from './cloud-field.ts';
 export type { CloudCoverField, CloudFieldValues } from './cloud-field.ts';
 export { DEFAULT_SKY, SKY_FALLBACK, SKY_GLSL, computeSky, skySlot } from './sky.ts';
@@ -33,6 +34,6 @@ export {
 export type { AtmosphereMedium, AtmosphereParams, AtmosphereSlot, AtmosphereTables, AtmosphereValues } from './atmosphere.ts';
 export { ENV_CORE_SLOT, assembleFrameBlock } from './frame-block.ts';
 export type { EnvFrameBlock, FrameBlockValues, FrameRegions } from './frame-block.ts';
-export type { CloudConfig, DayLight, EnvironmentConfig, StudioLight, SunObserver, WeatherState, WindConfig } from './environment.ts';
+export type { CloudConfig, DayLight, EnvironmentConfig, FixedLight, StudioLight, SunObserver, WeatherState, WindConfig } from './environment.ts';
 export { dayOfYear, skyDirection, sphereSunDirection, sunPosition } from './sun.ts';
 export type { SunPosition, SunSite } from './sun.ts';

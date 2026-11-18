@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Wallhammer Web: walking test course</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #a9c4d8; overflow: hidden; }
+      canvas#view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+      canvas#view.dragging { cursor: grabbing; }
+      #hud {
+        position: fixed; left: 12px; bottom: 12px; max-width: min(720px, calc(100vw - 24px));
+        padding: 8px 10px; border-radius: 6px; background: rgba(20, 28, 36, 0.62); color: #eef3f6;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; pointer-events: none; white-space: pre-wrap;
+        font-variant-numeric: tabular-nums;
+      }
+      #loading {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: #eef3f6; background: #2a3a48; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        transition: opacity 0.6s ease;
+      }
+      #loading.done { opacity: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="hud"></div>
+    <div id="loading" role="status" aria-live="polite">Building the course…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,2 @@
+# Nothing from this folder goes into the image: the script is mounted, and node_modules/ and out/ are large.
+*

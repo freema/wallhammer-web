@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# Baked cells (npm run bake): generated, large, reproducible from the seed.
+public/cells/

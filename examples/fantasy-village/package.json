@@ -1,0 +1,22 @@
+{
+  "name": "wallhammer-example-fantasy-village",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "A living fantasy village on wallhammer-web: hand-painted look from vertex colours, procedural architecture, villagers, smoke and fire, late afternoon to evening. Everything from code.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "inspect": "vite build --ssr scripts/inspect.ts --outDir node_modules/.inspect --emptyOutDir --logLevel warn && node node_modules/.inspect/inspect.js",
+    "collisions": "vite build --ssr scripts/collisions.ts --outDir node_modules/.collisions --emptyOutDir --logLevel warn && node node_modules/.collisions/collisions.js"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}

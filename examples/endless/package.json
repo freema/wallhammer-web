@@ -1,0 +1,23 @@
+{
+  "name": "wallhammer-example-endless",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Endless streamed world on wallhammer-web: noise terrain in quadtree cells, generated in workers or read from baked files.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "bake": "node scripts/bake.ts",
+    "verify": "node scripts/verify.ts"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}

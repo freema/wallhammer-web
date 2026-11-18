@@ -6,7 +6,7 @@
 //   [link]     a relative link points to a file that does not exist, or to a heading that the target does not have
 //   [subpath]  the text names `wallhammer-web/<subpath>` that is not an export of the package
 //
-//   node tools/docs/check.ts            check (run from web/, e.g. `pnpm check:docs`)
+//   node tools/docs/check.ts            check (run from the repository root, e.g. `pnpm check:docs`)
 //   node tools/docs/check.ts --keep     keep the generated TypeScript files and print where they are
 //
 // Code blocks. Every ```ts block is a module of its own and is checked as it stands. An HTML comment on the line just

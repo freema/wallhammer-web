@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Wallhammer Web: endless world</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #9db8cc; overflow: hidden; }
+      canvas#view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+      canvas#view.dragging { cursor: grabbing; }
+      #overlay { position: fixed; left: 10px; top: 10px; margin: 0; padding: 8px 10px; font: 11px/1.45 ui-monospace, Menlo, monospace;
+        color: #f2f4f6; background: rgba(16, 22, 28, 0.62); border-radius: 4px; pointer-events: none; white-space: pre; }
+      #overlay.hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="overlay"></pre>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

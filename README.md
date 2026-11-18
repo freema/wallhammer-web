@@ -1,94 +1,124 @@
 # Wallhammer Web
 
-Webový 3D engine, ve kterém celý svět vzniká z kódu: čisté WebGL2, žádná grafická knihovna, žádné načítané obrázky. Striktní TypeScript, moduly ve vrstvách, deterministická simulace, streamovaný svět od jednoho domu po sluneční soustavu.
+A web 3D engine in which the whole world is made by code: plain WebGL2, no graphics library, no loaded images. Strict TypeScript, modules in layers, a deterministic simulation, a streamed world from one house up to a solar system.
 
-Repozitář je pracovní prostor pnpm:
+The repository is a pnpm workspace:
 
-- `packages/wallhammer-web/`: engine, npm balíček `wallhammer-web`. Popis je v jeho [`README.md`](packages/wallhammer-web/README.md), dokumentace v [`docs/`](packages/wallhammer-web/docs/) (anglicky, ukázky kódu se typově kontrolují).
-- `tools/`: kontroly enginu (`layers`, `golden/engine`, `docs`, `pack`, `mesh`, `motion`).
-- `examples/`: příklady nad enginem. Zatím tu nejsou, viz [Co zbývá přenést](#co-zbývá-přenést).
-- `.claude/skills/` a `CLAUDE.md`: pravidla a postupy pro práci s agentem (spuštění, kontroly, rozšiřování).
+- `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/) (code samples there are type-checked).
+- `examples/`: example pages built on the engine. Each has its own `README.md`.
+  - `minimal-3d`: a perspective orbit view of an island with standing stones. Engine only.
+  - `destruction`: generated structures on plain ground that break part by part. Uses the content modules (`gen-arch`, `sim/destruction`).
+  - `endless`: an endless streamed world in quadtree cells, generated in workers or read from baked files. Engine only. A second page, `sphere.html`, shows the sphere world.
+  - `planet`: a flight from the surface of a small planet up to orbit and back. Engine only.
+  - `system`: a sun and several bodies on orbits, with one continuous flight from the surface of one body to another. Uses the content modules for its structures and their destruction.
+  - `fantasy-village`: a living fantasy village made by code (architecture, terrain, vegetation, villagers, smoke and fire, late afternoon to evening). Engine only, with its own content modules in the example. Engine layers draw it (`PieceLayer`, `InstanceSetLayer`, `PointLightSet`, `ParticleLayer`); it has only two materials of its own. Its `README.md` describes the measurement parameters of the address (`pr=`, `sh=`, `sky=`, `aa=`) and `__wh.profileText()`.
+  - `walk`: a walking test course: a collision world, a walker and a follow camera.
+  - `outpost`: a lunar research station in a comic look (flat colours, outlines, hard shadows). Engine only, with its own materials, a rover and astronauts on a skeleton.
+- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugin (`vite`), pictures in Docker (`shot/page-shot.mjs`) and host tools (`shot/shot.mjs`, `bench`).
+- `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
+- `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending).
+- `internal/`: internal working material, ignored by git (see [Internal notes](#internal-notes)).
 
-## Spuštění
+## Running
 
-Všechno běží v Dockeru. Na počítači stačí Docker s `docker compose` a git, Node potřeba není.
+Everything runs in Docker. The host needs Docker with `docker compose` and git, no Node.
 
 ```sh
-docker compose up -d     # z kořene repozitáře
-docker compose ps        # dev má být (healthy)
+docker compose up -d     # from the repository root
+docker compose ps        # dev should be (healthy)
 ```
 
-Služba `dev` nainstaluje závislosti a zůstane běžet pro kontroly. Nezveřejňuje žádný port. Závislosti žijí v pojmenovaných svazcích, na disk se nic neinstaluje. Zastavení: `docker compose down`.
+The one service `dev` installs the dependencies, serves every example on one port and stays up for the checks:
 
-## Kontroly
+| Address | What |
+| --- | --- |
+| <http://localhost:5281/> | index of the examples |
+| <http://localhost:5281/minimal-3d/> | `examples/minimal-3d` |
+| <http://localhost:5281/destruction/> | `examples/destruction` |
+| <http://localhost:5281/endless/> | `examples/endless` (second page: `/endless/sphere.html`) |
+| <http://localhost:5281/planet/> | `examples/planet` |
+| <http://localhost:5281/system/> | `examples/system` |
+| <http://localhost:5281/fantasy-village/> | `examples/fantasy-village` |
+| <http://localhost:5281/walk/> | `examples/walk` |
+| <http://localhost:5281/outpost/> | `examples/outpost` |
+
+In general `http://localhost:5281/<name>/` serves `examples/<name>`. Another host port: `EXAMPLES_PORT=5291 docker compose up -d`. Port 5280 is left to the app of the city repository. The service is healthy once the dependencies are installed and the server answers. Stop it with `docker compose down`.
+
+How it works: after the install, `scripts/dev-entrypoint.sh` starts `tools/serve/serve.ts`, one Node process with one HTTP server. Each example has its own Vite dev server in it (with its own `vite.config.ts`), in middleware mode with the base path `/<name>/`. That server starts when the example is first opened, so examples nobody opens cost nothing (no file watching). Source edits reload the page. A restart (`docker compose restart dev`) is needed only after a change of dependencies. Dependencies live in named volumes; nothing is installed on the host disk.
+
+A new example (a folder with `index.html`) shows up in the index by itself. It still needs a volume for its `node_modules` in `docker-compose.yml` and a directory in `Dockerfile.dev`.
+
+## Checks
 
 ```sh
-docker compose exec -T dev sh -c 'cd /app && pnpm typecheck'          # typy; bez chyby
+docker compose exec -T dev sh -c 'cd /app && pnpm typecheck'          # types of the engine and the examples; no error
 docker compose exec -T dev sh -c 'cd /app && pnpm check:layers'       # layers: 0 violation(s)
 docker compose exec -T dev sh -c 'cd /app && pnpm check:layers:test'  # ok: known-bad fixture fails with all 16 expected findings
-docker compose exec -T dev sh -c 'cd /app && pnpm test:golden'        # golden: 72 of 72 generators unchanged
+docker compose exec -T dev sh -c 'cd /app && pnpm test:golden'        # golden: 72 of 72 …, then golden: 25 of 25 generators unchanged
 docker compose exec -T dev sh -c 'cd /app && pnpm check:docs'         # docs: … 0 finding(s)
 docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'         # check:mesh: 27/27 ok in … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'       # motion: 26 of 26 scenarios ok, … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'         # walk: N of N scenarios ok, … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm check:follow'       # N/N follow cases passed in … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the packed package installs, loads and type-checks
 ```
 
-- `check:layers` hlídá vrstvy modulů, hranici mezi enginem, obsahovými moduly a příklady a to, že WebGL je jen v `gpu` a DOM jen v `platform`. Výjimky nejsou.
-- `test:golden` spustí generátory a deterministické systémy enginu s pevným vstupem a porovná otisk výstupu s `tools/golden/engine/hashes.json`. Záměrnou změnu přijmeš `node tools/golden/engine/golden.ts --accept` v kontejneru; přepíše všechny otisky najednou, proto nejdřív přečti, co se změnilo. Pravidla: [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
-- `check:docs` typově zkontroluje ukázky v dokumentaci a ověří odkazy.
-- `check:mesh` a `check:motion` prověří v čistém Node stavitele sítí s holými tvary (`gen-mesh`) a modul pohybu (`motion`).
-- `check:pack` zkontroluje balíček ve tvaru, v jakém půjde na npm (viz níže). Potřebuje síť.
+- `check:layers` guards the module layers, the boundary between the engine, the content modules and the examples, and that WebGL is only in `gpu` and DOM only in `platform`. There are no exceptions.
+- `test:golden` runs two sets of fixed recipes and compares the hash of each output with the stored one. First the engine alone (`tools/golden/engine/golden.ts`, hashes in `tools/golden/engine/hashes.json`), then the recipes that need example code (`tools/golden/golden.ts`, hashes in `tools/golden/hashes.json`); the second set runs only when the first passes. `test:golden:engine` and `test:golden:examples` run one set. To accept a deliberate change, run `node tools/golden/engine/golden.ts --accept` or `node tools/golden/golden.ts --accept` in the container. Each rewrites all hashes of its set at once, so read first what changed. Rules: [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
+- `check:docs` type-checks the code samples in the documentation and checks the links.
+- `check:mesh` and `check:motion` test, in plain Node, the mesh builder with bare shapes (`gen-mesh`) and the motion module (`motion`).
+- `check:walk` tests, in plain Node, the collision world, the walker, the follow camera and the course of `examples/walk`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
+- `check:pack` checks the package in the shape it is published to npm (see below). It needs the network.
 
-## Balíček npm
+## Pictures
 
-V pracovním prostoru balíček vyváží zdrojové soubory TypeScriptu (`exports` → `src/`), takže příklady vidí změnu enginu hned. Zveřejněný balíček obsahuje sestavený JavaScript s deklaracemi typů (`dist/`), dokumentaci, `README.md` a `LICENSE`. O sestavení se stará `prepack` (`tsc -p tsconfig.build.json`) a o záměnu vstupů `publishConfig.exports` v [`package.json`](packages/wallhammer-web/package.json).
-
-Zveřejnění dělá člověk s účtem na npm. Přihlášení i zveřejnění se pouští v kontejneru, na hostiteli Node není:
+No check compiles the GLSL shaders. The one-off `shot` service shows whether a page starts in a browser without a WebGL error. It runs headless Chromium on the software renderer (profile `tools`, so `up` does not start it; it starts `dev` first when that does not run):
 
 ```sh
-docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'                          # nejdřív kontrola
-docker compose exec dev sh -c 'cd /app/packages/wallhammer-web && npm login'           # jednou; přihlášení zůstane jen v kontejneru
+docker compose run --rm shot --url http://dev:5281/planet/ --presets @hash --size 960x540 --timeout 120000
+```
+
+Pictures go to `tools/shot/out/` (ignored by git). The last line is `shot: N pictures, M page errors`. The software renderer is slow: one picture per page and a `--timeout` are enough. The options are in the header of `tools/shot/page-shot.mjs`, the image is built from `tools/shot/Dockerfile`.
+
+`tools/shot/shot.mjs` and `tools/bench/` run on the host instead, because the real graphics card decides the picture and the frame times. See [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
+
+## npm package
+
+In the workspace the package exports the TypeScript sources (`exports` → `src/`), so the examples see an engine change at once. The published package contains built JavaScript with type declarations (`dist/`), the documentation, `README.md` and `LICENSE`. `prepack` builds it (`tsc -p tsconfig.build.json`), and `publishConfig.exports` in [`package.json`](packages/wallhammer-web/package.json) swaps the entries.
+
+Only `packages/wallhammer-web` is published. The examples are private workspace packages: they are never published and import the engine source through the workspace.
+
+A person with an npm account publishes. Login and publishing run in the container; the host has no Node:
+
+```sh
+docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'                          # check first
+docker compose exec dev sh -c 'cd /app/packages/wallhammer-web && npm login'           # once; the login stays in the container
 docker compose exec dev sh -c 'cd /app/packages/wallhammer-web && pnpm publish --no-git-checks'
 ```
 
-- Zveřejňuj přes `pnpm publish`, ne `npm publish`: jen pnpm použije `publishConfig.exports`. Balíček z `npm publish` by mířil na `src/`, které v něm není.
-- Verzi nastav předem v `packages/wallhammer-web/package.json` (teď `0.4.0`). Jednou zveřejněnou verzi nejde na npm přepsat.
-- `--no-git-checks`: v kontejneru není git, pnpm tam stav větve nezkontroluje. Že je pracovní strom čistý a na `main`, ověř předem na hostiteli (`git status`).
-- Nový vstup `wallhammer-web/<modul>` se zapisuje dvakrát: do `exports` i do `publishConfig.exports`. `check:pack` na chybějící dvojici přijde.
+- Publish with `pnpm publish`, not `npm publish`: only pnpm applies `publishConfig.exports`. A package from `npm publish` would point to `src/`, which it does not contain.
+- Set the version beforehand in `packages/wallhammer-web/package.json` (now `0.4.0`). A version once published cannot be overwritten on npm.
+- `--no-git-checks`: the container has no git, so pnpm cannot check the branch there. Check on the host beforehand that the working tree is clean and on `main` (`git status`).
+- A new entry `wallhammer-web/<module>` is written twice: in `exports` and in `publishConfig.exports`. `check:pack` finds a missing twin.
 
-## Odkud to je
+## Origin
 
-Engine vznikl v repozitáři modelu města Ústí ve složce `web/packages/wallhammer-web`. Tento repozitář je jeho tvrdá kopie ze stavu commitu `aba73fe` (verze 0.4.0, včetně chůze světem) a od teď jediné místo, kde se engine vyvíjí. Po založení sem přešla ještě práce, která v repozitáři města zůstala rozpracovaná nad touto verzí: modul pohybu `motion` (kostry, pózy, graf pohybů), stavitel sítí s holými tvary (`gen-mesh`), matice 3×4 (`base`), kostí řízené instance (`render`), pevná tělesa ze sítí a uložení stavu chodce (`world`), kontroly sítí (`tools`) a k nim kontroly `check:mesh` a `check:motion`. V repozitáři města zůstává zmrazená kopie téže verze pro tamní aplikaci; novější verzi si odtud převezme, až ji bude potřebovat.
+The engine started in the repository of the Ústí city model, in `web/packages/wallhammer-web`. This repository began as a hard copy of it at commit `aba73fe` (version 0.4.0, including walking through the world) and is now the only place where the engine is developed. After that, work left unfinished in the city repository on top of this version moved here as well: the motion module `motion` (skeletons, poses, motion graph), the mesh builder with bare shapes (`gen-mesh`), 3×4 matrices (`base`), bone-driven instances (`render`), solid bodies from meshes and saved walker state (`world`), and the checks `check:mesh` and `check:motion`.
 
-Věrnost kopie hlídají zlaté otisky: 72 receptů enginu dává zde stejné otisky jako v původním repozitáři. Čtyři recepty tam závisely na kódu aplikace (postavy, vozidla, zastávky, významné stavby), ty zůstaly u aplikace.
+The examples and their tools were developed in a sibling folder that mounted the engine from the city repository. They now live here too.
 
-## Co zbývá přenést
+The golden hashes guard the copy: the 72 engine recipes give the same hashes here as in the original repository. Four recipes there depended on code of the city app (people, vehicles, stops, landmark buildings) and stayed with the app.
 
-Příklady enginu a jejich nástroje se vyvíjely ve vedlejší složce, která engine jen připojovala z repozitáře města. Do tohoto repozitáře patří:
+## Copy in the city repository
 
-| Co | Kam | Poznámka |
-| --- | --- | --- |
-| `examples/*` (`minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk` a další) | `examples/` | `pnpm-workspace.yaml` s nimi už počítá |
-| `tools/golden/{golden.ts,hashes.json,*-scenario.ts}` | `tools/golden/` | recepty, které potřebují kód příkladů; recepty enginu jsou v `tools/golden/engine/`, soubory se nepřekrývají |
-| `tools/walk/`, `tools/follow-check/` | stejné cesty | kontroly chůze a sledovací kamery (`check:walk`, `check:follow`) |
-| `tools/vite/`, `tools/shot/`, `tools/bench/` | stejné cesty | doplněk vývojového serveru a nástroje na hostiteli |
-| služby příkladů z `docker-compose.yml`, složky v `Dockerfile.dev` | sem | jedna služba, jeden svazek `node_modules` a jeden řádek `mkdir` na příklad |
+The Ústí city model repository keeps a hard copy of version 0.4.0 in `web/packages/wallhammer-web` for its app and may change it for its own needs. So that the two copies do not drift apart unseen, a rule applies there: every change to that copy is also sent here as an issue or a pull request (what changed, why, a link to the commit). This repository decides whether the engine takes it over, and the answer goes into the same issue. In the other direction, a newer engine is taken into the city repository only deliberately, in one pull request with the checks of that repository.
 
-Co při přenosu změnit:
+The two copies are synchronised by hand, never automatically, and only when the owner asks for it. Work in this repository does not edit the city repository.
 
-1. **Engine už se nepřipojuje.** Ze všech služeb pryč s řádkem `- ../usti/web/packages/wallhammer-web:/app/packages/wallhammer-web` a u `dev` i s připojením `../usti/web/tools/docs`. Engine i kontrola dokumentace jsou v tomto repozitáři. Z `.gitignore` příkladů nepřebírej řádky `packages/wallhammer-web/` a `tools/docs/` (tam to byly přípojné body).
-2. **`tools/layers/` nepřepisovat naslepo.** Zdejší kontrola vrstev je kopie té z příkladů (zná `examples/*` i pravidlo `example-imports`). Když je tamní novější (seznam `ENGINE_ONLY_EXAMPLES`), převezmi ji celou. Tamní vrstva `motion: 2` už tu je. `tools/mesh/` a `tools/motion/` jsou také už tady (testují jen engine), znovu je nepřenášej.
-3. **`package.json` v kořeni:** `test:golden` má pustit obě sady (`node tools/golden/engine/golden.ts && node tools/golden/golden.ts`), přidat `check:walk` a `check:follow`. Jméno projektu v `docker-compose.yml` je tu `wallhammer-web`, obraz `wallhammer-web-engine:dev`.
-4. **Služba `shot`** se stavěla z nástroje vizuální kontroly v repozitáři města (`../usti/web/tools/visual`, obraz `usti-visual:1`). Sem je potřeba přenést její `Dockerfile`, nebo ji stavět z vlastního.
-5. **Texty.** README, dovednosti a komentáře příkladů mluví o „repozitáři Ústí“ a „složce Wallhammer“. Zdejší dovednosti (`.claude/skills/`) už jsou přepsané na tento repozitář; po přenosu doplň tabulku služeb ve `wallhammer-run` a počet otisků ve `wallhammer-verify`.
-6. **Lock.** Po přidání příkladů obnov `pnpm-lock.yaml`: `docker compose exec -T dev sh -c 'cd /app && pnpm install --no-frozen-lockfile --store-dir /pnpm-store'`.
+## Internal notes
 
-Dokumentace enginu už o příkladech mluví jako o `examples/<jméno>` v tomto repozitáři.
-
-## Kopie v repozitáři města
-
-Repozitář modelu města Ústí má ve `web/packages/wallhammer-web` tvrdou kopii verze 0.4.0 a smí si ji pro své potřeby upravit. Aby se obě kopie nerozešly naslepo, platí tam pravidlo: každá změna té kopie se zároveň pošle sem jako issue nebo pull request (co se změnilo, proč, odkaz na commit). Tady se rozhodne, jestli ji engine převezme, a odpověď se zapíše do téhož issue. Opačným směrem se novější engine do repozitáře města přebírá jen vědomě, jedním pull requestem s tamními kontrolami.
+`internal/` at the repository root is ignored by git, as are files named `*.local.md`. Internal working material goes there: notes, plans, research, reports and drafts. It is never committed.
 
 ## Licence
 
-MIT, plný text v [`LICENSE`](LICENSE). Stejný soubor je i v balíčku (`packages/wallhammer-web/LICENSE`).
+MIT, full text in [`LICENSE`](LICENSE). The same file is in the package (`packages/wallhammer-web/LICENSE`).

@@ -7,10 +7,10 @@ Read [Bodies on rails and nested frames](frames.md) and [The planet example](pla
 ## Run
 
 ```sh
-docker compose up -d system
+docker compose up -d
 ```
 
-Open <http://127.0.0.1:5285>. The port comes from `SYSTEM_PORT`. A plain `docker compose up -d` starts it together with the other examples.
+Open <http://127.0.0.1:5281/system/>. The `dev` service serves it with the other examples; the port comes from `EXAMPLES_PORT`.
 
 | Key | What |
 | --- | --- |

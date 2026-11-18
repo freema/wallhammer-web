@@ -91,14 +91,14 @@ A parent must come before its children in the list. A body without an orbit stay
 
 `fingerprint()` returns a 32-bit digest of every frame. Print it in the browser and in Node for the same tick to check that both agree.
 
-The golden scenarios have one digest of their own for the same purpose. It must print the same text in Node and in the console of a page served by the dev server:
+The golden scenarios have one digest of their own for the same purpose. It must print the same text in Node and in the console of a page served by the dev server (here the page of `examples/minimal-3d`; the path starts with the example's name):
 
 ```sh
-docker compose exec -T web sh -c 'cd /app && node --input-type=module -e "import(\"/app/tools/golden/frames-scenario.ts\").then((m) => console.log(m.framesDigest()))"'
+docker compose exec -T dev sh -c 'cd /app && node --input-type=module -e "import(\"/app/tools/golden/engine/frames-scenario.ts\").then((m) => console.log(m.framesDigest()))"'
 ```
 
 ```js
-(await import('/@fs/app/tools/golden/frames-scenario.ts')).framesDigest();
+(await import('/minimal-3d/@fs/app/tools/golden/engine/frames-scenario.ts')).framesDigest();
 ```
 
 ### Day, night and seasons

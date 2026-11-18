@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Wallhammer Web: lunar research outpost</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      canvas#view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+      canvas#view:active { cursor: grabbing; }
+      #hud {
+        position: fixed; left: 12px; bottom: 12px; max-width: min(620px, calc(100vw - 24px));
+        padding: 7px 10px; border: 2px solid #1b1b1e; border-radius: 4px; background: rgba(235, 229, 214, 0.9); color: #1b1b1e;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap;
+      }
+      #hud b { color: #c85f12; font-weight: 700; }
+      #hud button {
+        margin-top: 5px; padding: 2px 9px; border: 2px solid #1b1b1e; border-radius: 3px; background: #ef7b22; color: #1b1b1e;
+        font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; cursor: pointer;
+      }
+      #hud button:hover { background: #f59a50; }
+      #hud .lines { pointer-events: none; }
+      #loading {
+        position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+        background: #000; color: #ebe5d6; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; transition: opacity 0.5s ease;
+      }
+      #loading.done { opacity: 0; pointer-events: none; }
+      #loading h1 { margin: 0; font: 700 30px/1.15 system-ui, sans-serif; letter-spacing: 0.03em; text-align: center; text-wrap: balance; }
+      #loading .sub { opacity: 0.65; letter-spacing: 0.18em; text-transform: uppercase; font-size: 11px; }
+      #loading .bar { position: relative; width: min(320px, calc(100vw - 64px)); height: 8px; margin-top: 8px; border: 2px solid #ebe5d6; border-radius: 3px; overflow: hidden; }
+      #loading .sheen { position: absolute; top: 0; bottom: 0; left: 0; width: 30%; background: #ef7b22; animation: loading-run 1.2s linear infinite; }
+      @keyframes loading-run { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+      #loading.failed .sheen { display: none; }
+      #loading .msg { min-height: 1.4em; white-space: pre-wrap; text-align: center; max-width: calc(100vw - 32px); }
+      @media (prefers-reduced-motion: reduce) { #loading .sheen { animation: none; width: 100%; opacity: 0.5; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="hud"><div class="lines"></div><button id="reset" type="button">Default view</button></div>
+    <div id="loading" role="status" aria-live="polite">
+      <h1>Lunar research outpost</h1>
+      <div class="sub">Wallhammer Web</div>
+      <div class="bar"><div class="sheen"></div></div>
+      <div class="msg">Building the outpost…</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

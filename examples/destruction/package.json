@@ -1,0 +1,20 @@
+{
+  "name": "wallhammer-example-destruction",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Destruction example on wallhammer-web: generated structures on plain ground that break part by part, state in the URL.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}

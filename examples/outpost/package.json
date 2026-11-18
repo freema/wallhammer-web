@@ -1,0 +1,21 @@
+{
+  "name": "wallhammer-example-outpost",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Lunar research outpost on wallhammer-web: a comic look with flat palette colours, hard light steps, dark outlines and hard shadows from one low sun, all geometry from code.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "inspect": "vite build --ssr scripts/inspect.ts --outDir node_modules/.inspect --emptyOutDir --logLevel warn && node node_modules/.inspect/inspect.js"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}

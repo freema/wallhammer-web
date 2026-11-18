@@ -2,7 +2,7 @@
 // boundaries between the engine, its content modules (gen-arch, gen-ground, gen-vegetation), the examples and the apps.
 // Every violation is an error (exit code 1); there are no exceptions.
 //
-//   node tools/layers/check.ts                      check the workspace (web/)
+//   node tools/layers/check.ts                      check the workspace (the repository root)
 //   node tools/layers/check.ts --root <dir>         check another tree (used by the fixtures)
 //   node tools/layers/check.ts --list               also print every module with its layer
 //
@@ -24,7 +24,7 @@
 //                      in a subfolder the order does not list; type imports and re-exports count
 //   [example-imports]  an example imports an app, or an engine-only example (ENGINE_ONLY_EXAMPLES) imports anything
 //                      but the engine package or imports a content module; other examples may import the whole engine
-//                      (a package's vite.config.ts may import dev tooling from web/tools)
+//                      (a package's vite.config.ts may import dev tooling from tools/)
 //   [webgl]            WebGL types or calls outside the engine module `gpu` (engine and examples)
 //   [dom]              browser DOM outside the engine module `platform` (engine)
 //   [worker]           the Worker API (new Worker, postMessage, onmessage, importScripts) outside the engine module
@@ -326,7 +326,7 @@ export function check(root: string): Violation[] {
         if (b > a) add('upward', m.index, `${owner.module} (layer ${a}) imports ${target.module} (layer ${b})`);
         else if (b === a) add('same-layer', m.index, `${owner.module} imports ${target.module}, both layer ${a}`);
       } else if (owner.kind === 'example') {
-        // A package's dev-server config may use the workspace's dev tooling (web/tools); it is not example code.
+        // A package's dev-server config may use the workspace's dev tooling (tools/); it is not example code.
         if (path.basename(file) === 'vite.config.ts' && spec.startsWith('.') && path.resolve(path.dirname(file), spec).startsWith(path.join(root, 'tools') + path.sep)) continue;
         const engineOnly = ENGINE_ONLY_EXAMPLES.has(owner.pkg);
         const toContent = target.kind === 'engine' && target.module !== null && CONTENT_MODULES.has(target.module);

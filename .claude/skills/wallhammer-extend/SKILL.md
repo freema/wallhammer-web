@@ -1,6 +1,6 @@
 ---
 name: wallhammer-extend
-description: Change or extend the Wallhammer Web engine (packages/wallhammer-web) or the examples built on it - a new layer, material, shader, environment slot, generator, simulation system, destructible structure or streamed cell provider - while keeping its layer rules, determinism and abstraction. Use before writing engine or example code. Typical requests (Czech) "přidej do enginu", "nová vrstva", "nový materiál", "nový shader", "nový generátor", "přidej slot prostředí", "přidej systém do simulace", "kam to mám dát", "jak se to dělá ve wallhammeru", "rozšiř engine".
+description: Change or extend the Wallhammer Web engine (packages/wallhammer-web) or the examples built on it - a new layer, material, shader, environment slot, generator, simulation system, destructible structure or streamed cell provider - while keeping its layer rules, determinism and abstraction. Use before writing engine or example code. Typical requests "add it to the engine", "a new layer", "a new material", "a new shader", "a new generator", "add an environment slot", "add a system to the simulation", "where should this go", "how is this done in wallhammer", "extend the engine".
 ---
 
 # Extend Wallhammer Web
@@ -14,10 +14,14 @@ Read the matching page first; every sample there is type-checked:
 | Layer, material, shader include, Frame block, slot | `packages/wallhammer-web/docs/rendering.md` |
 | Generator | `packages/wallhammer-web/docs/generators.md` |
 | Simulation system, commands, movers | `packages/wallhammer-web/docs/simulation.md` |
+| Cameras, the `View` contract, input binding | `packages/wallhammer-web/docs/cameras.md` |
+| Rigs and actors (instanced, posed in the vertex shader) | `packages/wallhammer-web/docs/rigs.md` |
 | Walking: collision world, walker, follow camera | `packages/wallhammer-web/docs/walking.md` |
 | Motion: skeletons, poses, motion graph, reach | `packages/wallhammer-web/docs/motion.md` |
 | Destruction | `packages/wallhammer-web/docs/destruction.md` |
 | Streaming, cell providers | `packages/wallhammer-web/docs/streaming.md` |
+| Bodies on rails, nested frames; the planet and system examples | `packages/wallhammer-web/docs/frames.md`, `planet.md`, `system.md` |
+| What runs in plain Node | `packages/wallhammer-web/docs/headless.md` |
 | Worked samples of all of the above | `packages/wallhammer-web/docs/recipes.md` |
 | Every export | `packages/wallhammer-web/docs/reference.md` |
 
@@ -28,7 +32,7 @@ Read the matching page first; every sample there is type-checked:
 - Engine modules outside the content modules (`gen-arch`, `gen-ground`, `gen-vegetation`) must not name a use case (city, building, roof, facade, tree, car, road, window, …) in file names, exported names or comments. Name the mechanism instead; the project gives it meaning.
 - Content (structures, ground and markings, vegetation) goes to `gen-arch`, `gen-ground` or `gen-vegetation`. They import only `base`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, never each other. A module may group its files in subfolders behind one `index.ts`. In `gen-arch` they depend one way, `structure` <- `interior` <- `damage` <- root files (`build.ts`, `index.ts`): a file imports only its own subfolder and earlier ones (layer rule `subfolder-order`, table `SUBFOLDER_ORDER`).
 - The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `walk`, `outpost`; list `ENGINE_ONLY_EXAMPLES` in `tools/layers/check.ts`) must not import the content modules; `destruction` and `system` use `gen-arch` and `sim/destruction`.
-- Project-specific code (the data of one place, texts of a user interface, concrete people and vehicle rigs) belongs in the project that uses the engine, never in the engine. An example keeps its own content in its own folder.
+- Project-specific code (the data of one place, texts of a user interface, concrete people and vehicle rigs) belongs in the project that uses the engine, never in the engine. An example keeps its own content in its own folder. Examples are private workspace packages and are never published; only `packages/wallhammer-web` is.
 - No graphics library and no loaded images: plain WebGL2, all graphics from code.
 
 ## Rules that are easy to break
@@ -38,7 +42,7 @@ Read the matching page first; every sample there is type-checked:
 - Shader includes do not nest. Write `#include <header>`, `<noise>`, `<lighting>`, `<sky>` in that order, each on its own line.
 - Environment slots are fixed when the engine is created; pass them to `createEngine({ slots })`.
 - `Layer.cull` runs only when the shadow map is refitted.
-- Code comments in English.
+- Everything in English: code, comments, documentation, READMEs and the strings an example shows.
 - The source imports with `.ts` extensions and uses only erasable TypeScript syntax (no enums, no parameter properties), so Node runs it as it is and `tsc` rewrites the extensions for the published build.
 - The package is published: a removed or renamed export, a changed signature or a new entry in `exports` (which needs its twin in `publishConfig.exports`) is a change for its users. Say so to the user; the version in `packages/wallhammer-web/package.json` is theirs to bump.
 

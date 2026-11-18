@@ -4,3 +4,4 @@
 *.tgz
 tools/shot/out
 tools/bench/out
+internal

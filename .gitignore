@@ -8,3 +8,8 @@ dist/
 .DS_Store
 tools/shot/out/
 tools/bench/out/
+
+# Internal working material: notes, plans, research, reports, drafts. Never committed (see CLAUDE.md).
+/internal/
+*.local.md
+.claude/settings.local.json

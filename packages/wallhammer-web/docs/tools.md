@@ -7,7 +7,7 @@ Dev tools live in `tools/`. Run the checks inside the `dev` container from the r
 | `pnpm typecheck` | Types of every workspace package (each package's `typecheck` script). | non-zero on a type error |
 | `pnpm check:layers` | Module layers and boundaries ([Architecture](architecture.md#what-pnpm-checklayers-enforces)). | 1 on any violation |
 | `pnpm check:layers:test` | The layer check against its good and bad fixtures. | 1 if the check misbehaves |
-| `pnpm test:golden` | Output hashes of the engine's generators and deterministic systems. | 1 on `CHANGED` or `MISSING` |
+| `pnpm test:golden` | Output hashes of the engine's generators and deterministic systems (`tools/golden/engine/`), then of those that need example code (`tools/golden/`). `pnpm test:golden:engine` and `pnpm test:golden:examples` run one set. | 1 on `CHANGED` or `MISSING` |
 | `pnpm check:docs` | This documentation: code samples, links, entry names. | 1 on any finding |
 | `pnpm check:pack` | The package as it would be published: it packs, installs into an empty project, loads in Node and type-checks. | 1 when a step fails |
 | `pnpm check:mesh` | The mesh builder core and the bare shapes in plain Node: vertex and index counts, closed shapes (every edge twice, once each way), outward winding (positive volume near the analytic one), mirroring flips the winding, `append` keeps payloads, two different vertex formats, determinism (`tools/mesh/check.ts`; see [Generators](generators.md#building-meshes-in-your-own-vertex-format)). | 1 when a case fails |
@@ -119,18 +119,20 @@ In the workspace the package exports its TypeScript sources (`exports` → `src/
 
 ## Screenshots
 
-`tools/shot/shot.mjs` takes reproducible screenshots of fixed views of the example pages. It runs **on the host**, not in Docker, because the real GPU decides the image. It drives the host's installed Chrome through `puppeteer-core` against the running containers. Its own `node_modules` must be installed in `tools/shot/`.
+`tools/shot/shot.mjs` takes reproducible screenshots of fixed views of the example pages. It runs **on the host**, not in Docker, because the real GPU decides the image. It drives the host's installed Chrome through `puppeteer-core` against the example pages that the `dev` container serves. Its own `node_modules` must be installed in `tools/shot/`.
 
 ```sh
 cd tools/shot
-node shot.mjs --url http://127.0.0.1:5281/ --tod 13,21   # the minimal-3d example
+node shot.mjs --url http://127.0.0.1:5281/minimal-3d/ --tod 13,21   # the minimal-3d example
 ```
+
+Pictures in Docker, on the software renderer and independent of the host's graphics card, come from `tools/shot/page-shot.mjs` in the `shot` service (options in its header).
 
 Animation time is frozen at the given value, so the same input gives the same image. Pages expose a small script interface on `window.__wh` (views, time, weather, stats, benchmark) that the tool uses.
 
 ## Benchmarks
 
-`tools/bench/` measures cost per frame, startup, hitches, memory and streaming. Like the screenshot tool it runs on the host and reuses its `puppeteer-core` and Chrome. `bench.mjs` has the commands (`frames`, `counts`, `startup`, `hitches`, `memory`, `scale`, `shadow`, `hit`, `flight`); `run-all.sh` runs the whole set one after another. Results go to `tools/bench/out/`, which git ignores. Headless Chrome caps presentation at 30 fps, so results are cost per frame from synchronous renders, never fps.
+`tools/bench/` measures cost per frame, startup, hitches, memory and streaming. Like the screenshot tool it runs on the host and reuses its `puppeteer-core` and Chrome. `bench.mjs` has the commands (`frames`, `counts`, `startup`, `hitches`, `memory`, `scale`, `shadow`, `hit`, `flight`, `profile`); `run-all.sh` runs the whole set one after another. Results go to `tools/bench/out/`, which git ignores. Headless Chrome caps presentation at 30 fps, so results are cost per frame from synchronous renders, never fps.
 
 Do not run two browser tools at once; they compete for the GPU.
 

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Wallhammer Web: fantasy village</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #c9a8b8; overflow: hidden; }
+      canvas#view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+      canvas#view.dragging { cursor: grabbing; }
+      #hud {
+        position: fixed; left: 12px; bottom: 12px; max-width: min(560px, calc(100vw - 24px));
+        padding: 8px 10px; border-radius: 6px; background: rgba(28, 20, 34, 0.62); color: #f4e9d8;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; pointer-events: none; white-space: pre-wrap;
+      }
+      #hud b { color: #ffd38a; font-weight: 600; }
+      /* Movie mode: only the picture. */
+      body.movie #hud { display: none; }
+      body.movie canvas#view { cursor: none; }
+      #loading {
+        position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        color: #f4e9d8; background: radial-gradient(120% 90% at 50% 100%, #d9a08c 0%, #8a5a78 45%, #3a2a48 100%);
+        font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; transition: opacity 0.6s ease;
+      }
+      #loading.done { opacity: 0; pointer-events: none; }
+      #loading h1 { margin: 0; font: 600 34px/1.1 Georgia, 'Iowan Old Style', 'Times New Roman', serif; letter-spacing: 0.02em; text-wrap: balance; text-align: center; }
+      #loading .sub { opacity: 0.7; letter-spacing: 0.18em; text-transform: uppercase; font-size: 11px; }
+      #loading .bar {
+        position: relative; width: min(360px, calc(100vw - 64px)); height: 6px; margin-top: 10px; border-radius: 3px;
+        background: rgba(28, 20, 34, 0.45); overflow: hidden;
+      }
+      /* The fill is scaled, the sheen is moved: both run on the compositor, so they keep going while a build step blocks the page. */
+      #loading .fill {
+        position: absolute; inset: 0; border-radius: 3px; background: linear-gradient(90deg, #ffb86a, #ffe2a8);
+        transform-origin: left center; transform: scaleX(0);
+      }
+      #loading .sheen {
+        position: absolute; top: 0; bottom: 0; left: 0; width: 30%;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+        animation: loading-sheen 1.3s linear infinite;
+      }
+      @keyframes loading-sheen { from { transform: translateX(-100%); } to { transform: translateX(434%); } }
+      #loading .steps { position: relative; width: min(360px, calc(100vw - 64px)); min-height: 1.4em; text-align: center; }
+      #loading .steps span { position: absolute; left: 0; right: 0; opacity: 0; }
+      #loading.failed .fill { background: #e0685a; }
+      #loading.failed .sheen { display: none; }
+      #loading.failed .steps { white-space: pre-wrap; }
+      @media (prefers-reduced-motion: reduce) { #loading .sheen { animation: none; display: none; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="hud"></div>
+    <div id="loading" role="status" aria-live="polite">
+      <h1>Fantasy village</h1>
+      <div class="sub">Wallhammer Web</div>
+      <div class="bar"><div class="fill"></div><div class="sheen"></div></div>
+      <div class="steps"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

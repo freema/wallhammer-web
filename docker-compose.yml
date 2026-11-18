@@ -1,38 +1,85 @@
 # Wallhammer Web: the engine, its checks and its examples. `docker compose up -d` in this folder is enough, Node is
 # not needed on the host.
-# The `dev` service installs the dependencies and stays up for the checks:
+#
+# One service, `dev`. It installs the dependencies, serves every example on one port and stays up for the checks:
+#   http://localhost:5281/              list of the examples (another host port: EXAMPLES_PORT)
+#   http://localhost:5281/<name>/       the example in examples/<name>, e.g. /planet/, /fantasy-village/, /walk/
 #   docker compose exec -T dev sh -c 'cd /app && pnpm typecheck'
-# It publishes no port. Services of examples (one per example, each with its own port on 127.0.0.1) start once `dev`
-# is healthy; they are added here together with the examples.
+# Every example keeps its own Vite dev server (its vite.config.ts) inside that one process: tools/serve/serve.ts.
 name: wallhammer-web
 
 services:
   dev:
-    image: wallhammer-web-engine:dev
+    image: wallhammer-web:dev
     build:
       context: .
       dockerfile: Dockerfile.dev
     init: true
+    environment:
+      # In a container on macOS file events do not arrive reliably through the mounted folder, so the dev servers poll
+      # (vite.config.ts of each example, tools/vite/new-files.ts).
+      WH_POLL: "1"
+    ports:
+      - "127.0.0.1:${EXAMPLES_PORT:-5281}:5281"
     volumes:
       - .:/app
-      # Dependencies and the pnpm store stay in the container, they are not written to the host.
-      # Each workspace package has its own node_modules (add one volume per example).
+      # Dependencies and the pnpm store stay in the container, they are not written to the host. pnpm gives every
+      # workspace package its own node_modules (links into the root one), hence one volume per package. A new example
+      # needs one line here, one under `volumes:` at the end and one directory in Dockerfile.dev.
       - node_modules:/app/node_modules
       - engine_node_modules:/app/packages/wallhammer-web/node_modules
+      - destruction_node_modules:/app/examples/destruction/node_modules
+      - endless_node_modules:/app/examples/endless/node_modules
+      - fantasy-village_node_modules:/app/examples/fantasy-village/node_modules
+      - minimal-3d_node_modules:/app/examples/minimal-3d/node_modules
+      - outpost_node_modules:/app/examples/outpost/node_modules
+      - planet_node_modules:/app/examples/planet/node_modules
+      - system_node_modules:/app/examples/system/node_modules
+      - walk_node_modules:/app/examples/walk/node_modules
       - pnpm_store:/pnpm-store
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges
     healthcheck:
-      # The entrypoint writes the marker once the dependencies are installed.
-      test: ["CMD", "test", "-f", "/tmp/wallhammer-ready"]
+      # Healthy once the dependencies are installed and the example server answers.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5281/__health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 300s
       start_interval: 2s
 
+  # Pictures of an example page with headless Chromium on the software renderer (tools/shot/page-shot.mjs). A one-off
+  # tool, not started by `up` (profile tools); it starts `dev` first when that does not run:
+  #   docker compose run --rm shot --url http://dev:5281/planet/ --hash 'strip=1' --presets strip-orbit
+  # Pictures go to tools/shot/out/ (outside git).
+  shot:
+    profiles: [tools]
+    image: wallhammer-web-shot:1
+    build:
+      context: tools/shot
+    init: true
+    user: "1000:1000"
+    shm_size: 1gb
+    depends_on:
+      dev:
+        condition: service_healthy
+    volumes:
+      - ./tools/shot:/opt/shot/tool:ro
+      - ./tools/shot/out:/out
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges
+
 volumes:
   node_modules:
   engine_node_modules:
+  destruction_node_modules:
+  endless_node_modules:
+  fantasy-village_node_modules:
+  minimal-3d_node_modules:
+  outpost_node_modules:
+  planet_node_modules:
+  system_node_modules:
+  walk_node_modules:
   pnpm_store:

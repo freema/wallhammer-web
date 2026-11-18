@@ -1,6 +1,6 @@
 # Getting started
 
-This page runs the existing page, then builds a small scene from nothing. Read [Concepts](concepts.md) next.
+This page runs the existing examples, then builds a small scene from nothing. Read [Concepts](concepts.md) next.
 
 ## Run what exists
 
@@ -13,10 +13,9 @@ docker compose ps
 
 | Service | URL | What it is |
 | --- | --- | --- |
-| `dev` | none | Installs the workspace dependencies and stays up for the checks. |
-| `example`, `destruction`, `endless`, `planet`, `system`, `village`, `walk` | http://localhost:5281 to 5287 | One service per example (`examples/<name>`), each a Vite dev server with live reload. |
+| `dev` | http://localhost:5281 | Installs the workspace dependencies, serves every example and stays up for the checks. `/` lists the examples, `/<name>/` opens the one in `examples/<name>`. Another host port: `EXAMPLES_PORT`. |
 
-The `dev` service is healthy once the dependencies are installed. The example services start after it; source edits reload the page, the containers poll the mounted files (`WH_POLL=1`). The examples are being moved into this repository: until `examples/` is here, only `dev` exists and the checks cover the engine alone.
+The `dev` service is healthy once the dependencies are installed and the example server answers (`tools/serve/serve.ts`). Every example keeps its own Vite dev server with live reload, started on the first request for it; source edits reload the page, and the dev servers poll the mounted files (`WH_POLL=1`).
 
 Logs:
 

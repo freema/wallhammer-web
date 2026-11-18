@@ -7,10 +7,10 @@ Read [World streaming](streaming.md) first; this page only says how the parts ar
 ## Run
 
 ```sh
-docker compose up -d planet
+docker compose up -d
 ```
 
-Open <http://127.0.0.1:5284>. The port comes from `PLANET_PORT`. Press `F` to start the flight, or open `#fly=1` to start it as soon as the start view has loaded.
+Open <http://127.0.0.1:5281/planet/>. The `dev` service serves it with the other examples; the port comes from `EXAMPLES_PORT`. Press `F` to start the flight, or open `#fly=1` to start it as soon as the start view has loaded.
 
 | Key | What |
 | --- | --- |
@@ -139,10 +139,10 @@ The panel shows a report of the last flight: the time between frames (mean and w
 
 ## Checks
 
-The flight is checked without a browser, in the `planet` container:
+The flight is checked without a browser, in the `dev` container:
 
 ```sh
-docker compose exec -T planet sh -c 'cd /app/examples/planet && pnpm verify'
+docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'
 ```
 
 `scripts/verify.ts` checks the generator, the pose function and the streaming along the flight with the real generator: the sphere is covered exactly once at every step, a child is never requested before its parent, the budget of cells holds, and the estimate of GPU memory stays under 600 MB. `flight-check.ts` does the flying; it feeds the `StreamingManager` of `wallhammer-web/world` with the tickets of every step and finishes a fixed number of jobs per step in place of the workers.

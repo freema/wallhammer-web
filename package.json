@@ -9,12 +9,20 @@
     "typecheck": "pnpm -r typecheck",
     "check:layers": "node tools/layers/check.ts",
     "check:layers:test": "node tools/layers/test.ts",
-    "test:golden": "node tools/golden/engine/golden.ts",
+    "test:golden": "node tools/golden/engine/golden.ts && node tools/golden/golden.ts",
+    "test:golden:engine": "node tools/golden/engine/golden.ts",
+    "test:golden:examples": "node tools/golden/golden.ts",
     "check:docs": "node tools/docs/check.ts",
     "check:mesh": "node tools/mesh/check.ts",
     "check:motion": "node tools/motion/check.ts",
+    "check:walk": "node tools/walk/check.ts",
+    "check:follow": "node tools/follow-check/check.ts",
+    "serve": "node tools/serve/serve.ts",
     "build": "pnpm --filter wallhammer-web build",
     "check:pack": "sh tools/pack/check.sh"
+  },
+  "devDependencies": {
+    "vite": "^8.3.7"
   },
   "packageManager": "pnpm@10.34.7",
   "engines": {

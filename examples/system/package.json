@@ -1,0 +1,21 @@
+{
+  "name": "wallhammer-example-system",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "A sun and several bodies on orbits on wallhammer-web: an overview of the whole system, faster time, and one continuous flight of the free camera from the surface of one body to the surface of another.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "wallhammer-web-shot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Screenshots of a running page with the host's Chrome (tools/shot/shot.mjs).",
+  "scripts": {
+    "shot": "node shot.mjs"
+  },
+  "dependencies": {
+    "fast-png": "^8.0.0",
+    "puppeteer-core": "^25.17.0"
+  }
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Wallhammer Web: planet</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05070c; overflow: hidden; }
+      canvas#view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+      canvas#view.dragging { cursor: grabbing; }
+      #panel, #hud { position: fixed; left: 10px; margin: 0; padding: 8px 10px; font: 11px/1.45 ui-monospace, Menlo, monospace;
+        color: #f2f4f6; background: rgba(16, 22, 28, 0.62); border-radius: 4px; pointer-events: none; white-space: pre; }
+      #panel { top: 10px; }
+      #panel.hidden { display: none; }
+      #hud { bottom: 10px; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="panel"></pre>
+    <div id="hud"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

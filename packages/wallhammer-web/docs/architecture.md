@@ -40,7 +40,7 @@ The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core
 - They do not import each other, any app or the root entry.
 - No other engine module imports them, and the root entry does not re-export them.
 
-Apps and the `destruction` and `system` examples may import them (`system` for the structures of its settlements and their damage). The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `walk`) may not; the layer check enforces this.
+Apps and the `destruction` and `system` examples may import them (`system` for the structures of its settlements and their damage). The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `walk`, `outpost`) may not; the layer check enforces this.
 
 `gen-ground` and `gen-vegetation` do not import each other, but their shaders share Frame members. Both slots they share belong to `gen-ground`: the terrain shader reads `u_season` from its season slot and includes `<snow>` from its snow slot, and the vegetation shader reads the same two (the structure shaders of `gen-arch` include `<snow>` as well). So the ground depends on nothing of the vegetation, and an app that draws vegetation registers the season and snow slots of `gen-ground` together with the sway slot.
 
@@ -99,13 +99,13 @@ examples/planet/             engine-only example: a sphere with an atmosphere, f
 examples/system/             example with content modules: a sun and four bodies, from the whole system to a surface
 examples/fantasy-village/    engine-only example: a living village from code
 examples/walk/               engine-only example: the walking test course
+examples/outpost/            engine-only example: a lunar research outpost in a comic look
 tools/layers/                the layer check
 tools/golden/engine/         golden hashes of the engine's generators
 tools/golden/                golden hashes that need example code
 tools/docs/                  the documentation check
 tools/pack/                  the check of the published package
 tools/walk/, tools/follow-check/   the walking and follow-camera checks (plain Node)
+tools/serve/, tools/vite/    the example server (one port for all examples) and its dev-server plugin
 tools/shot/, tools/bench/    screenshots and measurements of the example pages (run on the host)
 ```
-
-The examples and their tools (`examples/`, `tools/golden/*.ts`, `tools/walk/`, `tools/follow-check/`, `tools/shot/`, `tools/bench/`) are being moved into this repository; see the repository `README.md`.

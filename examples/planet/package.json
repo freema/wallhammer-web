@@ -1,0 +1,22 @@
+{
+  "name": "wallhammer-example-planet",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "A flight from the surface of a small planet up to orbit and back on wallhammer-web: a sphere of six quadtrees, terrain from 3D noise, a shell of air, a free camera.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "verify": "node scripts/verify.ts"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}

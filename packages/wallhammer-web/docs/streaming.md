@@ -569,11 +569,11 @@ The manager alone takes the same limit as `StreamingConfig.gpuBudgetBytes`. The 
 
 ## Baking cells to files
 
-The endless example can bake cells and verify them. Both run inside its `endless` container:
+The endless example can bake cells and verify them. Both run inside the `dev` container:
 
 ```sh
-docker compose exec -T endless sh -c 'cd /app/examples/endless && pnpm bake'
-docker compose exec -T endless sh -c 'cd /app/examples/endless && pnpm verify'
+docker compose exec -T dev sh -c 'cd /app/examples/endless && pnpm bake'
+docker compose exec -T dev sh -c 'cd /app/examples/endless && pnpm verify'
 ```
 
 `bake` writes into `examples/endless/public/cells/`. Open the example with `#src=files` to read them.

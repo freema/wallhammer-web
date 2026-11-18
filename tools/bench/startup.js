@@ -1,0 +1,12 @@
+import { createRequire } from "node:module"; const require = createRequire(process.cwd() + "/");
+const med=a=>{const s=a.filter(Number.isFinite).sort((x,y)=>x-y);if(!s.length)return NaN;const m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2};
+const f=a=>{const m=med(a);const sp=(Math.max(...a)-Math.min(...a))/m;return m.toFixed(0)+" ±"+(sp*100).toFixed(0)+"%"+(sp>0.2?"!":"")};
+const j=require(process.argv[2]);
+const r0=j[0];
+console.log("ready",f(j.map(r=>r.readyAt)),"settled",f(j.map(r=>r.settledAt??NaN)),"ctx",f(j.map(r=>r.info.contextAt)),"modulesEnd",f(j.map(r=>r.info.modules.lastEnd)),"modules",r0.info.modules.count);
+console.log("dataEnd",f(j.map(r=>Math.max(...r.info.data.map(d=>d.end)))),"dataBytes",r0.info.data.reduce((a,d)=>a+d.bytes,0));
+for (const k of Object.keys(r0.info)) if(!["modules","data","contextAt","domContentLoaded","loadEvent"].includes(k)) console.log(" info",k,JSON.stringify(r0.info[k]).slice(0,600));
+const names={}; for(const r of j) for(const e of r.profile.inclusive) (names[e.name]??=[]).push(e.ms);
+const rows=Object.entries(names).filter(([n,v])=>v.length===j.length).map(([n,v])=>[n,med(v),v]).sort((a,b)=>b[1]-a[1]).slice(0,+process.argv[3]||45);
+for(const [n,m,v] of rows) console.log("  ",f(v).padEnd(14),n);
+for (const k of Object.keys(r0.profile)) if(k!=="inclusive") console.log(" profile",k,JSON.stringify(r0.profile[k]).slice(0,800));

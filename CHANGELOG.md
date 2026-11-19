@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
-The next version is 0.5.0: this section holds breaking changes (marked **Breaking**), and while the version is 0.x those need a minor version. Guides: [The environment](packages/wallhammer-web/docs/environment.md) (the table at the top of "Clouds" lists the pieces and what they cost) and [Rendering](packages/wallhammer-web/docs/rendering.md).
+## 0.5.0
+
+This version holds breaking changes (marked **Breaking**). Guides: [The environment](packages/wallhammer-web/docs/environment.md) (the table at the top of "Clouds" lists the pieces and what they cost) and [Rendering](packages/wallhammer-web/docs/rendering.md).
 
 ### Added
 

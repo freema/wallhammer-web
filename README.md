@@ -195,7 +195,7 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the 
 - `test:golden` runs two sets of fixed recipes and compares the hash of each output with the stored one. First the engine alone (`tools/golden/engine/golden.ts`, hashes in `tools/golden/engine/hashes.json`), then the recipes that need example code (`tools/golden/golden.ts`, hashes in `tools/golden/hashes.json`); the second set runs only when the first passes. `test:golden:engine` and `test:golden:examples` run one set. To accept a deliberate change, run `node tools/golden/engine/golden.ts --accept` or `node tools/golden/golden.ts --accept` in the container. Each rewrites all hashes of its set at once, so read first what changed. Rules: [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
 - `check:docs` type-checks the code samples in the documentation and checks the links.
 - `check:mesh` and `check:motion` test, in plain Node, the mesh builder with bare shapes (`gen-mesh`) and the motion module (`motion`).
-- `check:walk` tests, in plain Node, the collision world, the walker, the follow camera and the course of `examples/walk`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
+- `check:walk` tests, in plain Node, the collision world, the walker (including saving and restoring its state), the follow camera and the course of `examples/walk`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
 - `check:pack` checks the package in the shape it is published to npm (see below). It needs the network.
 
 ## Pictures

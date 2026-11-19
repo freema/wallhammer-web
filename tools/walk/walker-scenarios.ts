@@ -1,9 +1,14 @@
 // Scenarios of the walker (engine `world/walker.ts`) over the collision world: sliding along a wall, resting in a
 // corner, steps and stairs, slopes, jumps and ceilings, falling off an edge, a thin wall at speed, determinism, a solid
-// that appears over the body, and the CPU time of one step (spec M2, 3.3 and 3.4).
+// that appears over the body, and the CPU time of one step (spec M2, 3.3 and 3.4). Then the saved state
+// (`saveState`, `loadState`, `simState`): a save loaded into a second walker saves the same bytes, a restored walker
+// steps on and draws exactly like the original, offsets and refused buffers, and the walker as a part of a
+// `Simulation` snapshot.
 
+import { ByteReader, ByteWriter } from '../../packages/wallhammer-web/src/sim/bytes.ts';
+import { Simulation } from '../../packages/wallhammer-web/src/sim/simulation.ts';
 import { CollisionWorld, newRayHit } from '../../packages/wallhammer-web/src/world/collide.ts';
-import { Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
+import { WALKER_STATE_BYTES, Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
 import type { WalkIntent, WalkerSetup } from '../../packages/wallhammer-web/src/world/walker.ts';
 import { scattered } from './collide-scenarios.ts';
 import { f, meanMs, seeded, verdict } from './scenario.ts';
@@ -353,4 +358,286 @@ const timing: Scenario = {
   },
 };
 
-export const WALKER_SCENARIOS: Scenario[] = [wall30, corner, steps, slopes, jump, fall, thinWall, determinism, appear, timing];
+// --- Saved state -------------------------------------------------------------------------------------------------------
+
+/** Names of the 20 doubles of a saved state, for reporting which one differs (layout of `Walker.saveState`). */
+const STATE_SLOTS = ['version', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'yaw', 'flags', 'travelled', 'steps', 'prevX', 'prevY', 'prevZ',
+  'prevYaw', 'acc', 'stepOffset', 'prevStepOffset', 'prevTravelled', 'spare'];
+const PENDING_JUMP = 4;
+
+/** Double `slot` of a saved state at `offset`. */
+function stateSlot(bytes: Uint8Array, slot: number, offset = 0): number {
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, WALKER_STATE_BYTES).getFloat64(slot * 8, true);
+}
+
+/** Empty when `a` and `b` (two saved states) are equal byte for byte, else the differing slots with both values. */
+function stateDiff(a: Uint8Array, b: Uint8Array): string {
+  if (a.length !== b.length) return `length ${a.length} against ${b.length}`;
+  const out: string[] = [];
+  for (let s = 0; s < WALKER_STATE_BYTES / 8; s++) {
+    for (let i = s * 8; i < s * 8 + 8; i++) {
+      if (a[i] !== b[i]) {
+        out.push(`${STATE_SLOTS[s]} ${stateSlot(a, s)} against ${stateSlot(b, s)}`);
+        break;
+      }
+    }
+  }
+  return out.join(', ');
+}
+
+/** A walled room with a two-level platform (0.3 m steps) and a turned pillar. */
+function stateRoom(): CollisionWorld {
+  const w = flat();
+  w.addBox(7, -0.1, 7.2, 0.1, 0, 0, 3);
+  w.addBox(7, 14.1, 7.2, 0.1, 0, 0, 3);
+  w.addBox(-0.1, 7, 0.1, 7.2, 0, 0, 3);
+  w.addBox(14.1, 7, 0.1, 7.2, 0, 0, 3);
+  w.addPrism([4, 4, 9, 4, 9, 9, 4, 9], 0, 0.3);
+  w.addPrism([5.5, 5.5, 7.5, 5.5, 7.5, 7.5, 5.5, 7.5], 0, 0.6);
+  w.addBox(11, 3, 0.5, 0.5, 0.6, 0, 3);
+  return w;
+}
+
+/** A fixed script of frames: frame times and intents (direction, run and jump changing), the same on every call. */
+interface StateScript {
+  dt: Float64Array;
+  intents: WalkIntent[];
+}
+
+function stateScript(frames: number): StateScript {
+  const rnd = seeded(31);
+  const dt = new Float64Array(frames);
+  const intents: WalkIntent[] = [];
+  let mx = 1;
+  let mz = 0.4;
+  let run = false;
+  for (let i = 0; i < frames; i++) {
+    if (i < 160) {
+      // First straight up the two platform steps from the start corner, walking.
+      mx = 0.7071;
+      mz = 0.7071;
+      run = false;
+    } else if (i % 40 === 0) {
+      const a = rnd() * Math.PI * 2;
+      mx = Math.cos(a);
+      mz = Math.sin(a);
+      run = rnd() < 0.6;
+    }
+    dt[i] = 0.004 + rnd() * 0.03;
+    // After the climb every 70th frame asks for a jump; every second one comes on a frame too short for a step, so it
+    // stays pending.
+    const jump = i >= 160 && i % 70 === 0;
+    if (jump && i % 140 === 0) dt[i] = 0.001;
+    intents.push(intent(mx, mz, run, jump));
+  }
+  return { dt, intents };
+}
+
+const STATE_FRAMES = 720;
+const STATE_SETUP: Partial<WalkerSetup> = { turnSpeed: 6 };
+
+function stateWalker(w: CollisionWorld): Walker {
+  return walker(w, 2, 0, 2, STATE_SETUP);
+}
+
+/** Frames `from` to `to` (exclusive) of the script; `each` sees the walker after every frame. */
+function play(k: Walker, s: StateScript, from: number, to: number, each?: (k: Walker, frame: number) => void): void {
+  for (let i = from; i < to; i++) {
+    k.advance(s.dt[i]!, s.intents[i]!);
+    each?.(k, i);
+  }
+}
+
+const stateRoundTrip: Scenario = {
+  name: 'walker-state-round-trip',
+  run() {
+    const w = stateRoom();
+    const script = stateScript(STATE_FRAMES);
+    const a = stateWalker(w);
+    const b = stateWalker(w);
+    let equal = 0;
+    let firstDiff = '';
+    let air = 0;
+    let pending = 0;
+    let easing = 0;
+    let onPlatform = 0;
+    play(a, script, 0, STATE_FRAMES, (k, i) => {
+      const saved = k.saveState().slice();
+      b.loadState(saved);
+      const d = stateDiff(saved, b.saveState());
+      if (d === '') equal++;
+      else if (!firstDiff) firstDiff = `frame ${i}: ${d}`;
+      const pend = (stateSlot(saved, 8) & PENDING_JUMP) !== 0;
+      if (!k.grounded) air++;
+      if (pend) pending++;
+      if (stateSlot(saved, 16) !== 0) easing++;
+      if (k.grounded && k.position[1]! > 0.25) onPlatform++;
+    });
+    const ok = equal === STATE_FRAMES && firstDiff === '' && air > 0 && pending > 0 && easing > 0 && onPlatform > 0;
+    return verdict(ok,
+      `${equal} of ${STATE_FRAMES} frames saved, loaded into a second walker and saved again equal byte for byte${firstDiff ? ` (first difference ${firstDiff})` : ''}; covered: in the air ${air}, jump pending ${pending}, step easing ${easing}, on the platform ${onPlatform} frames`);
+  },
+};
+
+const stateContinues: Scenario = {
+  name: 'walker-state-restored-continues',
+  run() {
+    const w = stateRoom();
+    const script = stateScript(STATE_FRAMES);
+    // Pick moments from one run: the first frame in the air, with a jump pending, with a step being eased, and a plain
+    // one late in the run.
+    const probe = stateWalker(w);
+    let atAir = -1;
+    let atPending = -1;
+    let atEasing = -1;
+    play(probe, script, 0, STATE_FRAMES - 200, (k, i) => {
+      const s = k.saveState();
+      if (atAir < 0 && i > 30 && !k.grounded) atAir = i;
+      if (atPending < 0 && (stateSlot(s, 8) & PENDING_JUMP) !== 0) atPending = i;
+      if (atEasing < 0 && stateSlot(s, 16) !== 0) atEasing = i;
+    });
+    const moments = [atAir, atPending, atEasing, STATE_FRAMES - 210];
+    const span = 180; // about 3.4 s of frames
+    const alpha = 0.37;
+    const pa = new Float64Array(3);
+    const pb = new Float64Array(3);
+    let compared = 0;
+    let bytesApart = 0;
+    let drawApart = 0;
+    let firstDiff = '';
+    let seconds = 0;
+    for (const m of moments) {
+      if (m < 0) continue;
+      const a = stateWalker(w);
+      play(a, script, 0, m + 1);
+      const b = stateWalker(w);
+      b.loadState(a.saveState().slice());
+      for (let i = m + 1; i < m + 1 + span; i++) {
+        a.advance(script.dt[i]!, script.intents[i]!);
+        b.advance(script.dt[i]!, script.intents[i]!);
+        seconds += script.dt[i]!;
+        compared++;
+        const d = stateDiff(a.saveState().slice(), b.saveState());
+        if (d !== '') {
+          bytesApart++;
+          if (!firstDiff) firstDiff = `from frame ${m}, frame ${i}: ${d}`;
+        }
+        // Drawn values at a fixed alpha and at the walker's own alpha (the saved leftover time).
+        for (const al of [alpha, undefined]) {
+          a.renderPosition(pa, al);
+          b.renderPosition(pb, al);
+          for (let c = 0; c < 3; c++) if (!Object.is(pa[c], pb[c])) drawApart++;
+          if (!Object.is(a.renderYaw(al), b.renderYaw(al))) drawApart++;
+          if (!Object.is(a.renderTravelled(al), b.renderTravelled(al))) drawApart++;
+        }
+      }
+    }
+    const found = moments.filter((m) => m >= 0).length;
+    return verdict(found === moments.length && bytesApart === 0 && drawApart === 0,
+      `${found} restore moments (in the air at frame ${atAir}, jump pending at ${atPending}, step easing at ${atEasing}, plain at ${moments[3]}), ${compared} frames (${f(seconds, 1)} s) stepped on: ${bytesApart} states apart, ${drawApart} drawn values apart (renderPosition, renderYaw, renderTravelled at alpha ${alpha} and own alpha)${firstDiff ? `; first difference ${firstDiff}` : ''}`);
+  },
+};
+
+/** True when `fn` throws. */
+function throws(fn: () => void): boolean {
+  try {
+    fn();
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+const stateOffsets: Scenario = {
+  name: 'walker-state-offsets-errors',
+  run() {
+    const w = stateRoom();
+    const script = stateScript(200);
+    const k = stateWalker(w);
+    play(k, script, 0, 200);
+    const plain = k.saveState().slice();
+    const bad: string[] = [];
+    // At an offset (not a multiple of 8): exactly the state's bytes change, the rest stays.
+    const at = 13;
+    const out = new Uint8Array(at + WALKER_STATE_BYTES + 37).fill(0xab);
+    if (k.saveState(out, at) !== out) bad.push('saveState(out) did not return out');
+    let touched = 0;
+    for (let i = 0; i < out.length; i++) if ((i < at || i >= at + WALKER_STATE_BYTES) && out[i] !== 0xab) touched++;
+    if (touched) bad.push(`${touched} bytes outside the state changed`);
+    const inside = stateDiff(out.slice(at, at + WALKER_STATE_BYTES), plain);
+    if (inside) bad.push(`state at offset differs: ${inside}`);
+    const b = stateWalker(w);
+    b.loadState(out, at);
+    const back = stateDiff(b.saveState().slice(), plain);
+    if (back) bad.push(`loaded from offset differs: ${back}`);
+    // Exact fit works, one byte short throws, on both sides.
+    if (throws(() => k.saveState(new Uint8Array(200), 40))) bad.push('saveState into an exact fit threw');
+    if (!throws(() => k.saveState(new Uint8Array(WALKER_STATE_BYTES - 1)))) bad.push('saveState into 159 bytes did not throw');
+    if (!throws(() => k.saveState(new Uint8Array(200), 41))) bad.push('saveState at offset 41 of 200 did not throw');
+    if (!throws(() => b.loadState(new Uint8Array(WALKER_STATE_BYTES - 1)))) bad.push('loadState of 159 bytes did not throw');
+    if (!throws(() => b.loadState(out, out.length - WALKER_STATE_BYTES + 1))) bad.push('loadState past the end did not throw');
+    // A wrong version throws, and a refused load leaves the walker as it was.
+    const wrong = plain.slice();
+    new DataView(wrong.buffer).setFloat64(0, 2, true);
+    if (!throws(() => b.loadState(wrong))) bad.push('loadState of version 2 did not throw');
+    if (!throws(() => b.loadState(new Uint8Array(WALKER_STATE_BYTES)))) bad.push('loadState of zeros did not throw');
+    const after = stateDiff(b.saveState().slice(), plain);
+    if (after) bad.push(`a refused load changed the walker: ${after}`);
+    return verdict(bad.length === 0,
+      bad.length ? bad.join('; ') : `offset ${at}: ${WALKER_STATE_BYTES} bytes written, ${out.length - WALKER_STATE_BYTES} around untouched, loaded back equal; short buffers, version 2 and zeros refused, the walker kept after a refused load`);
+  },
+};
+
+const stateSim: Scenario = {
+  name: 'walker-state-in-simulation',
+  run() {
+    const w = stateRoom();
+    const script = stateScript(400);
+    // One fixed step per tick, the intent of the tick's frame of the script.
+    const build = (): [Simulation, Walker] => {
+      const k = stateWalker(w);
+      const sim = new Simulation({ seed: 'walker-state', hz: k.setup.stepHz });
+      sim.addState(k.simState('walker'));
+      sim.addSystem('walk', (s) => k.step(script.intents[s.tick]!));
+      return [sim, k];
+    };
+    const [sim, k] = build();
+    sim.step(150);
+    const snap = sim.snapshot();
+    const hashes: string[] = [];
+    const states: Uint8Array[] = [];
+    for (let i = 0; i < 200; i++) {
+      sim.step();
+      hashes.push(sim.stateHash());
+      states.push(k.saveState().slice());
+    }
+    // Back in the same simulation, and in a second one with its own walker.
+    sim.restore(snap);
+    const [sim2, k2] = build();
+    sim2.restore(snap);
+    let apart = 0;
+    let firstDiff = '';
+    for (let i = 0; i < 200; i++) {
+      sim.step();
+      sim2.step();
+      const d = stateDiff(k.saveState().slice(), states[i]!) || stateDiff(k2.saveState().slice(), states[i]!);
+      if (d || sim.stateHash() !== hashes[i] || sim2.stateHash() !== hashes[i]) {
+        apart++;
+        if (!firstDiff) firstDiff = `tick ${151 + i}: ${d || 'hash'}`;
+      }
+    }
+    // The part alone, through the byte streams.
+    const bw = new ByteWriter();
+    k.simState('a').save(bw);
+    const part = bw.finish();
+    const k3 = stateWalker(w);
+    k3.simState('b').load(new ByteReader(part));
+    const direct = stateDiff(k3.saveState().slice(), k.saveState());
+    const ok = apart === 0 && part.length === WALKER_STATE_BYTES && direct === '';
+    return verdict(ok,
+      `snapshot at tick 150, 200 ticks on: ${apart} ticks apart after restore (same and second simulation)${firstDiff ? ` (first ${firstDiff})` : ''}; part alone ${part.length} bytes, loaded ${direct ? `differs: ${direct}` : 'equal'}`);
+  },
+};
+
+export const WALKER_SCENARIOS: Scenario[] = [wall30, corner, steps, slopes, jump, fall, thinWall, determinism, appear, timing,
+  stateRoundTrip, stateContinues, stateOffsets, stateSim];

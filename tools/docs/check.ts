@@ -1,10 +1,14 @@
 // Documentation check for the wallhammer-web package. Reads the package README and every Markdown file under
-// packages/wallhammer-web/docs/ and fails (exit code 1) on any of:
+// packages/wallhammer-web/docs/ and fails (exit code 1) on any of the rules below. The other Markdown files of the
+// repository (the root README, CHANGELOG, CONTRIBUTING, CLAUDE.md, the examples' READMEs and the skills) get the
+// [link] rule only.
 //
 //   [code]     a fenced `ts` block does not type-check against the package (strict, as the package itself)
 //              (an error inside the package source itself is reported too, marked as such: fix the package first)
 //   [link]     a relative link points to a file that does not exist, or to a heading that the target does not have
 //   [subpath]  the text names `wallhammer-web/<subpath>` that is not an export of the package
+//   [reference] a name exported by an entry of the package (the `export { … }` lists of its index.ts) is not named in
+//              docs/reference.md
 //
 //   node tools/docs/check.ts            check (run from the repository root, e.g. `pnpm check:docs`)
 //   node tools/docs/check.ts --keep     keep the generated TypeScript files and print where they are
@@ -30,7 +34,7 @@ const TSC = path.join(PKG, 'node_modules/.bin/tsc');
 const keep = process.argv.includes('--keep');
 
 interface Finding {
-  rule: 'code' | 'link' | 'subpath';
+  rule: 'code' | 'link' | 'subpath' | 'reference';
   file: string;
   line: number;
   message: string;
@@ -51,6 +55,20 @@ function markdownFiles(): string[] {
     }
   };
   walk(path.join(PKG, 'docs'));
+  return out;
+}
+
+/** Markdown outside the package: only their links are checked. */
+function linkOnlyFiles(): string[] {
+  const out = ['README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CLAUDE.md'].map((f) => path.join(WEB, f)).filter((f) => fs.existsSync(f));
+  for (const [dir, file] of [['examples', 'README.md'], ['.claude/skills', 'SKILL.md']] as const) {
+    const root = path.join(WEB, dir);
+    if (!fs.existsSync(root)) continue;
+    for (const e of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(root, e.name, file);
+      if (e.isDirectory() && fs.existsSync(p)) out.push(p);
+    }
+  }
   return out;
 }
 
@@ -222,6 +240,27 @@ function checkCode(blocks: Block[]): number {
   return blocks.length;
 }
 
+// --- Exports in the reference ----------------------------------------------------------------------------------------
+
+/** Every name in the `export { … }` and `export type { … }` lists of an entry's index.ts must be named in reference.md. */
+function checkReference(): void {
+  const refFile = path.join(PKG, 'docs/reference.md');
+  if (!fs.existsSync(refFile)) return;
+  const words = new Set(fs.readFileSync(refFile, 'utf8').match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? []);
+  for (const [entry, source] of Object.entries(pkg.exports)) {
+    const index = path.join(PKG, source);
+    if (entry === '.' || !fs.existsSync(index)) continue; // the root entry only re-exports other entries
+    const text = fs.readFileSync(index, 'utf8');
+    for (const m of text.matchAll(/export\s+(type\s+)?\{([^}]*)\}/g)) {
+      const line = text.slice(0, m.index).split('\n').length;
+      for (const part of m[2]!.split(',')) {
+        const name = part.replace(/\/\/.*$/gm, '').trim().split(/\s+as\s+/).pop()!.replace(/^type\s+/, '').trim();
+        if (name && !words.has(name)) findings.push({ rule: 'reference', file: index, line, message: `export ${name} of ${pkg.name}/${entry.slice(2)} is not in docs/reference.md` });
+      }
+    }
+  }
+}
+
 // --- Run -------------------------------------------------------------------------------------------------------------
 
 const files = markdownFiles();
@@ -237,7 +276,10 @@ for (const f of files) {
   blocks.push(...codeBlocks(f, text));
 }
 const checked = checkCode(blocks);
+const linkOnly = linkOnlyFiles();
+for (const f of linkOnly) checkLinks(f, fs.readFileSync(f, 'utf8'));
+checkReference();
 
 for (const f of findings) console.log(`[${f.rule}] ${rel(f.file)}:${f.line}  ${f.message}`);
-console.log(`docs: ${files.length} files, ${checked} code blocks type-checked, ${findings.length} finding(s)`);
+console.log(`docs: ${files.length} files (and ${linkOnly.length} more for links), ${checked} code blocks type-checked, ${findings.length} finding(s)`);
 process.exit(findings.length ? 1 : 0);

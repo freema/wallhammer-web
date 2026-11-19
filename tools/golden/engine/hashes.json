@@ -27,7 +27,7 @@
   "destruction event script (state hash, encoding, rubble footprints)": "9eb322a2f2efd70d",
   "destruction damaged mesh (structures and rubble from the scripted state)": "ab5a8a007bf57430",
   "destruction timeline (deterministic, in bounds; final state = instantaneous result)": "481a1922a1ae861a",
-  "falling pieces (tracks and poses at fixed clock times, rubble arrivals)": "e52e8ea2f0cf289f",
+  "falling pieces (tracks and poses at fixed clock times, rubble arrivals)": "a5c06da29517e1a7",
   "interior plan (L shape, courtyard, shed; intact = scripted = reversed script)": "1a45a6d66682ceb8",
   "interior mesh (interior vertices after one deep hit, fixed state)": "4c816f2cc24f3730",
   "base reproducible trigonometry (fixed table of sine, cosine and arc functions, in turns and radians)": "f294f1671f9408f4",
@@ -49,7 +49,7 @@
   "gen-mesh bisectSurface (three tolerances, skirts, a cut side, a clipped square: indices in range, fewer triangles with more tolerance)": "c78a4a3411aad27e",
   "gen-mesh packMesh (loose triangles indexed per span, a span alone equals its bytes in the whole, positions within half a step; packed layout and material)": "eb5461ef964e0a8b",
   "streaming GPU ceiling (a long pan with a ceiling and a reserve: GPU bytes stay under it, the cover has no hole)": "90f672bb4bf27d37",
-  "env atmosphere slot (tables of two shells of air; packing with and without an eye; the sun by the observer's place on a turning sphere)": "65380b2bfed9a912",
+  "env atmosphere slot (tables of two shells of air; packing with and without an eye; the sun by the observer's place on a turning sphere)": "6f5fb9634a53d537",
   "gen-core sphere patch cover (cover attributes beside the unchanged bytes of the plain patch; neighbours agree on the cover along a shared border)": "769fe78795688c18",
   "gen-core strip net and carve (lengths, carve tables on a plane and a sphere; centre = grade + up(0) − bed, past the shoulder the input bit for bit, 5 cm steps under 2 cm across, through a bend and round a node; stripTouches false = identity)": "4f409d2d59b4849b",
   "gen-mesh strip mesh on a plane (three lines, one on a cell border, levels 9 and 10: lengths add up, shared sections agree, blend 1 = the parent rule, never under the ground, node corners shared and no overlap, order-free; GLSL and stripGrow)": "6e53374699740006",
@@ -70,5 +70,13 @@
   "gen-arch raised member (entrances and bands under it are kept; without the flag they differ)": "301f7fcc26180385",
   "gen-mesh rig options (free gait and bend chains: rigExtended, explicit pair gait = default, bend kinds, amounts, lags and a shared root; near, far and shadow meshes)": "9372b4bbd20a3c76",
   "gen-core near scatter (three kinds: same bytes twice, sorted by order, inside the square, half density a subset, masks join; nearKeep and nearCount)": "a3be06dab1f69478",
-  "core cover fade (share of the far look and size of an object over levels and the blend; objects leave in step with the share; GLSL)": "6258af438c0584b7"
+  "core cover fade (share of the far look and size of an object over levels and the blend; objects leave in step with the share; GLSL)": "6258af438c0584b7",
+  "gen-tex noise volumes (shape 32³ and detail 16³ of seeds 0 and 7: bytes; values repeat across the period; seeds differ; the GLSL twin)": "fc1cdf083432506a",
+  "env cloud shadows (projection snapped to texels fixed to the world, axes across the light; slot lanes; the deck closes the pattern from 0.7 to 0.78)": "a6bc6d118556fdb3",
+  "env cloud volume (profile, threshold and density over cover and height; ray spans through spheres and planes; fade, jitter, target size; the GLSL)": "78150791b1050230",
+  "env cloud volume history (texels marched per frame, march and tile sizes; reprojection to an earlier screen; depth to distance in the three depth modes; when the history is kept)": "8bd984ef1a741225",
+  "env cloud weather (cloud type and precipitation from the cover; typed profiles; the hand-over share by distance; the column over the eye and the share of the rain under it; how overcast the sky is)": "0609c4affc7d29c2",
+  "core medium (path below a level over heights of both signs; share let through and the clear distance; reflection at the boundary from both sides with total reflection; the GLSL)": "212695eaf61c516b",
+  "gen-core waves (trains from two winds and seeds; displacement, normal and Jacobian on a grid at three times; the height over a point undoes the shift; fade by sample size; uniforms at a far origin; the GLSL)": "308dd018a9e60f44",
+  "env precipitation (fall along the local down with the wind; drops of the visible tiles at one world place from three eyes and in a life; landing marks the same after a move by the period; the ground that follows the weather; the GLSL)": "a2bb2de63892486a"
 }

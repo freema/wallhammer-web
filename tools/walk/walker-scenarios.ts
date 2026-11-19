@@ -1,9 +1,9 @@
 // Scenarios of the walker (engine `world/walker.ts`) over the collision world: sliding along a wall, resting in a
-// corner, steps and stairs, slopes, jumps and ceilings, falling off an edge, a thin wall at speed, determinism, a solid
-// that appears over the body, and the CPU time of one step (spec M2, 3.3 and 3.4). Then the saved state
-// (`saveState`, `loadState`, `simState`): a save loaded into a second walker saves the same bytes, a restored walker
-// steps on and draws exactly like the original, offsets and refused buffers, and the walker as a part of a
-// `Simulation` snapshot.
+// corner, steps and stairs, slopes, jumps and ceilings, no steering or turning in the air, falling off an edge, a thin
+// wall at speed, determinism, a solid that appears over the body, and the CPU time of one step (spec M2, 3.3 and 3.4).
+// Then the saved state (`saveState`, `loadState`, `simState`): a save loaded into a second walker saves the same bytes,
+// a restored walker steps on and draws exactly like the original, offsets and refused buffers, and the walker as a
+// part of a `Simulation` snapshot.
 
 import { ByteReader, ByteWriter } from '../../packages/wallhammer-web/src/sim/bytes.ts';
 import { Simulation } from '../../packages/wallhammer-web/src/sim/simulation.ts';
@@ -172,6 +172,91 @@ const jump: Scenario = {
     const ok = err <= 0.03 && k.grounded && k.position[1]! === 0 && Math.abs(topC + s.height - 2.2) < 1e-9 && c.grounded && c.position[1]! === 0;
     return verdict(ok,
       `top ${f(top, 4)} m, want ${f(want, 4)} (error ${f(err * 100, 2)} %, allowed 3 %); under the 2.2 m underside the head reached ${f(topC + s.height, 4)} m`);
+  },
+};
+
+/**
+ * Runs toward −z, jumps, then holds `air` (a world direction, running) until landing. Returns the largest change of the
+ * horizontal velocity and of the heading against the step of take-off, seen after any step in the air or the landing.
+ */
+function airborne(air: [number, number], setup?: Partial<WalkerSetup>): { dv: number; dyaw: number; seconds: number; v0: number } {
+  const k = walker(flat(), 0, 0, 0, setup);
+  walk(k, intent(0, -1, true), 1.5);
+  k.step(intent(0, -1, true, true));
+  const vx = k.velocity[0]!;
+  const vz = k.velocity[2]!;
+  const yaw = k.yaw;
+  const it = intent(air[0], air[1], true);
+  let dv = 0;
+  let dyaw = 0;
+  let n = 0;
+  while (!k.grounded && n < 600) {
+    k.step(it);
+    n++;
+    dv = Math.max(dv, Math.hypot(k.velocity[0]! - vx, k.velocity[2]! - vz));
+    let d = Math.abs(k.yaw - yaw);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    dyaw = Math.max(dyaw, d);
+  }
+  return { dv, dyaw, seconds: n / k.setup.stepHz, v0: Math.hypot(vx, vz) };
+}
+
+const airMomentum: Scenario = {
+  name: 'walker-air-keeps-momentum-and-heading',
+  run() {
+    // Default setup: input held in the air (a 90° turn, the opposite way, 45°, nothing) changes neither the velocity of
+    // take-off nor the heading, bit for bit.
+    const dirs: [number, number][] = [[1, 0], [0, 1], [-Math.SQRT1_2, Math.SQRT1_2], [0, 0]];
+    let worstV = 0;
+    let worstYaw = 0;
+    let seconds = 0;
+    for (const d of dirs) {
+      const r = airborne(d);
+      worstV = Math.max(worstV, r.dv);
+      worstYaw = Math.max(worstYaw, r.dyaw);
+      seconds = r.seconds;
+    }
+    // An explicit share of control and turn rate stay within what they allow: airControl × acceleration × air time and
+    // airTurnSpeed × air time.
+    const air = 0.1;
+    const turn = 2;
+    const r = airborne([1, 0], { airControl: air, airTurnSpeed: turn });
+    const s = new Walker(flat()).setup;
+    const vBound = air * s.acceleration * r.seconds + 1e-9;
+    const yawBound = turn * r.seconds + 1e-9;
+    const ok = worstV === 0 && worstYaw === 0 && seconds > 0.8 && r.dv > 0 && r.dv <= vBound && r.dyaw > 0 && r.dyaw <= yawBound;
+    return verdict(ok,
+      `defaults (airControl ${s.airControl}, airTurnSpeed ${s.airTurnSpeed}): over ${f(seconds, 3)} s in the air with 4 inputs, velocity change ${f(worstV, 6)} m/s, heading change ${f(worstYaw, 6)} rad; ` +
+      `airControl ${air}, airTurnSpeed ${turn}: ${f(r.dv)} m/s (at most ${f(vBound)}), ${f(r.dyaw)} rad (at most ${f(yawBound)})`);
+  },
+};
+
+const standingJump: Scenario = {
+  name: 'walker-standing-jump-lands-in-place',
+  run() {
+    // A jump from standing with a direction held in the air (walking or running, four ways) comes down where it left.
+    let worst = 0;
+    let worstYaw = 0;
+    let landed = 0;
+    for (const [mx, mz, run] of [[1, 0, true], [0, 1, false], [-1, 0, true], [0.6, -0.8, false]] as const) {
+      const k = walker(flat(), 3, 0, -2);
+      walk(k, intent(0, 0), 0.2);
+      const x0 = k.position[0]!;
+      const z0 = k.position[2]!;
+      const yaw0 = k.yaw;
+      k.step(intent(0, 0, false, true));
+      const it = intent(mx, mz, run);
+      let n = 0;
+      while (!k.grounded && n < 600) {
+        k.step(it);
+        n++;
+      }
+      if (k.grounded && n > 40) landed++;
+      worst = Math.max(worst, Math.hypot(k.position[0]! - x0, k.position[2]! - z0));
+      worstYaw = Math.max(worstYaw, Math.abs(k.yaw - yaw0));
+    }
+    return verdict(landed === 4 && worst === 0 && worstYaw === 0,
+      `${landed} of 4 jumps landed; farthest from the take-off spot ${f(worst, 9)} m, heading change ${f(worstYaw, 6)} rad`);
   },
 };
 
@@ -639,5 +724,5 @@ const stateSim: Scenario = {
   },
 };
 
-export const WALKER_SCENARIOS: Scenario[] = [wall30, corner, steps, slopes, jump, fall, thinWall, determinism, appear, timing,
-  stateRoundTrip, stateContinues, stateOffsets, stateSim];
+export const WALKER_SCENARIOS: Scenario[] = [wall30, corner, steps, slopes, jump, airMomentum, standingJump, fall, thinWall,
+  determinism, appear, timing, stateRoundTrip, stateContinues, stateOffsets, stateSim];

@@ -12,7 +12,8 @@
 //   out of play; the device hands the offset to the program instead (`Program.depthBias`).
 // `DrawState` keeps one meaning in every mode: `'less'` passes what is nearer, a positive polygon offset pushes away.
 // Samples (`setMainSamples`): with 2 samples the standard mode draws into the offscreen target too (standard depth
-// convention, 32-bit float depth), as a canvas cannot be asked for a sample count.
+// convention, 32-bit float depth), as a canvas cannot be asked for a sample count. `setReadableDepth(true)` does the
+// same with the samples it has, so `sceneDepth` can read the depth in the standard mode.
 
 import { texelBytes } from '../base/data.ts';
 import type { InstanceData, MeshData, ScalarType, TextureData, TextureFormat, TextureSampling, VertexLayout } from '../base/data.ts';
@@ -96,6 +97,46 @@ interface ColorTargetImpl extends ColorTarget {
   textures: Texture[];
 }
 
+/** What a volume target stores per texel: one channel or four, 8 bits each, read as 0–1. */
+export type VolumeFormat = 'r8' | 'rgba8';
+
+/**
+ * A 3D texture that programs draw into one layer (one z slice) at a time (`Device.fillLayer`), for a table in space
+ * kept on the graphics card (a tileable noise volume). Read as a `sampler3D` (declare it `highp`): linear filtering,
+ * coordinates wrap around in all three axes. Bind it with `Device.volumeTexture`.
+ */
+export interface VolumeTarget {
+  readonly kind: 'volume';
+  readonly width: number;
+  readonly height: number;
+  readonly depth: number;
+  readonly format: VolumeFormat;
+  /** The 3D texture. Read it when it is used: a restore after a context loss replaces it (empty). */
+  readonly texture: Texture;
+}
+
+/**
+ * A cube map that programs draw into one face at a time (`Device.fillLayer`, faces in the order +x, −x, +y, −y, +z,
+ * −z), for a table over all directions (a field over a sphere). Read as a `samplerCube`: linear filtering, and the
+ * faces are filtered across their edges (always so in WebGL2), so a field drawn by direction has no seam. Bind it with
+ * `Device.cubeTexture`.
+ */
+export interface CubeTarget {
+  readonly kind: 'cube';
+  /** Edge of one face in texels. */
+  readonly size: number;
+  readonly format: ColorTargetFormat;
+  /** The cube map texture. Read it when it is used: a restore after a context loss replaces it (empty). */
+  readonly texture: Texture;
+}
+
+interface LayeredImpl {
+  fbo: WebGLFramebuffer | null;
+  texture: Texture;
+}
+type VolumeTargetImpl = VolumeTarget & LayeredImpl;
+type CubeTargetImpl = CubeTarget & LayeredImpl;
+
 /** How a mesh was made, kept (with `retainUploads`) so it can be made again after a context loss. */
 interface MeshRecipe {
   /** The data of an uploaded mesh, or the mesh whose buffers a shared mesh draws. */
@@ -140,6 +181,8 @@ interface SceneTarget {
   resolved: Texture;
   width: number;
   height: number;
+  /** One depth value per pixel, made on the first `sceneDepth` call. */
+  depthCopy: { texture: Texture; fbo: WebGLFramebuffer } | null;
 }
 
 /** Copies the resolved main target to the canvas, pixel for pixel. */
@@ -175,6 +218,8 @@ export class Device {
   /** Samples of the offscreen main target, and whether the standard mode draws offscreen too (`setMainSamples`). */
   private sceneSamples = SCENE_SAMPLES;
   private standardOffscreen = false;
+  /** The standard mode draws offscreen so its depth can be read (`setReadableDepth`). */
+  private readableDepth = false;
   private clip: ClipControl | null = null;
   private scene: SceneTarget | null = null;
   private presentProgram: Program | null = null;
@@ -203,6 +248,7 @@ export class Device {
   private readonly blocks: (() => void)[] = [];
   private readonly depthTargets = new Set<DepthTargetImpl>();
   private readonly colorTargets = new Set<ColorTargetImpl>();
+  private readonly layeredTargets = new Set<VolumeTargetImpl | CubeTargetImpl>();
   private readonly meshRecipes = new Map<Mesh, MeshRecipe>();
   /** Vertex buffer → the mesh that owns it, for `writeBuffer`. */
   private readonly vertexOwner = new Map<GpuBuffer, Mesh>();
@@ -271,9 +317,22 @@ export class Device {
     this.standardOffscreen = samples === 2;
   }
 
+  /**
+   * Makes the depth of the main target readable (`sceneDepth`) in the standard depth mode too: the device then draws
+   * into its offscreen target (standard convention, 32-bit float depth, the samples of `setMainSamples`, 4 without it)
+   * and copies it to the canvas in `present`, as the other modes do. Call it once, before the first frame, and create
+   * the context with `createContext(canvas, mode, samples, true)`, so the canvas is made without antialiasing and
+   * depth of its own. The other depth modes draw offscreen anyway; there it changes nothing.
+   */
+  setReadableDepth(on: boolean): void {
+    if (on === this.readableDepth) return;
+    this.dropScene();
+    this.readableDepth = on;
+  }
+
   /** True when the main target is the device's offscreen target rather than the canvas. */
   private offscreen(): boolean {
-    return this.depth !== 'standard' || this.standardOffscreen;
+    return this.depth !== 'standard' || this.standardOffscreen || this.readableDepth;
   }
 
   /** Switches clip range, depth comparison and polygon offset to the convention of the target just bound. */
@@ -344,7 +403,7 @@ export class Device {
     gl.bindFramebuffer(gl.FRAMEBUFFER, resolveFbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, resolved, 0);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('The resolve target is incomplete');
-    const s: SceneTarget = { fbo, color, depth, resolveFbo, resolved, width, height };
+    const s: SceneTarget = { fbo, color, depth, resolveFbo, resolved, width, height, depthCopy: null };
     // Four bytes of colour and four of depth per sample, and the resolved colour.
     this.track(s, 'targets', width * height * (Math.max(1, samples) * 8 + 4));
     this.presentProgram ??= this.program('present', FULLSCREEN_VS, PRESENT_FS);
@@ -364,7 +423,51 @@ export class Device {
     gl.deleteRenderbuffer(s.depth);
     gl.deleteTexture(s.resolved);
     this.untrack(s);
+    if (s.depthCopy) {
+      gl.deleteFramebuffer(s.depthCopy.fbo);
+      gl.deleteTexture(s.depthCopy.texture);
+      this.untrack(s.depthCopy);
+    }
     this.scene = null;
+  }
+
+  /**
+   * The depth of the main target as drawn so far, one value per pixel (the first sample of each), in a texture of
+   * the drawing surface's size: a `DEPTH_COMPONENT32F` texture to read with `texelFetch` (its `.r`, in the depth
+   * mode's own convention, see `depthViewProj` of base). Copies the depth when called, in the middle of the colour
+   * pass too; afterwards the main target is bound again. Null where the main target is the canvas (the standard
+   * mode without `setMainSamples(2)` or `setReadableDepth(true)`), whose depth cannot be read, and while the context is lost. On a tiled GPU the
+   * copy splits the pass: the main target is written out and read back in, which costs about as much as a
+   * full-screen draw.
+   */
+  sceneDepth(): Texture | null {
+    const gl = this.gl;
+    if (!this.offscreen() || gl.isContextLost()) return null;
+    const s = this.sceneTarget();
+    if (!s.depthCopy) {
+      const texture = createTexture(gl, { internalFormat: gl.DEPTH_COMPONENT32F, format: gl.DEPTH_COMPONENT, type: gl.FLOAT, width: s.width, height: s.height });
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      const fbo = gl.createFramebuffer();
+      if (!fbo) throw new Error('Cannot create the depth copy');
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, texture, 0);
+      gl.drawBuffers([gl.NONE]);
+      gl.readBuffer(gl.NONE);
+      const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.boundFbo);
+      if (!complete) {
+        gl.deleteFramebuffer(fbo);
+        gl.deleteTexture(texture);
+        return null;
+      }
+      s.depthCopy = { texture, fbo };
+      this.track(s.depthCopy, 'targets', s.width * s.height * 4);
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, s.fbo);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, s.depthCopy.fbo);
+    gl.blitFramebuffer(0, 0, s.width, s.height, 0, 0, s.width, s.height, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.boundFbo);
+    return s.depthCopy.texture;
   }
 
   /**
@@ -433,6 +536,7 @@ export class Device {
     // The offscreen main target is gone with the context; `target` allocates it again.
     if (this.scene) {
       this.untrack(this.scene);
+      if (this.scene.depthCopy) this.untrack(this.scene.depthCopy);
       this.scene = null;
     }
     // The old context took every object with it. What is made again below is counted again there; what nobody can
@@ -465,6 +569,13 @@ export class Device {
       // A fresh context that cannot hold the format any more leaves the target without textures; fills are skipped.
       Object.assign(t, made ?? { fbo: null, textures: t.textures.map(() => null as unknown as Texture) });
       if (made) this.track(t, 'targets', colorTargetBytes(t));
+    }
+    // Volume and cube targets come back empty; their owners fill them again (`onRestored`).
+    for (const t of this.layeredTargets) {
+      this.untrack(t);
+      const made = this.makeLayered(t);
+      Object.assign(t, made ?? { fbo: null, texture: null as unknown as Texture });
+      if (made) this.track(t, 'targets', layeredBytes(t));
     }
     for (const [b, data] of this.instanceRecipes) {
       if (b.buffer) this.untrack(b.buffer);
@@ -656,6 +767,16 @@ export class Device {
     return null;
   }
 
+  /** Deletes a colour target (to make one of another size); it must not be used afterwards. */
+  deleteColorTarget(t: ColorTarget): void {
+    const impl = t as ColorTargetImpl;
+    if (!this.colorTargets.delete(impl)) return;
+    this.untrack(impl);
+    if (impl.fbo) this.gl.deleteFramebuffer(impl.fbo);
+    for (const tex of impl.textures) if (tex) this.gl.deleteTexture(tex);
+    (impl as { fbo: WebGLFramebuffer | null }).fbo = null;
+  }
+
   /**
    * Draws one triangle across the whole of a colour target with `program`: its fragment shader has one output per
    * texture of the target and writes every texel, so nothing is cleared. Afterwards the target bound before is
@@ -674,6 +795,132 @@ export class Device {
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.boundFbo);
+  }
+
+  /**
+   * A 3D texture of `width` × `height` × `depth` texels to draw into one layer at a time (`fillLayer`). Returns null
+   * while the context is lost or where the size exceeds the device's limit (`MAX_3D_TEXTURE_SIZE`, at least 256);
+   * the caller then does without it. Counted under `targets` in `memory()`.
+   */
+  volumeTarget(width: number, height: number, depth: number, format: VolumeFormat): VolumeTarget | null {
+    if (this.gl.isContextLost()) return null;
+    const t = { kind: 'volume', width, height, depth, format, fbo: null, texture: null as unknown as Texture } as VolumeTargetImpl;
+    const made = this.makeLayered(t);
+    if (!made) return null;
+    Object.assign(t, made);
+    this.layeredTargets.add(t);
+    this.track(t, 'targets', layeredBytes(t));
+    return t;
+  }
+
+  /**
+   * A cube map of six faces of `size` × `size` texels to draw into one face at a time (`fillLayer`). Null as for
+   * `colorTarget` (`'rgba16f'` needs a float colour extension) or past `MAX_CUBE_MAP_TEXTURE_SIZE`. Counted under
+   * `targets` in `memory()`.
+   */
+  cubeTarget(size: number, format: ColorTargetFormat): CubeTarget | null {
+    if (this.gl.isContextLost()) return null;
+    const t = { kind: 'cube', size, format, fbo: null, texture: null as unknown as Texture } as CubeTargetImpl;
+    const made = this.makeLayered(t);
+    if (!made) return null;
+    Object.assign(t, made);
+    this.layeredTargets.add(t);
+    this.track(t, 'targets', layeredBytes(t));
+    return t;
+  }
+
+  /** Deletes a volume or cube target; it must not be used afterwards. */
+  deleteLayeredTarget(t: VolumeTarget | CubeTarget): void {
+    const impl = t as VolumeTargetImpl | CubeTargetImpl;
+    if (!this.layeredTargets.delete(impl)) return;
+    this.untrack(impl);
+    if (impl.fbo) this.gl.deleteFramebuffer(impl.fbo);
+    if (impl.texture) this.gl.deleteTexture(impl.texture);
+    impl.fbo = null;
+  }
+
+  /** The texture and framebuffer (attached to layer 0) of a volume or cube target, or null when it cannot be made. */
+  private makeLayered(t: VolumeTarget | CubeTarget): LayeredImpl | null {
+    const gl = this.gl;
+    const cube = t.kind === 'cube';
+    const kind = cube ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_3D;
+    if (cube) {
+      if (t.size > (gl.getParameter(gl.MAX_CUBE_MAP_TEXTURE_SIZE) as number)) return null;
+      if (t.format === 'rgba16f' && !gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) return null;
+    } else if (Math.max(t.width, t.height, t.depth) > (gl.getParameter(gl.MAX_3D_TEXTURE_SIZE) as number)) return null;
+    const texture = gl.createTexture();
+    if (!texture) return null;
+    gl.bindTexture(kind, texture);
+    if (cube) {
+      const f = t.format === 'rgba16f' ? { internal: gl.RGBA16F, type: gl.HALF_FLOAT } : { internal: gl.RGBA8, type: gl.UNSIGNED_BYTE };
+      gl.texStorage2D(gl.TEXTURE_CUBE_MAP, 1, f.internal, t.size, t.size);
+      gl.texParameteri(kind, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(kind, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    } else {
+      gl.texStorage3D(gl.TEXTURE_3D, 1, t.format === 'r8' ? gl.R8 : gl.RGBA8, t.width, t.height, t.depth);
+      gl.texParameteri(kind, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(kind, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(kind, gl.TEXTURE_WRAP_R, gl.REPEAT);
+    }
+    gl.texParameteri(kind, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(kind, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.bindTexture(kind, null);
+    const fbo = gl.createFramebuffer();
+    if (!fbo) throw new Error('Cannot create a layered target');
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    if (cube) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X, texture, 0);
+    else gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texture, 0, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.boundFbo);
+    if (complete) return { fbo, texture };
+    gl.deleteFramebuffer(fbo);
+    gl.deleteTexture(texture);
+    return null;
+  }
+
+  /**
+   * `fill` for one layer of a volume target (its z slice `layer`, 0 … depth − 1) or one face of a cube target (0 … 5:
+   * +x, −x, +y, −y, +z, −z). The program learns which one from its uniforms (pass the layer among `uniforms`); its
+   * fragment shader has one output and writes every texel of the layer. The same rules as for `fill`: call it between
+   * passes; the viewport and the draw state change, and the target bound before is bound again.
+   */
+  fillLayer(t: VolumeTarget | CubeTarget, layer: number, program: Program, uniforms: Uniforms = {}): void {
+    const impl = t as VolumeTargetImpl | CubeTargetImpl;
+    if (!impl.fbo) return;
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, impl.fbo);
+    if (t.kind === 'cube') {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + Math.min(5, Math.max(0, layer | 0)), impl.texture, 0);
+      gl.viewport(0, 0, t.size, t.size);
+    } else {
+      gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, impl.texture, 0, Math.min(t.depth - 1, Math.max(0, layer | 0)));
+      gl.viewport(0, 0, t.width, t.height);
+    }
+    this.setState({ depthTest: false, depthWrite: false, cullBack: false, blend: null, alphaToCoverage: false, polygonOffset: null });
+    this.use(program);
+    for (const name in uniforms) program.set(name, uniforms[name]!);
+    gl.bindVertexArray(this.emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.boundFbo);
+  }
+
+  /**
+   * Binds a volume target's 3D texture to a texture unit (null unbinds the unit's 3D texture). A unit holds a 2D, a
+   * 3D and a cube texture side by side; a program must not read two kinds from one unit, so give the `sampler3D` a
+   * unit of its own (`fixSampler`).
+   */
+  volumeTexture(unit: number, t: VolumeTarget | null): void {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_3D, t ? t.texture : null);
+  }
+
+  /** Binds a cube target's texture to a texture unit (null unbinds the unit's cube map); see `volumeTexture`. */
+  cubeTexture(unit: number, t: CubeTarget | null): void {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, t ? t.texture : null);
   }
 
   /** A 1 × 1 RGBA8 texture. */
@@ -881,9 +1128,15 @@ export class Device {
 
   /** One triangle covering the whole viewport, without vertex data: the vertex shader builds it from `gl_VertexID`. */
   drawFullscreen(): void {
+    this.drawVertices(3);
+  }
+
+  /** `count` vertices as triangles without vertex data: the vertex shader builds every one from `gl_VertexID`. */
+  drawVertices(count: number): void {
+    if (count <= 0) return;
     if (this.biasInProgram) this.syncDepthBias();
     this.gl.bindVertexArray(this.emptyVao);
-    this.gl.drawArrays(this.gl.TRIANGLES, 0, 3);
+    this.gl.drawArrays(this.gl.TRIANGLES, 0, count);
   }
 
   /**
@@ -1186,6 +1439,12 @@ function textureBytes(width: number, height: number, texel: number, mipmaps: boo
 /** Bytes of the textures of a colour target. */
 function colorTargetBytes(t: ColorTarget): number {
   return t.width * t.height * t.textures.length * (t.format === 'rgba16f' ? 8 : 4);
+}
+
+/** Bytes of a volume or cube target. */
+function layeredBytes(t: VolumeTarget | CubeTarget): number {
+  if (t.kind === 'cube') return 6 * t.size * t.size * (t.format === 'rgba16f' ? 8 : 4);
+  return t.width * t.height * t.depth * (t.format === 'r8' ? 1 : 4);
 }
 
 function blendFactor(gl: GL, b: BlendFactor): number {

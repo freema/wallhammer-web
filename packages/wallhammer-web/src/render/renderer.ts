@@ -180,6 +180,13 @@ export interface RendererOptions {
    */
   samples?: MainSamples;
   /**
+   * Makes the depth of the main target readable in the standard depth mode (`Device.setReadableDepth`): the frame is
+   * drawn offscreen and copied to the canvas, so `Device.sceneDepth()` works there too. Create the context with
+   * `createContext(canvas, depth, samples, true)` (the engine does). Default off; the other depth modes can always
+   * read it.
+   */
+  readableDepth?: boolean;
+  /**
    * Up that points away from a point instead of along +y, for a world wrapped round that point (`center` in world
    * metres, as `worldOrigin` is). Program headers then define `WH_LOCAL_UP` and the Frame block ends with
    * `u_upCenter`; the header functions `localUp`, `localHeight` and `localFrame`, the lighting include, rigs and
@@ -402,6 +409,7 @@ export class Renderer {
     this.shadowDistanceM = options.shadowDistanceM ?? Infinity;
     this.depthMode = options.depth !== undefined ? device.setDepthMode(options.depth) : device.depthMode;
     if (options.samples !== undefined) device.setMainSamples(options.samples);
+    if (options.readableDepth) device.setReadableDepth(true);
     this.depthNearM = options.depthNearM ?? 0.1;
     const slots = options.frameSlots ?? { afterLight: 0, afterView: 0, glsl: { afterLight: '', afterView: '' } };
     this.shadowMode = options.shadows?.mode ?? 'single';
@@ -461,6 +469,15 @@ export class Renderer {
   /** Edge of the shadow map texture in pixels (`FrameStats.shadowMapPx` is the part of it in use). */
   get shadowMapEdgePx(): number {
     return this.shadowMapSize;
+  }
+
+  /**
+   * The depth projection of the frame being drawn (from the start of `render` on; the last frame's between frames):
+   * the world → clip matrix in render space and the logarithmic scale, see `depthViewProj` of base. Read only; the
+   * object is overwritten by the next frame, so a layer that needs it later copies what it needs.
+   */
+  get projection(): Readonly<DepthProjection> {
+    return this.proj;
   }
 
   /**

@@ -1,6 +1,6 @@
 // Layer 2, gen-core: stateless randomness with named streams, value noise, planar polygon geometry and the spatial
 // structures generators query (height field, distance fields, occupancy grid), and the split of instance streams into
-// thinned cells. Pure, run anywhere.
+// thinned cells, and a field of moving waves. Pure, run anywhere.
 
 export { hashInt, hashInts, hashString, mix32, pickWeighted, rand, randRange, streamSeed, unit } from './hash.ts';
 export { valueNoise2 } from './noise.ts';
@@ -24,3 +24,5 @@ export { flatStripSurface, sphereStripSurface } from './strip-surface.ts';
 export type { StripSurface } from './strip-surface.ts';
 export { NEAR_FADE_GLSL, NEAR_FLOATS, NEAR_LAYOUT, nearCount, nearKeep, nearLeaveM, nearScatter } from './near-scatter.ts';
 export type { NearFade, NearRecords, NearScatterOptions } from './near-scatter.ts';
+export { WAVES_GLSL, WAVE_GRAVITY, WAVE_TRAINS_MAX, waveDisplace, waveFade, waveHeight, waveNormal, waveTrains, waveUniforms, waveUnresolved } from './waves.ts';
+export type { WaveFieldOptions, WaveTrain } from './waves.ts';

@@ -223,6 +223,15 @@ export class AtmosphereLayer implements Layer {
     });
   }
 
+  /**
+   * Binds the tables to their unit (`ATMOSPHERE_TABLE_UNIT`) and selects a spare unit, for a layer that reads the
+   * air in its own `prepare` (before this layer's draw has bound them in the frame).
+   */
+  bindTables(device: Device): void {
+    device.texture(ATMOSPHERE_TABLE_UNIT, this.tables);
+    device.texture(ATMOSPHERE_TABLE_UNIT - 1, null);
+  }
+
   /** True when the sky is read from the sky table in this frame, false when every pixel integrates its own ray. */
   get usesSkyTable(): boolean {
     return this.sky !== null && !this.slot.params.reference;

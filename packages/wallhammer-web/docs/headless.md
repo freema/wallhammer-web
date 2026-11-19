@@ -6,10 +6,10 @@ Much of the engine runs in plain Node, without a browser or a GPU. The golden te
 
 | Module | In Node? | Notes |
 | --- | --- | --- |
-| `base`, `core`, `gen-core` | yes | |
-| `gen-mesh`, `gen-tex` | yes | They return data. |
+| `base`, `core`, `gen-core` | yes | `core` includes the medium below a level (`mediumPath` and the others). |
+| `gen-mesh`, `gen-tex` | yes | They return data, the noise volumes on the CPU included (`noiseVolumeData`). |
 | `gen-arch`, `gen-ground`, `gen-vegetation` | yes | They return data and `BakeDesc`s. A bake itself needs the GPU. |
-| `env` | yes | `Environment`, `assembleFrameBlock`, sun position, sky values. |
+| `env` | yes | `Environment`, `assembleFrameBlock`, sun position, sky values, the atmosphere's tables, and the cloud volume, weather and shadow arithmetic (`cloudVolume…`, `cloudWeatherKind`, `cloudShadowProjection`). |
 | `world` | yes | Picking, `StreamingManager`, providers, WHC1 encoding. |
 | `sim`, `sim/destruction` | yes | Enforced: `sim` may import only `base`, `core`, `gen-core`. |
 | `camera` | yes | Rigs are math. |

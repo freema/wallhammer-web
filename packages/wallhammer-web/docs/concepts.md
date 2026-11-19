@@ -57,11 +57,11 @@ Rows keep insertion order. The engine has no global palette and no colour names.
 
 ## 4. The Frame block and environment slots
 
-Every program sees one uniform block, `Frame`. The renderer owns the view and light matrices in it. The environment owns the rest: light colours, time, wind, clouds, weather, fog. Projects and content modules add their own members through **environment slots** (`EnvSlot`). A slot has parameters, a pure `compute` from the generic `FrameEnvironment`, and a mapping of its values to vec4 lanes. The block layout is fixed when the engine is created. See [Rendering](rendering.md#environment-slots).
+Every program sees one uniform block, `Frame`. The renderer owns the view and light matrices in it. The environment owns the rest: light colours, time, wind, clouds, weather, fog. Projects and content modules add their own members through **environment slots** (`EnvSlot`). A slot has parameters, a pure `compute` from the generic `FrameEnvironment`, and a mapping of its values to vec4 lanes. The block layout is fixed when the engine is created. See [The environment](environment.md) and [Rendering](rendering.md#environment-slots).
 
 ## 5. Layers and passes
 
-The renderer draws a list of layers in the order they were added. A layer implements `draw(ctx)` and is called once per pass. The passes are `shadow`, `color`, `data` and `overlay`. `ctx.pass` says which one is running. `MeshLayer`, `PieceLayer`, `InstancedLayer` and `InstanceCellLayer` cover most needs. See [Rendering](rendering.md).
+The renderer draws a list of layers in the order they were added. A layer implements `draw(ctx)` and is called once per pass. The passes are `shadow`, `color`, `data` and `overlay`. `ctx.pass` says which one is running. `MeshLayer`, `PieceLayer`, `InstancedLayer` and `InstanceCellLayer` cover most needs. The engine's own layers keep their places round the app's: the sky or the atmosphere first (or where `engine.moveSkyBefore` puts the sky), then the layers added through `engine.add`, then the volumetric clouds (or where `engine.moveCloudsBefore` puts them, before the layers that blend over them), and the precipitation last. See [Rendering](rendering.md).
 
 ## 6. The frame order
 

@@ -435,7 +435,7 @@ Import from `wallhammer-web/gen-ground`. Ground and markings.
 | `buildGroundMarkings` | Painted strips draped on the terrain. |
 | `TERRAIN_MATERIAL`, `MARKING_MATERIAL`, `groundUniforms` | Materials and their uniforms. |
 | `seasonSlot`, `seasonAt` | Environment slot: season in `u_season` (also a shadow key), read by the terrain and the vegetation shader. |
-| `snowSlot` | Environment slot: the `snow` include. |
+| `snowSlot` | Environment slot: the `snow` include. See [Seasons and snow](environment.md#seasons-and-snow). |
 | `TERRAIN_VS/FS`, `MARKING_VS/FS` | Shader sources. |
 
 The module holds no colour names and no project sizes.

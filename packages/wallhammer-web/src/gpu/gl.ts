@@ -24,9 +24,11 @@ export type MainSamples = 0 | 2 | 4;
  * `samples` is what the device will be asked for with `Device.setMainSamples`. Unset: the canvas's own antialiasing
  * (standard mode) or 4 samples (the other modes), as before. In the standard mode 0 makes the canvas without
  * antialiasing, 4 with it (the browser's usual count) and 2 makes it plain, as the device then draws offscreen.
+ * `readableDepth` is what the device will be asked for with `Device.setReadableDepth`: true makes the canvas plain in
+ * the standard mode too, as the device then draws offscreen.
  */
-export function createContext(canvas: ContextSource, depth: DepthMode = 'standard', samples?: MainSamples): GL {
-  const own = depth === 'standard' && samples !== 2;
+export function createContext(canvas: ContextSource, depth: DepthMode = 'standard', samples?: MainSamples, readableDepth = false): GL {
+  const own = depth === 'standard' && samples !== 2 && !readableDepth;
   const gl = canvas.getContext('webgl2', {
     antialias: own && samples !== 0,
     alpha: false,

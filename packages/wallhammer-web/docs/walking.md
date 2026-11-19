@@ -82,7 +82,11 @@ while the machine was busy), a `slide` of one step 1–3 µs, `groundAt` under 1
 
 1. The wanted velocity is the intent's direction (clamped to length 1) times `walkSpeed` or `runSpeed`. The horizontal
    velocity moves toward it by at most `acceleration` per second (braking the same way); in the air only
-   `airControl` of it.
+   `airControl` of it. The default `airControl` is 0: once off the ground (a jump or a fall from an edge) the body keeps
+   the horizontal velocity it left with until it lands, whatever is asked in the air; only a side it touches takes
+   away the velocity into it. A small share (0.05–0.1) allows a slight correction, at most `airControl × acceleration`
+   per second. A step counts as in the air when it starts with the feet above the ground, so the step of a take-off
+   still steers as on the ground and the step of a landing does not.
 2. A jump (`intent.jump`) starts only from the ground, not from a slope too steep to stand on: the vertical speed
    becomes `jumpSpeed`.
 3. The body slides by its velocity with `slide`, against the sides of solids between `maxStepUp` above the feet and
@@ -98,7 +102,9 @@ while the machine was busy), a `slide` of one step 1–3 µs, `groundAt` under 1
    along the incline); the intent steers it across and may speed it downhill but not brake or climb. The slope is
    steep only when the base rises steeply on both sides of the feet (over 5 cm each way along the gradient): at the
    flat lip of a cliff or a pit the central slope straddles the kink, and the body must still be able to walk away.
-6. `yaw` turns toward the wanted direction (or, without an intent, the direction moved) at most `turnSpeed` rad/s.
+6. `yaw` turns toward the wanted direction (or, without an intent, the direction moved) at most `turnSpeed` rad/s on
+   the ground and `airTurnSpeed` rad/s in the air. The default `airTurnSpeed` is 0: the body keeps the heading it took
+   off with until it lands, so a figure drawn with `renderYaw` does not spin in the air (a camera may still orbit it).
 
 `advance(dt, intent)` takes real seconds, runs the steps due and carries the rest to the next call, so the path does not
 depend on the frame rate: one call of 1/30 s and two of 1/60 s end in the same place. At most `maxStepsPerAdvance`
@@ -142,7 +148,7 @@ console.log(body.position, body.velocity, body.grounded, body.steep, body.yaw, b
 
 | Member | Meaning |
 | --- | --- |
-| `new Walker(world, setup?)`, `setup` | `WalkerSetup` over `DEFAULT_WALKER`: `radius` 0.3, `height` 1.7, `walkSpeed` 1.6, `runSpeed` 4.5 m/s, `acceleration` 20 m/s², `airControl` 0.3, `jumpSpeed` 4.2 m/s (0: no jumps), `gravity` 9.81, `maxStepUp` 0.35 m, `maxSlopeDeg` 45, `stepHz` 60, `turnSpeed` 12 rad/s, `stepSmoothing` 0.1 s, `maxStepsPerAdvance` 15. |
+| `new Walker(world, setup?)`, `setup` | `WalkerSetup` over `DEFAULT_WALKER`: `radius` 0.3, `height` 1.7, `walkSpeed` 1.6, `runSpeed` 4.5 m/s, `acceleration` 20 m/s², `airControl` 0 (no steering in the air), `airTurnSpeed` 0 rad/s (no turning in the air), `jumpSpeed` 4.2 m/s (0: no jumps; a jump 0.9 m high, 0.86 s in the air), `gravity` 9.81, `maxStepUp` 0.35 m, `maxSlopeDeg` 45, `stepHz` 60, `turnSpeed` 12 rad/s, `stepSmoothing` 0.1 s, `maxStepsPerAdvance` 15. |
 | `position`, `velocity` | Feet and velocity (x, y, z), `Float64Array`s; read them, change them through `teleport`. |
 | `yaw`, `grounded`, `steep` | Heading in radians; standing on ground; standing on a base too steep to climb (sliding). |
 | `travelled`, `steps` | Horizontal metres moved (for the stride of an animation); fixed steps since the last `teleport`. |
@@ -256,6 +262,9 @@ console.log(standable.count, blocking.count);
 - Sloped or shaped tops: the top of a solid is flat at `maxY`. Ramps are made of the base surface or of thin steps.
 - Moving solids. Remove and add again to move one (the grid lists are updated each time). A walker standing on a
   solid is not carried with it.
+- Jump timing aids: a jump asked a step after running off an edge is dropped (no grace time, "coyote time"), and so
+  is one asked a step before landing (no buffer). A game can buffer by itself, keeping `intent.jump` set for a few
+  frames until `grounded`; a grace time after an edge would need the walker.
 - For the walker: sloped tops of solids (a ramp is the base surface), crouching, swimming, ledges to hang from,
   being pushed by other bodies (two walkers do not see each other), and a solid lower than `maxStepUp` that cannot be
   stood on (`standable: false`) is neither a side nor ground, so the body walks through it. A step up is not checked

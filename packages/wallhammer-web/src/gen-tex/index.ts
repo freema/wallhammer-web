@@ -7,3 +7,20 @@ export { CodeStamp } from './code-stamp.ts';
 export type { CodeRegion } from './code-stamp.ts';
 export { SurfaceRaster, horizonTexture, lightHorizon } from './light-horizon.ts';
 export type { HorizonTexture } from './light-horizon.ts';
+export {
+  NOISE_SEED_DETAIL,
+  NOISE_SEED_PERLIN,
+  NOISE_SEED_WORLEY,
+  NOISE_VOLUME_DETAIL,
+  NOISE_VOLUME_SHAPE,
+  PERLIN_GRADIENTS,
+  WORLEY_WEIGHTS,
+  detailNoiseAt,
+  noiseVolumeData,
+  octaveSeed,
+  perlinTile,
+  shapeNoiseAt,
+  worleyOctaves,
+  worleyTile,
+} from './noise-volume.ts';
+export type { NoiseVolumeRecipe } from './noise-volume.ts';

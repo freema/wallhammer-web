@@ -56,12 +56,12 @@ Other helpers: `intactState`, `isIntact`, `decodeStates`, `sortedEntries`, `solv
 
 ## Feeding events from the simulation
 
-The module header says that feeding events from the simulation queue is "a later step". Nothing in the engine does it. The two users do it differently:
+The module header says that feeding events from the simulation queue is "a later step". Nothing in the engine does it. There are two ways to do it:
 
 - The destruction example (`examples/destruction`) calls `applyEventToAll` directly from input handlers.
-- The campus app registers simulation commands for hit, set and reset and calls the pure functions from those handlers. That gives replay and seeking for free.
+- An app with a simulation registers simulation commands for hit, set and reset and calls the pure functions from those handlers. That gives replay and seeking for free.
 
-If you add destruction to a project, copy the campus pattern: one command per event, the state as simulation state.
+If you add destruction to a project with a simulation, take the second pattern: one command per event, the state as simulation state.
 
 ## State in streamed cells
 
@@ -102,26 +102,24 @@ The endless example (`dmg=1`) wires it: structures in home cells of level 9, dra
 
 ### How the pieces look and move
 
-- Solid pieces (masonry, floors, partitions) get a closed shell just inside their outline. Faces narrower than 0.8 m (a broken edge, the thickness of a slab or a wall) show the dark broken core (damage 3). Broad faces show what the part had inside, in the interior shading (`KIND.interior`): a slab has its floor on top and its ceiling below, a partition and the back of a wall have room paint. The room hash comes from the part key, so all pieces of one slab match.
+- Solid pieces (masonry, floors, partitions) get a closed shell just inside their outline. Faces narrower than 0.8 m (a broken edge, the thickness of a slab or a wall) show the dark broken core (damage 3). Broad faces show what the part had inside, in the interior shading (`KIND.interior`): a slab has its floor on top and its ceiling below, a partition and the back of a wall have room paint. The room hash comes from the part key, so all pieces of one slab match. A broad face covers only what the piece's own surface parallel to it covers, so an opening through the part (a torn hole in a wall, a door in a partition, a stair hole in a slab) stays open in the flying piece, lined by its own reveals.
 - Patterns stay on a moving piece. `BUILDING_VS` passes the rest position and rest normal (`v_pat`, `v_patN`); `fallingMaterial` sets them from the vertex before its track moves it. The damage pattern, the roof noise and the door heights read them. For a static mesh they equal the world position, so intact structures draw the same as before.
 - Fallen roof reads as roof. Rubble of a roof span is a dust mound in the wall colour with three to five roof sections on it: a core slab with the roof covering on top (`KIND.roofPitched`, courses along its tilt). Floor spans get concrete sections in the trim colour.
 - Tracks stay out of standing parts, without collision state. A piece that lost its support leans away from the structure's centre (0.35–1.05 m/s) and lets go within 0.14 s of its timeline time. Before a track is kept, its landing spot and the middle of its flight are tested against standing parts (grid lookup, point in footprint). When one lies inside, the horizontal velocity is tried at 0.6, 0.3, −0.4 and 0 of its value. The landing height follows the spot: the highest standing top under it, else the ground. Every landing still makes a dust puff.
 
 ### Keeping a hit cheap
 
-A hit on the largest campus structure (`tools/bench/bench.mjs hit` against the app's page) used to block the main thread for 140–170 ms in one task: describe the structure, apply the event, draw the before mesh by parts, cut the pieces, regenerate the damaged mesh. The campus now splits it:
+A hit on a large structure, done in one task, can block the main thread for well over 100 ms: describe the structure, apply the event, draw the before mesh by parts, cut the pieces, regenerate the damaged mesh. An app with large structures can split it this way (the pattern comes from an app outside this repository; the engine's part of it is the caches of `buildBuildingMesh`, `retimeFall` and the pure functions):
 
 - Descriptions are made in idle time after the buildings are set, largest footprint first, a few per idle slot (`requestIdleCallback`, at most ~8 ms of work per slot unless one structure takes longer). A hit before that finishes describes on the spot.
 - `buildBuildingMesh` keeps the footprint index of a spec array (`WeakMap`, checked against every ring), and the cut roof cells of a spec (checked against its box, grid and roof triangles).
 - The hit commits the state at once (`destroy()` returns the new state), then queues the rest, one job per task: the before mesh by parts (reused from the last drawn mesh when its state hash matches), `fallPieces`, the new damaged mesh. A last task moves the prepared falls to the current clock time with `retimeFall`, uploads everything and shows it. The picture changes about 0.1 s after the hit.
-- `__wh.destructionSettled()` resolves when the picture is shown; `collapseAt` flushes the queue first.
+- A promise for scripts resolves when the picture is shown, and anything that needs the final state (such as `collapseAt`) flushes the queue first.
 
 ## Known weaknesses
 
-Measured on 2026-11-13 with headless Chrome on the development machine:
-
-- A hit on the largest campus structure: `destroy()` 8–9 ms when the description is ready, longest task after it 30–34 ms (`fallPieces`), picture shown after 110–120 ms. A hit within about a second of loading describes the structure on the spot: 32–43 ms in the bench (with the profiler on). No task of 50 ms or more in either case.
+- A hit on a large structure is not cheap by itself. `fallPieces` is the longest single step, and describing the structure on the spot adds to it; an app keeps its tasks short only by splitting the hit as in [Keeping a hit cheap](#keeping-a-hit-cheap).
 - Pieces can still pass through each other: there is no piece-to-piece test, only the lean away from the centre and the stagger. A large roof section can sweep through wall pieces as it tilts.
 - A piece is tested against standing parts at two points of its flight only. A fast piece can clip a corner between them.
-- Campus screenshots at the usual zooms show the pieces small; most of the look was judged on the destruction example (`examples/destruction`).
+- The look of the pieces was judged mostly on the destruction example (`examples/destruction`), at its zooms.
 - Interiors are generic: the same division on every storey, empty rooms, dark by day.

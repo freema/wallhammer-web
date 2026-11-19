@@ -116,8 +116,11 @@ Things to notice:
 ## Where to look next
 
 - [Recipes](recipes.md) has short, checked samples for the common extensions; [Draw moving copies with instance sets](recipes.md#draw-moving-copies-with-instance-sets) shows `instanceSet`, `writeInstance`, `pushInstance` and `InstanceSetLayer` with their material.
+- [The environment](environment.md) explains the light this scene gets: the hour and the date, the sky, the weather, clouds, fog and seasons, and what a material calls to receive them.
 - `examples/minimal-3d/src/main.ts` is the same pattern with instancing, an environment slot, the sky and the simulation.
 - `examples/endless/src/main.ts` streams an endless world.
-- `examples/planet/src/main.ts` joins the sphere world, the atmosphere and the free camera in one flight ([The planet example](planet.md)).
+- `examples/planet/src/main.ts` joins the sphere world, the atmosphere and the free camera in one flight, with volumetric clouds, rain and a sea to dive into ([The planet example](planet.md)).
 - `examples/system/src/main.ts` adds a system of bodies and hands the camera from the frame of one body to the next ([The system example](system.md)).
 - `examples/destruction/src/main.ts` uses `gen-arch` and `sim/destruction`.
+- `examples/walk/src/main.ts` walks a figure over a collision world with a follow camera ([Walking](walking.md)).
+- `examples/fantasy-village/src/main.ts` is a whole scene with content modules of its own in the example, and a movie mode.

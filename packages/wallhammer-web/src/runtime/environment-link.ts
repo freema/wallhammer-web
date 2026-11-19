@@ -8,7 +8,7 @@ import type { View } from '../base/view.ts';
 import type { EnvSlot, FrameEnvironment } from '../base/env-slot.ts';
 import type { Renderer } from '../render/index.ts';
 import type { EnvFrameBlock, Environment } from '../env/index.ts';
-import { ATMOSPHERE_FALLBACK, CLOUD_FIELD_SLOT, LIGHTING, SHADOW_QUERY, SKY_FALLBACK, lightingGlsl, shadowGlsl } from '../env/index.ts';
+import { ATMOSPHERE_FALLBACK, CLOUD_FIELD_SLOT, CLOUD_SHADOW_SLOT, CLOUD_SHADOW_UNIT, LIGHTING, SHADOW_QUERY, SKY_FALLBACK, lightingGlsl, shadowGlsl } from '../env/index.ts';
 
 export interface EnvironmentLinkOptions {
   /** Background colour in full daylight; the environment darkens it at night. */
@@ -33,10 +33,14 @@ export class EnvironmentLink {
     this.env = env;
     this.block = block;
     this.background = options.background;
-    // A cloud cover by place (its slot) brings its functions with the lighting include.
+    // A cloud cover by place (its slot) brings its functions with the lighting include; the cloud shadow texture (its
+    // slot) makes `cloudLight` read the texture, from a unit fixed for every program.
     const byPlace = block.slots.some((s) => s.name === CLOUD_FIELD_SLOT);
-    renderer.includes.set('lighting', byPlace ? lightingGlsl({ cloudField: true }) : LIGHTING);
-    renderer.includes.set('shadow', byPlace ? shadowGlsl({ cloudField: true }) : SHADOW_QUERY);
+    const shadowTexture = block.slots.some((s) => s.name === CLOUD_SHADOW_SLOT);
+    const clouds = { cloudField: byPlace, cloudShadow: shadowTexture };
+    renderer.includes.set('lighting', byPlace || shadowTexture ? lightingGlsl(clouds) : LIGHTING);
+    renderer.includes.set('shadow', byPlace || shadowTexture ? shadowGlsl(clouds) : SHADOW_QUERY);
+    if (shadowTexture) renderer.device.fixSampler('u_cloudShadow', CLOUD_SHADOW_UNIT);
     // `<sky>` always resolves: the sky slot's functions when it is registered, otherwise stand-ins without haze.
     renderer.includes.set('sky', SKY_FALLBACK);
     // The same for `<atmosphere>`: without the atmosphere slot `atmosphereApply` passes the colour unchanged.

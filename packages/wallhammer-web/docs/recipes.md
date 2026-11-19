@@ -356,7 +356,7 @@ Rules:
 
 ## Add an animated rig
 
-Where: the app (the campus app keeps its rigs in one folder of its own). A rig is plain data; the layer animates it.
+Where: the app, for example in one folder of its own (`examples/walk/src/` and `examples/outpost/src/` have theirs). A rig is plain data; the layer animates it.
 
 ```ts
 import type { RigDesc, RigPart } from 'wallhammer-web/base';
@@ -473,7 +473,7 @@ const entities: AgendaEntity[] = file.people.map((person, i) => ({
 ```
 
 - Snap points to the graph in the app (doors to path ends at houses, parking to bays, the border to graph nodes near the edge) and say how far each moved.
-- Write down in `notes` what the source does not have (stay lengths, the way back, which vehicle someone rides) and what was assumed instead. The campus app has such a preparation script for its synthetic population.
+- Write down in `notes` what the source does not have (stay lengths, the way back, which vehicle someone rides) and what was assumed instead.
 - Keep a synthetic fallback for when the file is missing, so the app runs without the external model.
 
 ## Report loading progress

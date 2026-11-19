@@ -18,14 +18,19 @@ import type { Canvas, CanvasSizeTarget, LoopClock, OrbitControl } from '../platf
 import { Device, createContext } from '../gpu/index.ts';
 import { Renderer } from '../render/index.ts';
 import type { Layer, RendererOptions } from '../render/index.ts';
-import { Environment, assembleFrameBlock, atmosphereSlot, skySlot } from '../env/index.ts';
+import { Environment, assembleFrameBlock, atmosphereSlot, cloudShadowSlot, skySlot } from '../env/index.ts';
 import type { AtmosphereParams, EnvFrameBlock, EnvironmentConfig, SkyParams } from '../env/index.ts';
 import { Simulation } from '../sim/index.ts';
 import type { SimData, SimulationOptions, System } from '../sim/index.ts';
 import { EnvironmentLink } from './environment-link.ts';
-import { PrecipitationLayer } from './precipitation.ts';
+import { PrecipitationLayer, precipitationNeedsDepth } from './precipitation.ts';
+import type { PrecipitationOptions } from './precipitation.ts';
 import { SkyLayer } from './sky.ts';
 import { AtmosphereLayer } from './atmosphere.ts';
+import { CloudShadowLayer } from './cloud-shadows.ts';
+import type { CloudShadowOptions } from './cloud-shadows.ts';
+import { CloudVolumeLayer } from './cloud-volume.ts';
+import type { CloudVolumeOptions } from './cloud-volume.ts';
 
 export interface HeadlessEngineOptions {
   /** Simulation settings, or a simulation built beforehand. */
@@ -50,8 +55,13 @@ export interface EngineOptions<V extends EngineView> extends HeadlessEngineOptio
   renderer?: Omit<RendererOptions, 'palette' | 'frameSlots'>;
   /** Drag orbits and the wheel zooms (the view must be an orbit rig). */
   orbitControls?: boolean;
-  /** Adds the screen-space rain and snow layer; it stays the last layer drawn. */
-  precipitation?: boolean;
+  /**
+   * Adds the rain and snow layer (`PrecipitationLayer`, `Engine.precipitation`); it stays the last layer drawn. `true`
+   * or the options: drops and flakes in the world round the eye, with splashes, rings and specks where they land. The
+   * landing marks read the scene's depth, so in the standard depth mode the engine then draws the frame offscreen
+   * (`RendererOptions.readableDepth`).
+   */
+  precipitation?: boolean | PrecipitationOptions;
   /**
    * Adds the sky (perspective views only): the sky slot in the Frame block and the sky layer, drawn first. `true` or
    * the sky's params. Materials get the haze on distant geometry by calling `aerialPerspective` from `<sky>`.
@@ -65,6 +75,19 @@ export interface EngineOptions<V extends EngineView> extends HeadlessEngineOptio
    * light from `atmosphereLight`, both from `<atmosphere>`. Use it in the place of `sky`, not together with it.
    */
   atmosphere?: boolean | Partial<AtmosphereParams>;
+  /**
+   * Cloud shadows from a texture (default off): the slot `cloudShadowSlot` in the Frame block and the layer that draws
+   * the texture (`Engine.cloudShadows`). `cloudLight` then reads one texel where the texture reaches (a square of 24
+   * cloud sizes around the eye) instead of computing the cloud pattern, and puts the shadow of a point above or below
+   * the base surface along the light instead of straight down. Materials stay as they are. `true` or the options.
+   */
+  cloudShadows?: boolean | CloudShadowOptions;
+  /**
+   * Volumetric clouds (perspective views only; default off): the layer `CloudVolumeLayer` (`Engine.cloudVolume`),
+   * kept after every layer added through `add` (before the precipitation) until `moveCloudsBefore` places it. With
+   * `sky` the sky draws no flat cloud deck of its own. `true` or the options (the engine passes its atmosphere).
+   */
+  cloudVolume?: boolean | CloudVolumeOptions;
   /**
    * Upper limit of the canvas's pixels per CSS pixel. Default: none, the device's own pixel ratio. Below it the image
    * is drawn at fewer pixels and the browser scales it up to the canvas's CSS size; the view's `dpr` is the ratio in
@@ -175,11 +198,18 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
   private _view: V;
   readonly loop: FrameLoop;
   private readonly undo: (() => void)[] = [];
-  private readonly precipitation: PrecipitationLayer | null;
+  /** The rain and snow layer (`EngineOptions.precipitation`), null without it. */
+  readonly precipitation: PrecipitationLayer | null;
   /** The sky layer (and through it the sky slot), or null without `sky`. */
   readonly sky: SkyLayer | null;
   /** The atmosphere layer (and through it the atmosphere slot), or null without `atmosphere`. */
   readonly atmosphere: AtmosphereLayer | null;
+  /** The layer that draws the cloud shadow texture (and through it its slot), or null without `cloudShadows`. */
+  readonly cloudShadows: CloudShadowLayer | null;
+  /** The volumetric clouds, or null without `cloudVolume`. */
+  readonly cloudVolume: CloudVolumeLayer | null;
+  /** Whether `add` keeps the cloud volume after the layers it adds (until `moveCloudsBefore`). */
+  private cloudsLast = true;
   /** The cap of the canvas's pixel ratio (`EngineOptions.maxPixelRatio`), undefined for none. */
   readonly maxPixelRatio: number | undefined;
 
@@ -189,7 +219,10 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
     this._view = o.view;
     // The depth mode is the renderer's option; the context has to know it, as a canvas for the reversed or the
     // logarithmic mode is created without its own depth buffer.
-    this.device = new Device(createContext(o.canvas, o.renderer?.depth ?? 'standard', o.renderer?.samples));
+    // Precipitation with landing marks reads the depth, which a canvas in the standard mode cannot give.
+    const precipitation = o.precipitation === true ? {} : o.precipitation ? o.precipitation : null;
+    const readableDepth = (o.renderer?.readableDepth ?? false) || (precipitation !== null && precipitationNeedsDepth(precipitation, o.view));
+    this.device = new Device(createContext(o.canvas, o.renderer?.depth ?? 'standard', o.renderer?.samples, readableDepth));
     this.maxPixelRatio = o.maxPixelRatio;
     if (o.contextRecovery) {
       // Before the first upload: the device keeps only what is uploaded from now on.
@@ -205,15 +238,26 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
     }
     const sky = o.sky ? skySlot(o.sky === true ? {} : o.sky) : null;
     const air = o.atmosphere ? atmosphereSlot(o.atmosphere === true ? {} : o.atmosphere) : null;
-    this.block = air ? assembleFrameBlock([...(o.slots ?? []), ...(sky ? [sky] : []), air]) : assembleFrameBlock(sky ? [...(o.slots ?? []), sky] : (o.slots ?? []));
-    this.renderer = new Renderer(this.device, { ...o.renderer, palette: o.palette.data(), frameSlots: this.block });
+    const shade = o.cloudShadows ? cloudShadowSlot() : null;
+    const engineSlots = [...(sky ? [sky] : []), ...(air ? [air] : []), ...(shade ? [shade] : [])];
+    this.block = assembleFrameBlock(engineSlots.length > 0 ? [...(o.slots ?? []), ...engineSlots] : (o.slots ?? []));
+    this.renderer = new Renderer(this.device, { ...o.renderer, ...(readableDepth ? { readableDepth } : {}), palette: o.palette.data(), frameSlots: this.block });
     this.link = new EnvironmentLink(this.renderer, this.env, { background: o.background, block: this.block });
-    this.sky = sky ? new SkyLayer(this.renderer, sky) : null;
+    this.sky = sky ? new SkyLayer(this.renderer, sky, { clouds: !o.cloudVolume }) : null;
     if (this.sky) this.renderer.add(this.sky);
     this.atmosphere = air ? new AtmosphereLayer(this.renderer, air) : null;
     if (this.atmosphere) this.renderer.add(this.atmosphere);
-    this.precipitation = o.precipitation ? new PrecipitationLayer(this.renderer, this.link) : null;
+    this.cloudShadows = shade ? new CloudShadowLayer(this.renderer, this.link, shade, o.cloudShadows === true ? {} : (o.cloudShadows as CloudShadowOptions)) : null;
+    if (this.cloudShadows) this.renderer.add(this.cloudShadows);
+    const volume = o.cloudVolume === true ? {} : o.cloudVolume ? o.cloudVolume : null;
+    this.cloudVolume = volume ? new CloudVolumeLayer(this.renderer, this.link, { atmosphere: this.atmosphere, ...volume }) : null;
+    if (this.cloudVolume) this.renderer.add(this.cloudVolume);
+    // The shadows on the ground from the volume's clouds.
+    if (this.cloudShadows && this.cloudVolume) this.cloudShadows.source = this.cloudVolume;
+    this.precipitation = precipitation ? new PrecipitationLayer(this.renderer, this.link, precipitation) : null;
     if (this.precipitation) this.renderer.add(this.precipitation);
+    // Under a gap of the volumetric clouds the eye stays dry.
+    if (this.precipitation && this.cloudVolume) this.precipitation.source = this.cloudVolume;
 
     // The loop drives one clock: this engine's frame. It is animating while the simulation or an environment clock runs.
     const engine = this;
@@ -300,9 +344,16 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
     this.loop.invalidate();
   }
 
-  /** Adds a layer; layers draw in the order they are added, the precipitation layer stays last. */
+  /**
+   * Adds a layer; layers draw in the order they are added, the precipitation layer stays last and the cloud volume
+   * just before it (until `moveCloudsBefore`).
+   */
   add(layer: Layer): void {
     this.renderer.add(layer);
+    if (this.cloudVolume && this.cloudsLast) {
+      this.renderer.remove(this.cloudVolume);
+      this.renderer.add(this.cloudVolume);
+    }
     if (this.precipitation) {
       this.renderer.remove(this.precipitation);
       this.renderer.add(this.precipitation);
@@ -313,8 +364,8 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
    * Draws the sky behind the scene (`SkyLayer.behindScene`): only where no layer drawn before it has drawn, instead
    * of across the whole screen before everything. Moves the sky layer to just before `layer`, which should be the
    * first layer that blends or does not write depth (water, glass, particles); null puts it after every layer added
-   * so far (before the precipitation). The image stays the same when every layer before it is opaque. Layers added
-   * afterwards are drawn after the sky. Does nothing without `sky`.
+   * so far (before the cloud volume and the precipitation). The image stays the same when every layer before it is
+   * opaque. Layers added afterwards are drawn after the sky. Does nothing without `sky`.
    */
   moveSkyBefore(layer: Layer | null): void {
     const sky = this.sky;
@@ -322,8 +373,22 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
     sky.behindScene = true;
     this.renderer.remove(sky);
     if (layer) this.renderer.addBefore(sky, layer);
+    else if (this.cloudVolume && this.cloudsLast) this.renderer.addBefore(sky, this.cloudVolume);
     else if (this.precipitation) this.renderer.addBefore(sky, this.precipitation);
     else this.renderer.add(sky);
+  }
+
+  /**
+   * Draws the cloud volume just before `layer` (the first layer that blends and should be seen through the clouds,
+   * such as far air shells) from now on; layers added afterwards through `add` are drawn after it. The layers before
+   * it should be the opaque ones: the clouds hide them by their depth. Does nothing without `cloudVolume`.
+   */
+  moveCloudsBefore(layer: Layer): void {
+    const v = this.cloudVolume;
+    if (!v) return;
+    this.cloudsLast = false;
+    this.renderer.remove(v);
+    this.renderer.addBefore(v, layer);
   }
 
   /** Starts the frame loop: continuous while something moves, otherwise only on `invalidate`. */

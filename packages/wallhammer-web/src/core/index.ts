@@ -1,4 +1,4 @@
-// Layer 2, core: clocks and the palette mechanism.
+// Layer 2, core: clocks, the palette mechanism and small shared arithmetic (with its GLSL twins).
 
 export { Clock } from './clock.ts';
 export type { ClockOptions } from './clock.ts';
@@ -13,3 +13,4 @@ export type { Body, BodyDef, SubPoint } from './bodies.ts';
 export { FADE_GLSL, LevelFade, fadeFragment, withFade } from './level-fade.ts';
 export type { LevelFadeOptions } from './level-fade.ts';
 export { COVER_FADE_GLSL, coverFade, coverKeep } from './cover-fade.ts';
+export { MEDIUM_GLSL, mediumClearDistance, mediumFresnel, mediumPath, mediumThrough } from './medium.ts';

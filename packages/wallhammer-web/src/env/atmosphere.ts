@@ -22,6 +22,7 @@
 // a material may call `atmosphereAir` and `atmosphereApply` in any engine and ask `#ifdef WH_ATMOSPHERE` before it
 // uses the rest.
 
+import { smoothstep } from '../base/math.ts';
 import type { RGB, Vec3 } from '../base/math.ts';
 import type { TextureData } from '../base/data.ts';
 import type { EnvSlot, FrameEnvironment } from '../base/env-slot.ts';
@@ -64,6 +65,12 @@ export interface AtmosphereParams extends AtmosphereMedium {
   sunDiscRad: number;
   /** Visibility of the stars behind dark air, 0–1. */
   stars: number;
+  /**
+   * Height of the cloud tops in metres. Under an overcast sky (the frame's cloud cover over the eye from 0.5 to 0.9)
+   * the sky's light on surfaces turns into the grey, even light the clouds pass on and the air's own light dims and
+   * greys; an eye above this height (fading out up to twice it) looks down on the clouds and sees neither.
+   */
+  cloudTopM: number;
   /** Where up is +y: height of the ground in render space. */
   groundY: number;
   /** Steps along a view ray of the sky and along the way to a surface point (at most 48). Fixed at creation. */
@@ -104,6 +111,7 @@ export const DEFAULT_ATMOSPHERE: Omit<AtmosphereParams, 'eye' | 'eyeHeightM'> = 
   nightLight: [0.02, 0.025, 0.04],
   sunDiscRad: 0.012,
   stars: 1,
+  cloudTopM: 4000,
   groundY: 0,
   skySteps: 24,
   airSteps: 8,
@@ -483,6 +491,22 @@ export interface AtmosphereValues {
   nightLight: RGB;
   /** 1 for the reference quality (`AtmosphereParams.reference`), else 0. */
   reference: number;
+  /** How overcast the sky over the eye is, 0–1 (`atmosphereOvercast`). */
+  overcast: number;
+}
+
+/** Cloud cover over the eye from which the sky counts as overcast, and where it is fully so. */
+const OVERCAST_FROM = 0.5;
+const OVERCAST_TO = 0.9;
+/** The light an overcast sky passes on to the ground, as a share of the sun and the sky above the clouds. */
+const OVERCAST_LIGHT = 0.3;
+
+/**
+ * How overcast the sky over the eye is, 0–1: the cloud cover over the eye from 0.5 to 0.9, fading out as the eye rises
+ * from the cloud tops (`cloudTopM`) to twice their height.
+ */
+export function atmosphereOvercast(cloudCover: number, eyeHeightM: number, cloudTopM: number): number {
+  return smoothstep(OVERCAST_FROM, OVERCAST_TO, cloudCover) * (1 - smoothstep(cloudTopM, 2 * cloudTopM, eyeHeightM));
 }
 
 /** An atmosphere slot: the slot and the tables computed for its medium. */
@@ -519,6 +543,7 @@ export function computeAtmosphere(E: FrameEnvironment, p: AtmosphereParams, m: A
     skyLightGain: p.skyLightGain,
     nightLight: p.nightLight,
     reference: p.reference ? 1 : 0,
+    overcast: p.eye ? atmosphereOvercast(E.cloudCover, p.eyeHeightM, p.cloudTopM) : 0,
   };
 }
 
@@ -661,6 +686,12 @@ vec3 atmDisplay(vec3 light) {
   return 1.0 - exp(-light * u_atmSun.w);
 }
 
+// The air's light under an overcast sky: the sun that lights it is mostly behind the clouds, so it is dimmer and grey.
+vec3 atmUnderCloud(vec3 air) {
+  float oc = u_atmCloud.x;
+  return oc > 0.0 ? mix(air, vec3(dot(air, vec3(0.3, 0.59, 0.11))), 0.75 * oc) * (1.0 - 0.6 * oc) : air;
+}
+
 // The eye relative to the centre of the sphere. Its distance comes from the height computed on the CPU, which stays
 // exact a metre above a sphere thousands of kilometres across.
 vec3 atmEye(out float h) {
@@ -727,7 +758,7 @@ vec3 atmosphereApply(vec3 display, vec3 worldPos) {
   if (u_atmSun.w <= 0.0) return display;
   vec3 through;
   vec3 air = atmAirTo(worldPos, through);
-  return display * through + atmDisplay(air);
+  return display * through + atmDisplay(atmUnderCloud(air));
 }
 
 // For a vertex shader: the air between the eye and the vertex, as the two values the fragment shader hands to
@@ -745,7 +776,7 @@ vec3 atmosphereAir(vec3 worldPos, out vec3 through) {
 vec3 atmosphereApply(vec3 display, vec3 worldPos, vec3 air, vec3 through) {
   if (u_atmSun.w <= 0.0) return display;
   if (u_atmNight.w > 0.5) return atmosphereApply(display, worldPos);
-  return display * through + atmDisplay(air);
+  return display * through + atmDisplay(atmUnderCloud(air));
 }
 
 // Colour of the direct sun at a point, as a multiple of the surface colour: white above the air, red through a long
@@ -758,15 +789,24 @@ vec3 atmosphereSun(vec3 worldPos) {
 
 // Light on a surface as a multiple of its colour, in the place of lightOn: the sun through the air over the point,
 // the sky's light there and what remains at night. sun is the share of direct light (shadows, clouds), ao the share
-// of the surroundings' light.
+// of the surroundings' light. Under an overcast sky (u_atmCloud.x) the sky's light turns into the light the clouds pass
+// on: grey, a share of the sun and the sky above them, nearly the same from every side, so the ground is lit flat;
+// the sun through a gap comes in through sun (the cloud shadows).
 vec3 atmosphereLight(vec3 worldPos, vec3 n, float sun, float ao) {
   vec3 p = worldPos - atmCenter();
   float r = max(length(p), 1.0);
   vec3 up = p / r;
   vec3 s = u_atmSun.xyz;
   float mu = dot(up, s);
-  vec3 direct = atmSunAt(r, mu) * (max(dot(n, s), 0.0) * sun);
-  vec3 sky = atmSkyLightAt(r - u_atmShell.x, mu) * (u_atmLight.w * (0.5 + 0.5 * dot(n, up)));
+  vec3 sunHere = atmSunAt(r, mu);
+  vec3 direct = sunHere * (max(dot(n, s), 0.0) * sun);
+  vec3 skyHere = atmSkyLightAt(r - u_atmShell.x, mu) * u_atmLight.w;
+  vec3 sky = skyHere * (0.5 + 0.5 * dot(n, up));
+  float oc = u_atmCloud.x;
+  if (oc > 0.0) {
+    float above = dot(sunHere * max(mu, 0.0) + skyHere, vec3(0.3, 0.59, 0.11));
+    sky = mix(sky, vec3(above * ${OVERCAST_LIGHT} * (0.75 + 0.25 * dot(n, up))), oc);
+  }
   return u_atmLight.rgb * (direct + sky * ao) + u_atmNight.rgb * ao;
 }
 `;
@@ -815,6 +855,7 @@ export function atmosphereSlot(params: Partial<AtmosphereParams> = {}): Atmosphe
       { member: 'u_atmTune', order: 1160, lanes: 'xyzw', doc: 'x 1 / half-width of the absorbing layer, y, z scales of the tables of light scattered more than once and of sky light, w star visibility' },
       { member: 'u_atmLight', order: 1170, lanes: 'xyzw', doc: 'rgb the sun above the air as light on surfaces, w gain of the sky light on surfaces' },
       { member: 'u_atmNight', order: 1180, lanes: 'xyzw', doc: 'rgb light on surfaces without the sun, w 1: the reference quality, every pixel integrates its own view ray' },
+      { member: 'u_atmCloud', order: 1190, lanes: 'xyzw', doc: 'x how overcast the sky over the eye is (atmosphereOvercast), yzw 0' },
     ],
     compute: (E, q) => computeAtmosphere(E, q, medium, tables),
     lanes: (v) => [
@@ -842,6 +883,10 @@ export function atmosphereSlot(params: Partial<AtmosphereParams> = {}): Atmosphe
       v.skyLightGain,
       ...v.nightLight,
       v.reference,
+      v.overcast,
+      0,
+      0,
+      0,
     ],
     glsl: atmosphereGlsl(p.skySteps, p.airSteps),
   };

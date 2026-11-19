@@ -13,7 +13,7 @@ A 3D engine for the browser where the whole world is written in code: no model f
 
 A small WebGL2 engine for the browser, written in strict TypeScript. It uses plain WebGL2 and no graphics library. All graphics come from code; the engine loads no images. One world unit is one metre, and y points up.
 
-The engine knows nothing about any particular project. It provides a renderer that draws the layers it is given, view rigs, an environment model (time, sun, sky, weather) that projects extend with environment slots, stateless randomness, generic geometry, a deterministic fixed-step simulation and world streaming. Ground, vegetation and structures come from three optional content modules, `gen-arch`, `gen-ground` and `gen-vegetation`. Nothing else in the engine depends on them.
+The engine knows nothing about any particular project. It provides a renderer that draws the layers it is given, view rigs, an environment model (time, sun, sky and atmosphere, weather, volumetric clouds and their shadows) that projects extend with environment slots, stateless randomness, generic geometry, a deterministic fixed-step simulation and world streaming. Ground, vegetation and structures come from three optional content modules, `gen-arch`, `gen-ground` and `gen-vegetation`. Nothing else in the engine depends on them.
 
 In this repository the package exports its TypeScript sources and the examples build them with Vite. The published npm package holds compiled JavaScript with type declarations (`dist/`) and these docs. Its only runtime dependency is `earcut`, used for roof triangulation in `gen-arch`.
 
@@ -25,7 +25,9 @@ npm install wallhammer-web
 
 The engine is developed in this repository, at `packages/wallhammer-web`. The repository is a pnpm workspace: the engine, its checks (`tools/`) and the examples that exercise it (`examples/`: `minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`), which import the package through the workspace, so a change here reaches them at once. Paths such as `examples/endless/...` in these docs are paths from the repository root.
 
-Projects outside this repository use the published package or keep a copy of a fixed version. These docs name one such project, the campus app, as the place where a pattern is used at full size; its code is not part of this repository.
+Projects outside this repository use the published package or keep a copy of a fixed version.
+
+What changed between versions: [CHANGELOG](https://github.com/freema/wallhammer-web/blob/main/CHANGELOG.md).
 
 ## Documentation
 
@@ -38,13 +40,16 @@ Start here:
 Guides:
 
 - [Rendering](docs/rendering.md): renderer, layers, materials, includes, shadows, environment slots, the sky.
-- [Cameras and views](docs/cameras.md): `SteppedOrthoRig`, `PerspectiveOrbitRig` and the `View` contract.
+- [The environment](docs/environment.md): time of day, sun and moon, the sky and the atmosphere, weather, wind, clouds and their shadows, fog, seasons and snow, in one place.
+- [Cameras and views](docs/cameras.md): `SteppedOrthoRig`, `PerspectiveOrbitRig`, `FreeRig`, `FollowRig`, `OrbitPath` and the `View` contract.
 - [Generators](docs/generators.md): `gen-core`, `gen-mesh`, `gen-tex` and the content modules.
 - [Simulation](docs/simulation.md): `Simulation`, commands, entity tables, navigation, movers and their collision modes, shared areas, agendas and states.
 - [Rigs and actors](docs/rigs.md): instanced animated rigs, `RigLayer`, how an app defines people, vehicles and stop furniture as rigs.
+- [Walking](docs/walking.md): collision world, walker, follow camera.
+- [Motion](docs/motion.md): skeletons, poses, motion graph, reach.
 - [Destruction](docs/destruction.md): destructible structures, events, staged collapse, falling pieces.
 - [World streaming](docs/streaming.md): cells, providers, the streaming manager and `StreamedWorld`.
-- [The planet example](docs/planet.md): the sphere world, the atmosphere, the free camera and the large depth range joined in one flight from the surface to orbit.
+- [The planet example](docs/planet.md): the sphere world, the atmosphere, the free camera and the large depth range joined in one flight from the surface to orbit; clouds from the ground to orbit, biomes and woods, a sea to dive into and a movie mode.
 - [The system example](docs/system.md): a sun and four bodies on their paths, and one flight from the view of the whole system down to a surface, with the camera handed from frame to frame.
 - [Headless use](docs/headless.md): what runs in plain Node without a GPU.
 - [Bodies on rails and nested frames](docs/frames.md): reproducible trigonometry, orbits and spin from time, 64-bit frames and numbers relative to the eye for the GPU.
@@ -57,7 +62,7 @@ Lookup:
 
 ## Entries
 
-Each engine module has its own entry, `wallhammer-web/<module>`. The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. Import `render`, `sim`, `sim/destruction`, `runtime`, `gen-arch`, `gen-ground` and `gen-vegetation` from their own entries.
+Each engine module has its own entry, `wallhammer-web/<module>`. The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. Import `render`, `sim`, `sim/destruction`, `runtime`, `motion`, `gen-plan`, `gen-arch`, `gen-ground` and `gen-vegetation` from their own entries.
 
 ```ts
 import { PerspectiveOrbitRig, definePalette } from 'wallhammer-web';

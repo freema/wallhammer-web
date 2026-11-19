@@ -10,6 +10,7 @@ import { clamp, smoothstep } from '../base/math.ts';
 import type { RGB, Vec3 } from '../base/math.ts';
 import type { EnvSlot, FrameEnvironment } from '../base/env-slot.ts';
 import { CLOUD_OCTAVES } from './glsl.ts';
+import { CLOUD_DECK_CLOSED } from './environment.ts';
 
 export interface SkyParams {
   /**
@@ -66,8 +67,9 @@ const DAY_FROM = -6;
 const DAY_TO = 6;
 // Cloud cover between which the sky closes into a continuous deck. A little before the light goes fully diffuse
 // (the environment's OVERCAST_FROM = 0.55 to 1): rain and snow skies should read as closed.
+// The ground's cloud shadows follow the same closed deck (`CLOUD_DECK_CLOSED`).
 const DECK_FROM = 0.45;
-const DECK_TO = 0.78;
+const DECK_TO = CLOUD_DECK_CLOSED;
 
 function luma(c: RGB): number {
   return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];

@@ -1,7 +1,8 @@
 // Walker: a kinematic body (an upright cylinder) that moves over a collision world in fixed steps. It speeds up and
 // brakes, slides along sides and out of corners, climbs steps up to a height, falls off edges, does not climb a base
-// surface steeper than a limit (and slides down one), jumps from the ground with limited control in the air, stops its
-// head under undersides and turns smoothly toward where it is asked to go. Between steps it gives a position for
+// surface steeper than a limit (and slides down one), jumps from the ground and keeps the velocity and the heading of
+// take-off in the air (a share of control and a turn rate in the air are options, both 0 by default), stops its head
+// under undersides and turns smoothly toward where it is asked to go. Between steps it gives a position for
 // drawing. Plain Node, no DOM; only + − × ÷ and Math.sqrt in a step (detAtan2 for the heading), so the same inputs
 // give the same path bit for bit.
 //
@@ -28,8 +29,16 @@ export interface WalkerSetup {
   runSpeed: number;
   /** Acceleration and braking on the ground, m/s². */
   acceleration: number;
-  /** Share of the acceleration available in the air, 0–1. */
+  /**
+   * Share of the acceleration available in the air, 0–1. 0 (default): the horizontal velocity of take-off is kept until
+   * landing, so the body cannot be steered or braked in the air. A small share (0.05–0.1) allows a slight correction.
+   */
   airControl: number;
+  /**
+   * Fastest turn of `yaw` in the air, radians per second. 0 (default): the heading of take-off is kept until landing,
+   * whatever is asked in the air.
+   */
+  airTurnSpeed: number;
   /** Upward speed of a jump, m/s; 0 disables jumping. */
   jumpSpeed: number;
   /** Downward acceleration, m/s². */
@@ -40,7 +49,7 @@ export interface WalkerSetup {
   maxSlopeDeg: number;
   /** Fixed steps per second. */
   stepHz: number;
-  /** Fastest turn of `yaw` toward the wanted direction, radians per second. */
+  /** Fastest turn of `yaw` toward the wanted direction on the ground, radians per second (in the air: `airTurnSpeed`). */
   turnSpeed: number;
   /**
    * Seconds over which a step up or down is eased out in the drawn position (`renderPosition`), so a body climbing
@@ -57,7 +66,8 @@ export const DEFAULT_WALKER: Readonly<WalkerSetup> = Object.freeze({
   walkSpeed: 1.6,
   runSpeed: 4.5,
   acceleration: 20,
-  airControl: 0.3,
+  airControl: 0,
+  airTurnSpeed: 0,
   jumpSpeed: 4.2,
   gravity: 9.81,
   maxStepUp: 0.35,
@@ -244,6 +254,10 @@ export class Walker {
     this.prevStepOffset = this.stepOffset;
     this.stepOffset *= this.smoothKeep;
     this.steps++;
+    // A step that starts on the ground steers and turns as on the ground (also the step of a take-off, and the first
+    // step after a teleport onto the ground); a step that starts in the air (also the step of a landing) only as much as
+    // airControl and airTurnSpeed allow.
+    const onGround = this.grounded || p[1]! <= w.groundAt(p[0]!, p[2]!, p[1]!, 0, s.radius) + ON_BASE_EPS;
 
     // Wanted horizontal velocity.
     let mx = intent.moveX;
@@ -277,7 +291,7 @@ export class Walker {
       }
     }
     this.steep = steep;
-    const accel = s.acceleration * (this.grounded ? 1 : s.airControl) * h;
+    const accel = s.acceleration * (onGround ? 1 : s.airControl) * h;
     if (steep) {
       // Across the slope the body is steered as usual; down the slope it slides (the horizontal part of gravity along
       // the incline, g·sinθ·cosθ = g·tanθ / (1 + tan²θ)) and the intent may only add speed downhill, never brake or climb.
@@ -395,20 +409,21 @@ export class Walker {
       p[1] = ny;
     }
 
-    // Heading: toward the wanted direction (or, without one, the direction moved), at most turnSpeed.
+    // Heading: toward the wanted direction (or, without one, the direction moved), at most turnSpeed on the ground and
+    // airTurnSpeed in the air.
+    const lim = (onGround ? s.turnSpeed : s.airTurnSpeed) * h;
     let fx = wantX;
     let fz = wantZ;
     if (fx * fx + fz * fz < STILL_SPEED * STILL_SPEED) {
       fx = moved > STILL_SPEED * h ? movedX : 0;
       fz = moved > STILL_SPEED * h ? movedZ : 0;
     }
-    if (fx !== 0 || fz !== 0) {
+    if (lim > 0 && (fx !== 0 || fz !== 0)) {
       // UP: the heading plane would be the local horizon.
       const target = detAtan2(-fx, -fz);
       let d = target - this.yaw;
       while (d > PI) d -= TWO_PI;
       while (d <= -PI) d += TWO_PI;
-      const lim = s.turnSpeed * h;
       this.yaw += d > lim ? lim : d < -lim ? -lim : d;
       if (this.yaw > PI) this.yaw -= TWO_PI;
       else if (this.yaw <= -PI) this.yaw += TWO_PI;

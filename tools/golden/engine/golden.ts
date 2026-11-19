@@ -46,6 +46,11 @@ import { cellStatesScript, refreshScript } from './cell-states-scenario.ts';
 import { DEFAULT_ATMOSPHERE_MEDIUM, atmosphereFor, atmosphereSlot, atmosphereTables, sphereSunDirection, sunPosition } from '../../../packages/wallhammer-web/src/env/index.ts';
 import { COVER_FADE_GLSL, coverFade, coverKeep } from '../../../packages/wallhammer-web/src/core/index.ts';
 import { SPHERE_PATCH_COVER_LAYOUT, SPHERE_PATCH_LAYOUT, spherePatchMesh, valueNoise3 } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
+import { NOISE_VOLUME_DETAIL, NOISE_VOLUME_SHAPE, detailNoiseAt, noiseVolumeData, perlinTile, shapeNoiseAt, worleyTile } from '../../../packages/wallhammer-web/src/gen-tex/index.ts';
+import { NOISE_VOLUME_GLSL } from '../../../packages/wallhammer-web/src/render/noise-volumes.ts';
+import { cloudFieldSun, cloudShadowProjection, cloudShadowSlot } from '../../../packages/wallhammer-web/src/env/index.ts';
+import { CLOUD_RAIN_DENSITY, DEFAULT_CLOUD_WEATHER_RULES, atmosphereOvercast, cloudVolumeColumnDepth, cloudVolumeDeck, cloudVolumeNearShare, cloudVolumeRainShare, cloudVolumeTypedProfile, cloudWeatherKind } from '../../../packages/wallhammer-web/src/env/index.ts';
+import { CLOUD_VOLUME_GLSL, CLOUD_VOLUME_QUALITY, CLOUD_VOLUME_TILE, DEFAULT_CLOUD_VOLUME_SHAPE, cloudVolumeBayer, cloudVolumeDensity, cloudVolumeDepthDistance, cloudVolumeDepthMap, cloudVolumeFade, cloudVolumeJitter, cloudVolumeKeepHistory, cloudVolumeMarchSize, cloudVolumeProfile, cloudVolumeReproject, cloudVolumeScreenBasis, cloudVolumeSpan, cloudVolumeTargetSize, cloudVolumeThreshold, cloudVolumeTiles } from '../../../packages/wallhammer-web/src/env/index.ts';
 import { NEAR_FLOATS, SPHERE_PATCH_COVER_EXTRA_LAYOUT, SPHERE_PATCH_EXTRA_LAYOUT, cubeNeighbour, distToSegment, lineRing, nearCount, nearKeep, nearScatter } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
 import type { NearFade, NearRecords } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
 import { BUILDING_LAYOUT, ROOF_COVER, WALL_FINISH } from '../../../packages/wallhammer-web/src/gen-arch/index.ts';
@@ -53,6 +58,9 @@ import { RIG_BEND_AXIS, RIG_MOTION, RIG_VERTEX_FLOATS, rigExtended } from '../..
 import type { MeshData, RigDesc, RigPart } from '../../../packages/wallhammer-web/src/base/index.ts';
 import { drainageScript, gridWeightsScript, lineTilesScript, planHorizonScript, planGridScript, routesScript } from './plan-scenario.ts';
 import { plotsScript, sitesScript } from './sites-scenario.ts';
+import { precipitationScript } from './precipitation-scenario.ts';
+import { MEDIUM_GLSL, mediumClearDistance, mediumFresnel, mediumPath, mediumThrough } from '../../../packages/wallhammer-web/src/core/index.ts';
+import { WAVES_GLSL, WAVE_TRAINS_MAX, waveDisplace, waveFade, waveHeight, waveNormal, waveTrains, waveUniforms, waveUnresolved } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STORE = path.join(HERE, 'hashes.json');
@@ -534,9 +542,424 @@ const RECIPES: Record<string, () => string> = {
     if (coverKeep(0, 0) !== 1 || coverKeep(1, 1) !== 0) throw new Error('cover fade: every object is whole at 0 and none is left at 1');
     return hash(out, COVER_FADE_GLSL);
   },
+  'gen-tex noise volumes (shape 32³ and detail 16³ of seeds 0 and 7: bytes; values repeat across the period; seeds differ; the GLSL twin)': () => hash(noiseVolumeScript()),
+  'env cloud shadows (projection snapped to texels fixed to the world, axes across the light; slot lanes; the deck closes the pattern from 0.7 to 0.78)': () => hash(cloudShadowScript()),
+  'env cloud volume (profile, threshold and density over cover and height; ray spans through spheres and planes; fade, jitter, target size; the GLSL)': () => hash(cloudVolumeScript()),
+  'env cloud volume history (texels marched per frame, march and tile sizes; reprojection to an earlier screen; depth to distance in the three depth modes; when the history is kept)': () => hash(cloudVolumeHistoryScript()),
+  'env cloud weather (cloud type and precipitation from the cover; typed profiles; the hand-over share by distance; the column over the eye and the share of the rain under it; how overcast the sky is)': () => hash(cloudWeatherScript()),
+  'core medium (path below a level over heights of both signs; share let through and the clear distance; reflection at the boundary from both sides with total reflection; the GLSL)': () => hash(mediumScript()),
+  'gen-core waves (trains from two winds and seeds; displacement, normal and Jacobian on a grid at three times; the height over a point undoes the shift; fade by sample size; uniforms at a far origin; the GLSL)': () => hash(wavesScript()),
+  'env precipitation (fall along the local down with the wind; drops of the visible tiles at one world place from three eyes and in a life; landing marks the same after a move by the period; the ground that follows the weather; the GLSL)': () => hash(precipitationScript()),
 };
 
 // --- Scripts of the recipes above that do not fit on one line --------------------------------------------------------
+
+/** Values of a recipe as integers of millionths, so the hash does not hang on the last bits of a transcendental. */
+const micro = (v: number): number => Math.round(v * 1e6);
+
+/**
+ * The medium below a level (core/medium.ts): the part of a segment below the level, the share of light a length lets
+ * through, the distance at which a share is left, and the boundary's reflection from the thin and the dense side.
+ */
+function mediumScript(): unknown[] {
+  const out: unknown[] = [MEDIUM_GLSL];
+  const heights = [-40, -3, -0.5, 0, 0.5, 3, 40];
+  for (const from of heights) {
+    for (const to of heights) {
+      for (const length of [1, 25, 600]) {
+        const below = mediumPath(from, to, length);
+        if (!(below >= 0 && below <= length)) throw new Error(`medium: ${below} m of a segment of ${length} m lie below the level`);
+        if (Math.abs(mediumPath(to, from, length) - below) > 1e-9) throw new Error('medium: the path depends on the direction of the segment');
+        if (from >= 0 && to >= 0 && below !== 0) throw new Error('medium: a segment above the level has a part below it');
+        if (from < 0 && to < 0 && below !== length) throw new Error('medium: a segment below the level is not whole in the medium');
+        out.push(micro(below));
+      }
+    }
+  }
+  const EXTINCTION = [[0.35, 0.07, 0.04], [0.02, 0.02, 0.02], [0, 0.5, 1.5]] as const;
+  for (const e of EXTINCTION) {
+    for (const length of [-5, 0, 0.5, 4, 30, 250]) {
+      const t = mediumThrough(e, length);
+      if (t.some((v) => !(v >= 0 && v <= 1))) throw new Error('medium: a share let through outside 0–1');
+      if (length <= 0 && t.some((v) => v !== 1)) throw new Error('medium: no length must let everything through');
+      out.push(...t.map(micro));
+    }
+    for (const share of [0.5, 0.1, 0.01]) {
+      const d = mediumClearDistance(e, share);
+      const least = Math.min(...e);
+      if (least === 0 ? d !== Infinity : Math.abs(Math.max(...mediumThrough(e, d)) - share) > 1e-9) throw new Error(`medium: at the clear distance for ${share} the clearest channel is not at that share`);
+      out.push(Number.isFinite(d) ? micro(d) : 'never');
+    }
+  }
+  // The boundary: from the thin side (eta < 1) and from the dense side (eta > 1), where past the critical angle all is reflected.
+  for (const eta of [1 / 1.33, 1.33, 1.5, 1]) {
+    let prev = Infinity;
+    for (let k = 0; k <= 20; k++) {
+      const c = k / 20;
+      const f = mediumFresnel(c, eta);
+      if (!(f >= 0 && f <= 1)) throw new Error('medium: a reflected share outside 0–1');
+      if (f > prev + 1e-12) throw new Error('medium: the reflected share rises toward the normal');
+      if (mediumFresnel(-c, eta) !== f) throw new Error('medium: the reflected share depends on the side of the normal');
+      const critical = eta > 1 ? Math.sqrt(1 - 1 / (eta * eta)) : -1;
+      if (c < critical - 1e-9 && f !== 1) throw new Error(`medium: no total reflection at cosine ${c} from the dense side (eta ${eta})`);
+      prev = f;
+      out.push(micro(f));
+    }
+    const r0 = ((eta - 1) / (eta + 1)) ** 2;
+    if (Math.abs(mediumFresnel(1, eta) - r0) > 1e-12) throw new Error('medium: the reflection along the normal is not r0');
+  }
+  return out;
+}
+
+/**
+ * The field of wave trains (gen-core/waves.ts): trains from a wind and a seed, the displaced surface with its normal
+ * and Jacobian, the height over a point, the fade by sample size and the uniforms of the GLSL twin.
+ */
+function wavesScript(): unknown[] {
+  const out: unknown[] = [WAVES_GLSL];
+  const FIELDS = [
+    { windSpeedMs: 6, towardX: 0.5, towardZ: 0.866, seed: 2611 },
+    { windSpeedMs: 14, towardX: -1, towardZ: 0.2, seed: 7, count: 5, spreadRad: 0.4, heightScale: 0.6, sharpness: 0.85, shortest: 0.25 },
+  ];
+  for (const options of FIELDS) {
+    const trains = waveTrains(options);
+    if (trains.length !== (options.count ?? WAVE_TRAINS_MAX)) throw new Error(`waves: ${trains.length} trains`);
+    if (hash(JSON.stringify(waveTrains(options))) !== hash(JSON.stringify(trains))) throw new Error('waves: the same options give other trains');
+    if (hash(JSON.stringify(waveTrains({ ...options, seed: options.seed + 1 }))) === hash(JSON.stringify(trains))) throw new Error('waves: another seed gives the same trains');
+    for (let i = 0; i < trains.length; i++) {
+      const t = trains[i]!;
+      if (Math.abs(Math.hypot(t.dirX, t.dirZ) - 1) > 1e-12) throw new Error('waves: a direction is not a unit vector');
+      if (i > 0 && !(t.lengthM < trains[i - 1]!.lengthM)) throw new Error('waves: the trains are not ordered from the longest');
+      if (!(t.amplitudeM > 0)) throw new Error('waves: a train without height');
+      out.push(micro(t.dirX), micro(t.dirZ), micro(t.lengthM), micro(t.amplitudeM), micro(t.sharpness), micro(t.phase));
+    }
+    const sharp = trains[0]!.sharpness;
+    const longest = trains[0]!.lengthM;
+    const tallest = trains.reduce((s, t) => s + t.amplitudeM, 0);
+    for (const time of [0, 3.7, 1234.5]) {
+      for (let j = 0; j < 9; j++) {
+        for (let i = 0; i < 9; i++) {
+          const x = -40 + i * 11.3;
+          const z = 25 + j * 7.9;
+          const d = waveDisplace(trains, x, z, time);
+          const { normal, jacobian } = waveNormal(trains, x, z, time);
+          if (Math.abs(d[1]) > tallest + 1e-9) throw new Error('waves: a point higher than all amplitudes together');
+          if (Math.abs(Math.hypot(...normal) - 1) > 1e-9 || !(normal[1] > 0)) throw new Error('waves: the normal is not a unit vector pointing up');
+          // The surface never folds: the Jacobian stays above 1 − sharpness (to first order in the trains' shifts).
+          if (!(jacobian > 0 && jacobian < 2)) throw new Error(`waves: Jacobian ${jacobian}`);
+          if (jacobian < 1 - sharp - 0.05) throw new Error(`waves: Jacobian ${jacobian} under 1 − sharpness`);
+          // The height over the point a plane point was moved to is that point's height.
+          const h = waveHeight(trains, x + d[0], z + d[2], time);
+          if (Math.abs(h - d[1]) > 0.002 * tallest + 1e-6) throw new Error(`waves: the height over a displaced point is ${h}, the point stands at ${d[1]}`);
+          out.push(...d.map(micro), ...normal.map(micro), micro(jacobian), micro(h));
+        }
+      }
+    }
+    // Fade by sample size: all trains whole at 0, none where a sample covers half the longest train, less in between.
+    const at = [3.3, 8.8] as const;
+    const full = waveDisplace(trains, at[0], at[1], 2);
+    if (waveUnresolved(trains, 0) !== 0) throw new Error('waves: something unresolved at sample size 0');
+    let prevUnresolved = 0;
+    for (const share of [0.05, 0.2, 0.3, 0.45, 0.5, 1]) {
+      const sampleM = longest * share;
+      const d = waveDisplace(trains, at[0], at[1], 2, sampleM);
+      const u = waveUnresolved(trains, sampleM);
+      if (u < prevUnresolved - 1e-15) throw new Error('waves: the unresolved slope falls with a larger sample');
+      if (share >= 0.5 && d.some((v) => v !== 0)) throw new Error('waves: a train survives a sample of half its length');
+      prevUnresolved = u;
+      out.push(...d.map(micro), Math.round(u * 1e9), micro(waveHeight(trains, at[0], at[1], 2, sampleM)));
+    }
+    for (const [length, sample, want] of [[10, 0, 1], [10, 2.5, 1], [10, 5, 0], [10, 40, 0]] as const) if (waveFade(length, sample) !== want) throw new Error(`waves: waveFade(${length}, ${sample}) is not ${want}`);
+    out.push(...full.map(micro), micro(waveFade(10, 3)), micro(waveFade(10, 4)));
+    // Uniforms at an origin far from the plane's zero: phases within one turn, and the same displacement from them.
+    const ORIGIN = [3_456_789.25, -987_654.5] as const;
+    const u = waveUniforms(trains, 77.7, ORIGIN[0], ORIGIN[1]);
+    if (waveUniforms(trains, 77.7, ORIGIN[0], ORIGIN[1], u) !== u) throw new Error('waves: waveUniforms does not reuse its result');
+    const phases = [...u.u_wavePhase0!.vec4, ...u.u_wavePhase1!.vec4];
+    const rel = [12.5, -4.25] as const;
+    const want = waveDisplace(trains, ORIGIN[0] + rel[0], ORIGIN[1] + rel[1], 77.7);
+    const got = [0, 0, 0];
+    for (let i = 0; i < WAVE_TRAINS_MAX; i++) {
+      const w = u[`u_waveTrain${i}`]!.vec4;
+      const p = phases[i]!;
+      if (!(p >= 0 && p < 2 * Math.PI)) throw new Error('waves: a phase outside one turn');
+      if (i >= trains.length && (w.some((v) => v !== 0) || p !== 0)) throw new Error('waves: an unused train is not empty');
+      const k = Math.hypot(w[0], w[1]);
+      if (k <= 0) continue;
+      // The arithmetic of WAVES_GLSL, in double.
+      const th = w[0] * rel[0] + w[1] * rel[1] + p;
+      got[0]! += (w[0] / k) * w[3] * w[2] * Math.cos(th);
+      got[2]! += (w[1] / k) * w[3] * w[2] * Math.cos(th);
+      got[1]! += w[2] * Math.sin(th);
+      out.push(...w.map(micro), micro(p));
+    }
+    for (let c = 0; c < 3; c++) if (Math.abs(got[c]! - want[c]!) > 1e-6) throw new Error(`waves: the uniforms give ${got[c]} where the trains give ${want[c]}`);
+  }
+  return out;
+}
+
+/**
+ * The noise volumes on the CPU at reduced sizes (the cells per volume stay, so a texel spans more of a cell). The
+ * texel function repeats after one period in every axis, so the volume tiles; another seed gives other bytes.
+ */
+function noiseVolumeScript(): unknown[] {
+  const out: unknown[] = [NOISE_VOLUME_GLSL];
+  for (const seed of [0, 7]) out.push(noiseVolumeData('shape', seed, 32), noiseVolumeData('detail', seed, 16));
+  if (hash(noiseVolumeData('shape', 0, 16)) === hash(noiseVolumeData('shape', 1, 16))) throw new Error('noise volumes: seeds 0 and 1 give the same shape volume');
+  for (let i = 0; i < 40; i++) {
+    const u = [((i * 0.6180339) % 1) as number, (i * 0.4142135) % 1, (i * 0.7320508) % 1] as const;
+    for (const [kind, at] of [['shape', (x: number, y: number, z: number) => shapeNoiseAt(x, y, z, NOISE_VOLUME_SHAPE, 3)], ['detail', (x: number, y: number, z: number) => detailNoiseAt(x, y, z, NOISE_VOLUME_DETAIL, 3)]] as const) {
+      const v = at(u[0], u[1], u[2]);
+      if (!(v >= 0 && v <= 1)) throw new Error(`noise volumes: ${kind} out of 0–1 at ${u.join(', ')}: ${v}`);
+      for (const [dx, dy, dz] of [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]] as const) {
+        const w = at(u[0] + dx, u[1] + dy, u[2] + dz);
+        if (Math.abs(w - v) > 1e-9) throw new Error(`noise volumes: ${kind} does not repeat across the period at ${u.join(', ')}: ${v} vs ${w}`);
+      }
+      out.push(Math.round(v * 1e6));
+    }
+    // The single octaves tile with their own periods.
+    const wv = worleyTile(u[0] * 4, u[1] * 4, u[2] * 4, 4, 9);
+    if (Math.abs(worleyTile(u[0] * 4 + 4, u[1] * 4, u[2] * 4 - 4, 4, 9) - wv) > 1e-9) throw new Error('noise volumes: Worley does not repeat');
+    const pv = perlinTile(u[0] * 4, u[1] * 4, u[2] * 4, 4, 9);
+    if (Math.abs(perlinTile(u[0] * 4 + 4, u[1] * 4 + 8, u[2] * 4, 4, 9) - pv) > 1e-9) throw new Error('noise volumes: Perlin does not repeat');
+  }
+  return out;
+}
+
+/**
+ * Cloud shadows: the projection of the texture for a sphere and a plane, eyes a fraction of a texel apart (same
+ * centre) and whole texels apart (centres whole texels apart), axes across the light; the slot's lanes over frames
+ * that draw and frames that keep the texture; the sun share under a closing deck.
+ */
+function cloudShadowScript(): unknown[] {
+  const out: unknown[] = [];
+  const L = ((): [number, number, number] => {
+    const l = Math.hypot(0.3, 0.8, 0.45);
+    return [0.3 / l, 0.8 / l, 0.45 / l];
+  })();
+  const dot = (a: readonly number[], b: readonly number[]): number => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+  for (const radius of [100000, null]) {
+    const eye: [number, number, number] = radius ? [1200, radius + 900, -800] : [1200, 900, -800];
+    const p = cloudShadowProjection(eye, L, radius, 57600, 512, [10, 20]);
+    const texel = 57600 / 512;
+    if (Math.abs(dot(p.axisU, L)) > 1e-12 || Math.abs(dot(p.axisV, L)) > 1e-12 || Math.abs(dot(p.axisU, p.axisV)) > 1e-12) throw new Error('cloud shadows: the axes are not across the light');
+    for (const k of [0.2, 3]) {
+      // Along the first axis of the square, on the base surface: the eye moves k texels.
+      const step = radius ? k * texel * (radius + 900) / radius : k * texel;
+      const moved: [number, number, number] = [eye[0] + p.axisU[0] * step, eye[1] + p.axisU[1] * step, eye[2] + p.axisU[2] * step];
+      const q = cloudShadowProjection(moved, L, radius, 57600, 512, [10, 20]);
+      const du = dot([q.origin[0] - p.origin[0], q.origin[1] - p.origin[1], q.origin[2] - p.origin[2]], p.axisU) / texel;
+      const dv = dot([q.origin[0] - p.origin[0], q.origin[1] - p.origin[1], q.origin[2] - p.origin[2]], p.axisV) / texel;
+      if (Math.abs(du - Math.round(du)) > 1e-6 || Math.abs(dv - Math.round(dv)) > 1e-6) throw new Error(`cloud shadows: centres ${du}, ${dv} texels apart, not whole texels`);
+      if (k < 0.5 && (Math.round(du) !== 0 || Math.round(dv) !== 0)) throw new Error('cloud shadows: a fifth of a texel moved the square');
+      out.push(Math.round(du), Math.round(dv));
+    }
+    out.push(p.origin.map((x) => Math.round(x * 1000)), p.axisU.map((x) => Math.round(x * 1e6)), p.driftU.map((x) => Math.round(x * 1e6)), p.driftV.map((x) => Math.round(x * 1e6)));
+  }
+  const slot = cloudShadowSlot();
+  const block = assembleFrameBlock([slot]);
+  const packed = { afterLight: new Float32Array(block.afterLight * 4), afterView: new Float32Array(block.afterView * 4) };
+  out.push(block.glsl);
+  const env = new Environment({ mode: 'day', site: { latitudeDeg: 51, longitudeDeg: 0, dayOfYear: 250, utcOffsetHours: 0 }, hour: 13, weather: { cloudCover: 0.5 }, animate: false });
+  slot.params.reference = [0, -100000, 0];
+  slot.params.radiusM = 100000;
+  for (const [active, eye, redraw] of [[false, [0, 500, 0], true], [true, [0, 500, 0], false], [true, [300, 500, 0], false], [true, [300, 500, 0], true]] as const) {
+    slot.params.active = active;
+    slot.params.eye = [...eye];
+    slot.params.redraw = redraw;
+    const values = block.pack(env.frame({ heading: 0 }), packed).values.get(slot) as { redraw: boolean; projection: unknown };
+    if (values.redraw) slot.params.last = values.projection as typeof slot.params.last;
+    out.push(values.redraw, packed.afterLight.slice(), packed.afterView.slice());
+  }
+  for (let c = 0; c <= 20; c++) for (const n of [0, 0.3, 0.7, 1]) out.push(Math.round(cloudFieldSun(c / 20, n, 0.5) * 1e6));
+  if (cloudFieldSun(0.78, 0, 0.5) !== cloudFieldSun(0.78, 1, 0.5) || cloudFieldSun(0.69, 0, 0.5) === cloudFieldSun(0.69, 1, 0.5)) throw new Error('cloud shadows: the pattern must vanish under a closed deck (0.78) and show below it');
+  return out;
+}
+
+/**
+ * The cloud volume's model: the height profile and the threshold over the cover (the deck flattens, the threshold
+ * falls), the density (0 at no cover, more cover never less cloud below the deck's cover), the spans of rays through the layer round a
+ * sphere (from below, inside, above, past it, down to the ground) and between two planes, the fade by height, the
+ * per-pixel jitter (0–1, held while the frame index is) and the target size.
+ */
+function cloudVolumeScript(): unknown[] {
+  const S = DEFAULT_CLOUD_VOLUME_SHAPE;
+  const out: unknown[] = [CLOUD_VOLUME_GLSL, S, CLOUD_VOLUME_QUALITY];
+  const r6 = (x: number): number => Math.round(x * 1e6);
+  for (let c = 0; c <= 10; c++) {
+    out.push(r6(cloudVolumeThreshold(c / 10)));
+    for (let h = 0; h <= 20; h++) out.push(r6(cloudVolumeProfile(h / 20, c / 10)));
+  }
+  if (cloudVolumeThreshold(0.2) <= cloudVolumeThreshold(0.8)) throw new Error('cloud volume: the threshold must fall as the cover grows');
+  if (cloudVolumeProfile(0.8, 0.95) >= cloudVolumeProfile(0.8, 0.3)) throw new Error('cloud volume: a closing deck must be lower than heaped clouds');
+  for (const shape of [0.3, 0.6, 0.9]) {
+    for (const h of [0.05, 0.3, 0.7]) {
+      let last = 0;
+      for (let c = 0; c <= 10; c++) {
+        const d = cloudVolumeDensity(shape, 0.5, 0, c / 10, h);
+        if (c === 0 && d !== 0) throw new Error('cloud volume: cloud at no cover');
+        // Up to the cover where the clouds start to flatten into a deck (0.6).
+        if (c <= 6 && d < last - 1e-12) throw new Error(`cloud volume: more cover gives less cloud (shape ${shape}, h ${h}, cover ${c / 10})`);
+        last = d;
+        out.push(r6(d), r6(cloudVolumeDensity(shape, 0.8, 0.6, c / 10, h)));
+      }
+    }
+  }
+  const R = 100000;
+  const unit = (v: readonly [number, number, number]): [number, number, number] => {
+    const l = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / l, v[1] / l, v[2] / l];
+  };
+  const rays: [string, [number, number, number], [number, number, number]][] = [
+    ['ground up', [0, R + 10, 0], [0, 1, 0]],
+    ['ground horizon', [0, R + 10, 0], unit([1, 0.02, 0])],
+    ['inside level', [0, R + 2500, 0], [1, 0, 0]],
+    ['above down', [0, R + 8000, 0], [0, -1, 0]],
+    ['above across', [0, R + 8000, 0], unit([1, -0.03, 0])],
+    ['orbit past', [0, R + 300000, 0], unit([1, -0.1, 0])],
+  ];
+  for (const [name, eye, dir] of rays) {
+    const span = cloudVolumeSpan(eye, dir, R, S.baseM, S.topM, 120000);
+    out.push(name, span.map((x) => Math.round(x * 1000)));
+    if (span[1] > span[0]) {
+      for (const t of [span[0] + 1, span[1] - 1]) {
+        const p = [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
+        const hgt = Math.hypot(p[0]!, p[1]!, p[2]!) - R;
+        if (hgt < S.baseM - 1 || hgt > S.topM + 1) throw new Error(`cloud volume: span of ${name} leaves the layer (${hgt} m)`);
+      }
+    }
+  }
+  const down = cloudVolumeSpan([0, R + 8000, 0], [0, -1, 0], R, S.baseM, S.topM, 120000);
+  if (Math.abs(down[0] - 4000) > 1e-6 || Math.abs(down[1] - 6500) > 1e-6) throw new Error(`cloud volume: straight down from 8 km spans ${down[0]}–${down[1]}`);
+  for (const [eye, dir] of [[[0, 10, 0], [0, 1, 0]], [[0, 2000, 0], unit([1, 0.1, 0])], [[0, 6000, 0], unit([0, -1, 1])], [[0, 10, 0], [1, 0, 0]]] as const) out.push(cloudVolumeSpan(eye, dir, 0, S.baseM, S.topM, 120000).map((x) => Math.round(x * 1000)));
+  for (const h of [0, 15000, 20000, 25000, 30000, 40000]) out.push(r6(cloudVolumeFade(h, 15000, 30000)));
+  for (let i = 0; i < 64; i++) {
+    const j = cloudVolumeJitter(i % 8, i >> 3, i % 3);
+    if (!(j >= 0 && j < 1)) throw new Error('cloud volume: jitter out of 0–1');
+    if (cloudVolumeJitter(i % 8, i >> 3, i % 3) !== j) throw new Error('cloud volume: jitter is not fixed');
+    out.push(r6(j));
+  }
+  out.push(cloudVolumeTargetSize(3200, 1800, 0.5), cloudVolumeTargetSize(1601, 901, 0.35), cloudVolumeTargetSize(1, 1, 0.1));
+  return out;
+}
+
+/**
+ * The weather of the cloud volume on the CPU: the deck share and precipitation from the cover (with the default rules
+ * and with convection), the profile of each type over the height (a deck is lower than heaped clouds, a tall type
+ * reaches higher), the volume's share of the clouds by distance (1 to the hand-over, 0 from its end), the optical depth
+ * of a column through constant shapes (none at no cover, more under rain) and the share of the rain under it, and how
+ * overcast the sky over the eye is.
+ */
+function cloudWeatherScript(): unknown[] {
+  const S = DEFAULT_CLOUD_VOLUME_SHAPE;
+  const r6 = (x: number): number => Math.round(x * 1e6);
+  const out: unknown[] = [DEFAULT_CLOUD_WEATHER_RULES, CLOUD_RAIN_DENSITY];
+  const storm = { ...DEFAULT_CLOUD_WEATHER_RULES, convection: 1 };
+  for (let c = 0; c <= 20; c++) {
+    const [deck, rain] = cloudWeatherKind(c / 20, DEFAULT_CLOUD_WEATHER_RULES);
+    const [deckS, rainS] = cloudWeatherKind(c / 20, storm);
+    if (Math.abs(deck - cloudVolumeDeck(c / 20)) > 1e-12) throw new Error('cloud weather: the default deck share differs from cloudVolumeDeck');
+    if (rainS !== rain || deckS > deck + 1e-12) throw new Error('cloud weather: convection must only lower the deck share');
+    out.push(r6(deck), r6(rain), r6(deckS));
+  }
+  for (const [deck, tall] of [[0, 0], [1, 0], [0, 1], [0.5, 0.5]] as const) for (let h = 0; h <= 20; h++) out.push(r6(cloudVolumeTypedProfile(h / 20, deck, tall)));
+  if (cloudVolumeTypedProfile(0.8, 1, 0) >= cloudVolumeTypedProfile(0.8, 0, 0)) throw new Error('cloud weather: a deck must be lower than heaped clouds');
+  if (cloudVolumeTypedProfile(0.85, 0, 1) <= cloudVolumeTypedProfile(0.85, 0, 0)) throw new Error('cloud weather: a tall type must reach higher');
+  for (const d of [0, 10000, 20000, 25000, 30000, 35000, 40000, 60000]) out.push(r6(cloudVolumeNearShare(d, 20000, 40000, 1)), r6(cloudVolumeNearShare(d, 20000, 40000, 0.5)));
+  if (cloudVolumeNearShare(19000, 20000, 40000, 1) !== 1 || cloudVolumeNearShare(41000, 20000, 40000, 1) !== 0) throw new Error('cloud weather: the near share must be 1 before the hand-over and 0 after it');
+  let last = -1;
+  for (let c = 0; c <= 10; c++) {
+    const cover = c / 10;
+    const tau = cloudVolumeColumnDepth(() => [0.7, 0.6], cover, cloudWeatherKind(cover, DEFAULT_CLOUD_WEATHER_RULES), S);
+    if (c === 0 && tau !== 0) throw new Error('cloud weather: a column at no cover has depth');
+    if (c <= 6 && tau < last - 1e-9) throw new Error('cloud weather: more cover gives a thinner column');
+    last = tau;
+    out.push(r6(tau), r6(cloudVolumeRainShare(tau)));
+  }
+  const dry = cloudVolumeColumnDepth(() => [0.7, 0.6], 0.85, [0, 0], S);
+  const wet = cloudVolumeColumnDepth(() => [0.7, 0.6], 0.85, [0, 1], S);
+  if (!(wet > dry)) throw new Error('cloud weather: rain must thicken the column');
+  if (cloudVolumeRainShare(0) !== 0 || cloudVolumeRainShare(10) !== 1) throw new Error('cloud weather: no rain under a gap, all of it under a thick cloud');
+  for (const cover of [0.3, 0.5, 0.7, 0.9, 1]) for (const h of [0, 3000, 4000, 6000, 8000, 20000]) out.push(r6(atmosphereOvercast(cover, h, 4000)));
+  return out;
+}
+
+/**
+ * The history of the cloud volume on the CPU: four frames march every texel of a 2 × 2 block once; the march and tile
+ * sizes; a point on a view ray reprojects to where it lies on the screen (and to null behind the eye), also for a
+ * turned view and an eye that moved; depth → distance round trips in the standard, reversed and logarithmic modes
+ * (nothing drawn: Infinity); the history is dropped after a cut or a jump.
+ */
+function cloudVolumeHistoryScript(): unknown[] {
+  const out: unknown[] = [CLOUD_VOLUME_TILE];
+  const r6 = (x: number): number => Math.round(x * 1e6);
+  const seen = new Set<string>();
+  for (let i = -5; i < 8; i++) {
+    const b = cloudVolumeBayer(i);
+    out.push(b);
+    if (i >= 0 && i < 4) seen.add(b.join(','));
+  }
+  if (seen.size !== 4) throw new Error('cloud volume history: four frames do not march every texel of a block');
+  out.push(cloudVolumeMarchSize(1600, 900, true), cloudVolumeMarchSize(1601, 901, true), cloudVolumeMarchSize(1601, 901, false), cloudVolumeTiles(1600, 900), cloudVolumeTiles(1601, 901));
+  const unit = (v: readonly number[]): [number, number, number] => {
+    const l = Math.hypot(v[0]!, v[1]!, v[2]!);
+    return [v[0]! / l, v[1]! / l, v[2]! / l];
+  };
+  const tan = Math.tan((50 * Math.PI) / 360);
+  // A view turned off the axes: forward, right and up of unit length, at right angles.
+  const f = unit([0.3, -0.2, -1]);
+  const rr = unit([-f[2], 0, f[0]]);
+  const u = unit([rr[1] * f[2] - rr[2] * f[1], rr[2] * f[0] - rr[0] * f[2], rr[0] * f[1] - rr[1] * f[0]]);
+  const center = f;
+  const right: [number, number, number] = [rr[0] * tan * 1.6, rr[1] * tan * 1.6, rr[2] * tan * 1.6];
+  const up: [number, number, number] = [u[0] * tan, u[1] * tan, u[2] * tan];
+  const inv = cloudVolumeScreenBasis(center, right, up);
+  if (!inv) throw new Error('cloud volume history: no basis for a view');
+  if (cloudVolumeScreenBasis([0, 0, 1], [0, 0, 2], [0, 1, 0]) !== null) throw new Error('cloud volume history: a flat basis must give null');
+  out.push(inv.map(r6));
+  for (const [x, y] of [[0, 0], [0.5, -0.25], [-1, 1], [0.9, 0.9]] as const) {
+    const ray = unit([center[0] + right[0] * x + up[0] * y, center[1] + right[1] * x + up[1] * y, center[2] + right[2] * x + up[2] * y]);
+    const p = cloudVolumeReproject(inv, [0, 0, 0], ray, 2500);
+    if (!p || Math.abs(p[0] - x) > 1e-9 || Math.abs(p[1] - y) > 1e-9) throw new Error(`cloud volume history: the ray through ${x}, ${y} reprojects to ${p}`);
+    // The eye moved 40 m forward: seen from where it stood, the same point lay nearer the middle of the screen.
+    const q = cloudVolumeReproject(inv, [f[0] * 40, f[1] * 40, f[2] * 40], ray, 2500)!;
+    out.push(r6(q[0]), r6(q[1]));
+    if (Math.abs(q[0]) > Math.abs(x) + 1e-12 || Math.abs(q[1]) > Math.abs(y) + 1e-12) throw new Error('cloud volume history: after a step forward a point lay further out on the old screen');
+  }
+  if (cloudVolumeReproject(inv, [0, 0, 0], [-f[0], -f[1], -f[2]], 100) !== null) throw new Error('cloud volume history: a point behind the eye must give null');
+  // Depth → distance: perspective matrices that look down −z, column-major.
+  const n = 0.5;
+  const far = 2e6;
+  const std = new Float32Array(16);
+  std[0] = 1;
+  std[5] = 1;
+  std[10] = -(far + n) / (far - n);
+  std[11] = -1;
+  std[14] = (-2 * far * n) / (far - n);
+  const rev = new Float32Array(16);
+  rev[0] = 1;
+  rev[5] = 1;
+  rev[11] = -1;
+  rev[14] = n;
+  const logScale = 1 / Math.log2(1 + far);
+  const maps = [cloudVolumeDepthMap('standard', std, 0), cloudVolumeDepthMap('reversed', rev, 0), cloudVolumeDepthMap('logarithmic', std, logScale)] as const;
+  out.push(maps.map((m) => m.map((x) => Math.round(x * 1e9))));
+  for (const d of [1, 100, 1e4, 1e6]) {
+    const depths = [0.5 * ((std[10]! * -d + std[14]!) / d) + 0.5, n / d, Math.log2(1 + d) * logScale];
+    depths.forEach((z, k) => {
+      const back = cloudVolumeDepthDistance(z, maps[k]!);
+      // Float32 matrices: the standard mode loses digits far out.
+      if (Math.abs(back - d) > d * (k === 0 ? 2e-2 : 1e-6)) throw new Error(`cloud volume history: depth of ${d} m comes back as ${back} m (mode ${k})`);
+      out.push(Math.round(back * 1000));
+    });
+  }
+  if (cloudVolumeDepthDistance(1, maps[0]) !== Infinity || cloudVolumeDepthDistance(0, maps[1]) !== Infinity || cloudVolumeDepthDistance(1, maps[2]) !== Infinity) throw new Error('cloud volume history: an empty pixel must lie at Infinity');
+  if (cloudVolumeDepthMap('logarithmic', std, 0)[0] !== 0) throw new Error('cloud volume history: the logarithmic mode without a scale has no map');
+  const keep = [cloudVolumeKeepHistory(0, 0, 1), cloudVolumeKeepHistory(99, 0, 1), cloudVolumeKeepHistory(101, 0, 1), cloudVolumeKeepHistory(1000, 6000, 1), cloudVolumeKeepHistory(2000, 6000, 1), cloudVolumeKeepHistory(0, 0, Math.cos((31 * Math.PI) / 180)), cloudVolumeKeepHistory(0, 0, Math.cos((29 * Math.PI) / 180))];
+  if (keep.join(',') !== 'true,true,false,true,false,false,true') throw new Error(`cloud volume history: kept ${keep.join(',')}`);
+  out.push(keep);
+  return out;
+}
 
 /**
  * The extra channel of a sphere patch: cells inside a face and on an edge of the cube at levels 6 and 7, plain and with

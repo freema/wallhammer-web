@@ -9,7 +9,7 @@
 import { clamp, smoothstep } from '../base/math.ts';
 import type { Vec3 } from '../base/math.ts';
 import type { EnvSlot } from '../base/env-slot.ts';
-import { cloudCoverTerms } from './environment.ts';
+import { cloudCoverTerms, cloudDeckClosed } from './environment.ts';
 
 /** A cloud cover that varies by place. */
 export interface CloudCoverField {
@@ -148,9 +148,11 @@ export function cloudFieldCover(f: CloudCoverField, up: Vec3, radiusM: number): 
 
 /**
  * Sun share S under a cloud cover where the shadow pattern has the value `noise` (0–1): the pattern's darkness and
- * thresholds and the overcast dimming of `cloudCoverTerms` for that cover.
+ * thresholds and the overcast dimming of `cloudCoverTerms` for that cover. Under a closing deck (cover from 0.7 to
+ * 0.78) the pattern's gaps close too, so from 0.78 the share no longer depends on `noise`.
  */
 export function cloudFieldSun(cover: number, noise: number, darkness: number): number {
   const t = cloudCoverTerms(cover, darkness);
-  return (1 - t.darkness * smoothstep(t.lo, t.hi, noise)) * t.sunShare;
+  const s = smoothstep(t.lo, t.hi, noise);
+  return (1 - t.darkness * (s + (1 - s) * cloudDeckClosed(cover))) * t.sunShare;
 }

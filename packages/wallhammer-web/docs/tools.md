@@ -59,8 +59,9 @@ Keep inputs small and fixed. Do not read data files from outside the tool's fold
 `tools/docs/check.ts` reads `packages/wallhammer-web/README.md` and every `.md` under `packages/wallhammer-web/docs/`.
 
 - **Code.** Every ` ```ts ` block is written to a temporary file and type-checked with the package's `tsc`, strict, with imports resolved like the package exports. Unused locals are allowed. An HTML comment on the line before the fence changes this: `<!-- check: wrap -->` treats the block as a fragment (imports stay on top, the rest becomes a function body; declare what the fragment uses with `declare const x: T;`), `<!-- check: skip -->` skips it. Use `sh` or `text` fences for shell and layouts.
-- **Links.** Every relative link must point to an existing file. A `#anchor` into a Markdown file must match one of its headings.
+- **Links.** Every relative link must point to an existing file. A `#anchor` into a Markdown file must match one of its headings. This rule alone also runs over the other Markdown files of the repository: the root `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CLAUDE.md`, every `examples/<name>/README.md` and every skill.
 - **Entries.** Every `wallhammer-web/<subpath>` in the text must be an export of the package.
+- **Reference.** Every name in the `export { … }` lists of an entry's `index.ts` must be named in `reference.md` (finding `[reference]`).
 
 `node tools/docs/check.ts --keep` keeps the generated files and prints their folder, for debugging a failing sample.
 

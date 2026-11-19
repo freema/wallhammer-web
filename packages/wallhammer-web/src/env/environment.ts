@@ -331,6 +331,26 @@ float cloudOvercast(float cover) {
 `;
 
 /**
+ * Cloud cover from which the sky closes into a deck without gaps (the sky's deck is closed at `CLOUD_DECK_CLOSED`):
+ * the shadow pattern on the ground fades into the shade of the closed deck between the two (not exported from the
+ * package).
+ */
+export const CLOUD_DECK_CLOSING = 0.7;
+export const CLOUD_DECK_CLOSED = 0.78;
+
+/** How closed the deck over a cover is, 0–1: `smoothstep(CLOUD_DECK_CLOSING, CLOUD_DECK_CLOSED, cover)`. */
+export function cloudDeckClosed(cover: number): number {
+  return smoothstep(CLOUD_DECK_CLOSING, CLOUD_DECK_CLOSED, cover);
+}
+
+/** GLSL twin of `cloudDeckClosed` (not exported from the package). */
+export const CLOUD_DECK_GLSL = `
+float cloudDeckClosed(float cover) {
+  return smoothstep(${CLOUD_DECK_CLOSING.toFixed(2)}, ${CLOUD_DECK_CLOSED.toFixed(2)}, cover);
+}
+`;
+
+/**
  * The sun for a world whose up depends on the place: `sunDir` is the unit direction to the sun in the world's axes
  * (the same for every place), `up` the unit up where the observer stands.
  */

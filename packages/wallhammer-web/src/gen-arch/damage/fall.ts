@@ -120,6 +120,8 @@ const SHELL_INSET_M = 0.02;
 const GRID_M = 2;
 /** Daylight share (0–255) the broad faces of a shell are lit with: they fly in the open. */
 const SHELL_DAYLIGHT = 110;
+/** A broad shell face follows the piece's own parallel surface only when that covers at least this share of it. */
+const COVER_MIN = 0.3;
 
 interface Solid {
   part: StructurePart;
@@ -723,7 +725,9 @@ function clipTri(t: number, sides: (p: P2) => [number, number, number, number], 
 
 /**
  * A closed shell of cut faces just inside the piece's outline, from its bottom to its top: sides, top and bottom.
- * Colours and storey data come from one of the part's own vertices.
+ * Colours and storey data come from one of the part's own vertices. A broad face (not the broken core) covers only
+ * what the piece's own surface parallel to it covers (`faceCover`), so an opening through the part (a torn hole in a
+ * wall, a door in a partition, a stair hole in a slab) stays open in the flying piece; the opening's own reveals line it.
  */
 function writeShell(w: VertexWriter, pc: Piece, s: Solid, src: Uint8Array, f32: Float32Array, tri: number, hasSource: boolean): void {
   const o = tri * 3 * SRC;
@@ -734,6 +738,7 @@ function writeShell(w: VertexWriter, pc: Piece, s: Solid, src: Uint8Array, f32: 
   const floors = hasSource ? f32[fo + 9]! : 1;
   const poly = inset(pc.poly, SHELL_INSET_M);
   if (poly.length < 3) return;
+  const own = ownSurface(pc, f32);
   const y0 = s.y0 + SHELL_INSET_M;
   const y1 = s.y1 - SHELL_INSET_M;
   if (y1 <= y0) return;
@@ -787,6 +792,32 @@ function writeShell(w: VertexWriter, pc: Piece, s: Solid, src: Uint8Array, f32: 
     // Pattern coordinates on a side: along the edge and height above the part's bottom.
     const ua = a[0] * -nz + a[1] * nx;
     const ub = b[0] * -nz + b[1] * nx;
+    const cover = kind === core ? null : faceCover(own, nx, 0, nz, l * (y1 - y0));
+    if (cover) {
+      // Own surface projected onto the face (u along the edge, height), clipped to the face.
+      const lo = Math.min(ua, ub);
+      const hi = Math.max(ua, ub);
+      const at = (u: number): [number, number] => [a[0] + ((b[0] - a[0]) * (u - ua)) / (ub - ua), a[1] + ((b[1] - a[1]) * (u - ua)) / (ub - ua)];
+      for (const pts of cover) {
+        let q: P2[] = pts.map((p) => [p[0] * -nz + p[2] * nx, p[1]]);
+        q = clipPoly(q, (p) => p[0] - lo);
+        q = clipPoly(q, (p) => hi - p[0]);
+        q = clipPoly(q, (p) => p[1] - y0);
+        q = clipPoly(q, (p) => y1 - p[1]);
+        if (q.length < 3) continue;
+        if (signedArea(q) * (ub - ua) < 0) q.reverse();
+        const putQ = (p: P2): void => {
+          const [x, z] = at(p[0]);
+          put(x, p[1], z, nx, 0, nz, kind, p[0], p[1] - s.y0, fa);
+        };
+        for (let k2 = 1; k2 + 1 < q.length; k2++) {
+          putQ(q[0]!);
+          putQ(q[k2]!);
+          putQ(q[k2 + 1]!);
+        }
+      }
+      continue;
+    }
     put(a[0], y0, a[1], nx, 0, nz, kind, ua, y0 - s.y0, fa);
     put(b[0], y0, b[1], nx, 0, nz, kind, ub, y0 - s.y0, fa);
     put(b[0], y1, b[1], nx, 0, nz, kind, ub, y1 - s.y0, fa);
@@ -803,12 +834,100 @@ function writeShell(w: VertexWriter, pc: Piece, s: Solid, src: Uint8Array, f32: 
   ] as const) {
     const kind = flatNarrow || !isFloor ? core : cracked;
     const fa = kind === core ? faCore : faFor(ny > 0 ? FINISH.floor : FINISH.ceiling);
+    const cover = kind === core ? null : faceCover(own, 0, ny, 0, polyArea(poly));
+    if (cover) {
+      // Own surface projected onto the face (x, z), clipped to the outline.
+      const wind = signedArea(poly);
+      for (const pts of cover) {
+        let q: P2[] = pts.map((p) => [p[0], p[2]]);
+        for (let k = 0; k < poly.length && q.length >= 3; k++) {
+          const a = poly[k]!;
+          const b = poly[(k + 1) % poly.length]!;
+          // Inside is to the left of a→b for a counter-clockwise outline.
+          q = clipPoly(q, (p) => wind * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])));
+        }
+        if (q.length < 3) continue;
+        if (signedArea(q) * wind < 0) q.reverse();
+        for (let k = 1; k + 1 < q.length; k++) {
+          put(q[0]![0], y, q[0]![1], 0, ny, 0, kind, q[0]![0], q[0]![1], fa);
+          put(q[k]![0], y, q[k]![1], 0, ny, 0, kind, q[k]![0], q[k]![1], fa);
+          put(q[k + 1]![0], y, q[k + 1]![1], 0, ny, 0, kind, q[k + 1]![0], q[k + 1]![1], fa);
+        }
+      }
+      continue;
+    }
     for (let k = 1; k + 1 < poly.length; k++) {
       put(poly[0]![0], y, poly[0]![1], 0, ny, 0, kind, poly[0]![0], poly[0]![1], fa);
       put(poly[k]![0], y, poly[k]![1], 0, ny, 0, kind, poly[k]![0], poly[k]![1], fa);
       put(poly[k + 1]![0], y, poly[k + 1]![1], 0, ny, 0, kind, poly[k + 1]![0], poly[k + 1]![1], fa);
     }
   }
+}
+
+/** One polygon of a piece's own drawn surface (world space), with the unit normal and area of its source triangle. */
+interface OwnPoly {
+  pts: [number, number, number][];
+  n: [number, number, number];
+  area: number;
+}
+
+/** The piece's own drawn surface as polygons: whole source triangles and the clipped parts of cut ones. */
+function ownSurface(pc: Piece, f32: Float32Array): OwnPoly[] {
+  const vert = (t: number, k: number): [number, number, number] => {
+    const o = ((t * 3 + k) * SRC) / 4;
+    return [f32[o]!, f32[o + 1]!, f32[o + 2]!];
+  };
+  const out: OwnPoly[] = [];
+  for (const t of pc.whole) {
+    const [area, nx, ny, nz] = triArea(f32, t);
+    out.push({ pts: [vert(t, 0), vert(t, 1), vert(t, 2)], n: [nx, ny, nz], area });
+  }
+  for (const c of pc.clipped) {
+    const [area, nx, ny, nz] = triArea(f32, c.tri);
+    const v = [vert(c.tri, 0), vert(c.tri, 1), vert(c.tri, 2)];
+    const pts = c.w.map((w): [number, number, number] => [0, 1, 2].map((i) => w[0] * v[0]![i]! + w[1] * v[1]![i]! + w[2] * v[2]![i]!) as [number, number, number]);
+    let a = 0;
+    for (let k = 0; k < c.w.length; k++) {
+      const p = c.w[k]!;
+      const q = c.w[(k + 1) % c.w.length]!;
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    out.push({ pts, n: [nx, ny, nz], area: area * Math.min(1, Math.abs(a)) });
+  }
+  return out;
+}
+
+/**
+ * The piece's own surface that a broad shell face with normal (nx, ny, nz) and area `faceArea` should cover: its
+ * polygons parallel to the face, of the side (outward or inward) that has more of them. Null when that is less than
+ * `COVER_MIN` of the face (the part draws little there, e.g. a partition between two closed rooms), so the face stays whole.
+ */
+function faceCover(own: OwnPoly[], nx: number, ny: number, nz: number, faceArea: number): [number, number, number][][] | null {
+  let pos = 0;
+  let neg = 0;
+  for (const o of own) {
+    const d = o.n[0] * nx + o.n[1] * ny + o.n[2] * nz;
+    if (d > 0.9) pos += o.area;
+    else if (d < -0.9) neg += o.area;
+  }
+  const sign = pos >= neg ? 1 : -1;
+  if (Math.max(pos, neg) < COVER_MIN * faceArea) return null;
+  const out: [number, number, number][][] = [];
+  for (const o of own) {
+    const d = o.n[0] * nx + o.n[1] * ny + o.n[2] * nz;
+    if (d * sign > 0.9) out.push(o.pts);
+  }
+  return out;
+}
+
+function signedArea(poly: P2[]): number {
+  let a = 0;
+  for (let k = 0; k < poly.length; k++) {
+    const p = poly[k]!;
+    const q = poly[(k + 1) % poly.length]!;
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
 }
 
 function polyArea(poly: P2[]): number {

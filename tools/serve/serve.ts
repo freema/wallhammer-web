@@ -57,7 +57,13 @@ function viteFor(name: string): Promise<ViteDevServer> {
 }
 
 httpServer.on('request', (req: http.IncomingMessage, res: http.ServerResponse) => {
-  const url = new URL(req.url ?? '/', 'http://localhost');
+  // A request path such as `//` parses as a URL without a host and throws, which would stop the whole server.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', 'http://localhost');
+  } catch {
+    return send(res, 400, 'text/plain', 'bad request\n');
+  }
   const pathname = url.pathname;
   if (pathname === '/__health') return send(res, 200, 'text/plain', 'ok\n');
   if (pathname === '/' || pathname === '/index.html') return send(res, 200, 'text/html', indexPage());

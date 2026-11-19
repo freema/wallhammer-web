@@ -90,7 +90,7 @@ The modes other than `none` and `follow` are the extended ones: they add columns
 
 **Known obstacles.** `setKnownObstacles((tick) => capsules)` gives moving obstacles that do not take part in the simulation (a replayed schedule). It must be a pure function of the tick. Entities do not enter a capsule; one already inside is free to leave.
 
-**Gridlock.** Zones prevent collisions, not rings: queues on loops that share a few junctions can close into a circle where every head waits for room the next one holds. `waited(id)` counts the ticks an entity has waited for a zone, an area or an obstacle (it stays 0 while it only follows). An app can watch it and move a long waiter on (`setPath(id, path, at)`), as the campus app does after 45 s. Fewer entities per junction is the real remedy.
+**Gridlock.** Zones prevent collisions, not rings: queues on loops that share a few junctions can close into a circle where every head waits for room the next one holds. `waited(id)` counts the ticks an entity has waited for a zone, an area or an obstacle (it stays 0 while it only follows). An app can watch it and move a long waiter on (`setPath(id, path, at)`), for example after 45 s. Fewer entities per junction is the real remedy.
 
 <!-- check: wrap -->
 ```ts
@@ -162,7 +162,7 @@ sim.step(3000);
 
 ## A clock that jumps
 
-A simulation only runs forward. When the app's clock jumps (a time slider, fast play), set the world up again at the new time instead of simulating the gap: keep a `snapshot()` from right after setup, `rebase(snapshot)` (tick 0 again), move the agenda `origin` to the new time minus a short warm-up, and step through the warm-up within a frame budget before showing anything. While the clock runs faster than the simulation can follow, hide the moving entities. The campus app does this in `population.ts`.
+A simulation only runs forward. When the app's clock jumps (a time slider, fast play), set the world up again at the new time instead of simulating the gap: keep a `snapshot()` from right after setup, `rebase(snapshot)` (tick 0 again), move the agenda `origin` to the new time minus a short warm-up, and step through the warm-up within a frame budget before showing anything. While the clock runs faster than the simulation can follow, hide the moving entities.
 
 ## Movement over a whole network
 
@@ -204,7 +204,7 @@ const census = flow.census();
 if (flow.check() !== null || census.queued + census.individual !== census.load) throw new Error('trips were lost');
 ```
 
-`createFlowProbe()` is a reference run of all of this that is the same on every machine: a lattice from a seed, two networks, 40,000 trips, a scripted focus that pans, jumps, disappears and comes back. `flowProbeLine(probe.result())` is one line with the state hash. The golden test runs it headless (`node tools/golden/engine/flow-scenario.ts` prints the line); an app can run it in slices with `prepare(units)` and `advance(maxTicks)` and print the same line, as the campus app does with `otisk=1` in the address.
+`createFlowProbe()` is a reference run of all of this that is the same on every machine: a lattice from a seed, two networks, 40,000 trips, a scripted focus that pans, jumps, disappears and comes back. `flowProbeLine(probe.result())` is one line with the state hash. The golden test runs it headless (`node tools/golden/engine/flow-scenario.ts` prints the line); an app can run it in slices with `prepare(units)` and `advance(maxTicks)` and print the same line, to compare a browser with the headless run.
 
 ## Wiring it to the image
 

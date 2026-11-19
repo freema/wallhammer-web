@@ -42,3 +42,5 @@ export { POINT_VALUE_LAYOUT, PointValueLayer, RasterValueLayer, ShapeValueLayer,
 export type { PointValueOptions, RasterValueOptions, ShapeValueOptions, ValueGrid, ValueSheetTile, ValueStyle } from './value-layers.ts';
 export { NEAR_INSTANCE_GLSL, NearInstanceLayer } from './near-instances.ts';
 export type { NearInstanceLayerOptions, NearKindDraw, NearPart, NearWind } from './near-instances.ts';
+export { NOISE_VOLUME_GLSL, NoiseVolumes } from './noise-volumes.ts';
+export type { NoiseVolumesOptions } from './noise-volumes.ts';

@@ -40,7 +40,14 @@ class CountingLayer implements Layer {
 
 A layer may also have `prepare(device, view)`. The renderer calls it once per frame that draws the scene, after the Frame block of the frame is uploaded and before the first pass. It is the place to fill a target of the layer's own: `device.colorTarget(width, height, count, format)` makes a target of `count` colour textures (`'rgba8'` or `'rgba16f'`; `null` where the graphics card cannot draw into the format), and `device.fill(target, program, uniforms?)` draws one triangle over all of it. `fill` changes the viewport and the draw state, so it belongs between passes, not inside `draw`.
 
-Layers draw in the order they were added (`renderer.add`, or `engine.add`, which keeps the precipitation layer last). The pass base state is set before each layer and restored after it.
+Two more kinds of target are drawn one layer at a time, with `device.fillLayer(target, layer, program, uniforms?)` under the same rules as `fill` (pass the layer among the uniforms; the fragment shader writes every texel of it):
+
+- `device.volumeTarget(width, height, depth, format)`: a 3D texture, `'r8'` or `'rgba8'`, read as a `highp sampler3D` with linear filtering, wrapping in all three axes. A layer is one z slice.
+- `device.cubeTarget(size, format)`: a cube map, read as a `samplerCube`. A layer is one face, in the order +x, −x, +y, −y, +z, −z. WebGL2 always filters across the faces' edges, so a field drawn by direction has no seam.
+
+Bind them with `device.volumeTexture(unit, target)` and `device.cubeTexture(unit, target)`. A unit holds a 2D, a 3D and a cube texture side by side, and a program must not read two kinds from one unit, so give each sampler a unit of its own (`device.fixSampler`). Both return null while the context is lost or past the device's limits (`MAX_3D_TEXTURE_SIZE`, `MAX_CUBE_MAP_TEXTURE_SIZE`). They count under `targets` in `memory()`, come back empty after a context loss, and `deleteLayeredTarget` deletes them.
+
+Layers draw in the order they were added (`renderer.add`, or `engine.add`, which keeps the volumetric clouds, until `moveCloudsBefore`, and then the precipitation layer last). The pass base state is set before each layer and restored after it.
 
 Ready-made layers (which one: a single mesh → `MeshLayer`; many meshes with their own boxes → `PieceLayer`; a few thousand instances → `InstancedLayer`; many thousands of instances over a large area → `InstanceCellLayer`):
 
@@ -209,60 +216,21 @@ The environment is generic. A slot (`EnvSlot` in `base`) turns it into what cont
 - `glsl`: optional, registered as the include `<name>`.
 - `shadowKey(values)`: optional part of the shadow cache key.
 
-`assembleFrameBlock(slots)` puts `ENV_CORE_SLOT` first and sorts members by `order` within their region. The engine uses multiples of 10. It throws on a duplicate slot name or a lane filled twice. The block is fixed when the engine is created, so pass every slot to `createEngine({ slots })`. `engine.link.value(slot)` returns a slot's values for the last frame. [Recipes](recipes.md#add-an-environment-slot) has a full slot.
+`assembleFrameBlock(slots)` puts `ENV_CORE_SLOT` first and sorts members by `order` within their region. The engine uses multiples of 10. It throws on a duplicate slot name or a lane filled twice. The block is fixed when the engine is created, so pass every slot to `createEngine({ slots })`. `engine.link.value(slot)` returns a slot's values for the last frame. [Recipes](recipes.md#add-an-environment-slot) has a full slot; [Environment slots](environment.md#environment-slots) lists the slots of the engine and its content modules.
 
 ### Cloud cover by place
 
-`weather.cloudCover` is one number for the whole world. Under radial up (see [Local up](#local-up)) `cloudFieldSlot(field)` (in `env`) makes the cover vary by place instead: a profile of 8 covers by `|dot(up, axis)|` (linear between, `zonal[0]` where up is across the axis, `zonal[7]` along it), plus value-noise patches of `patchSizeM` that move the cover by up to `patchAmount`, bent by one more lookup (`patchWarp`) and shifted by `patchOffset` (the app drifts it with its time). The field is fixed in one frame; `axis` and the up the shader reads are in that frame. The slot has no include of its own: when the frame block holds a slot named `CLOUD_FIELD_SLOT`, the environment link registers `lightingGlsl({ cloudField: true })` as `lighting`, whose `cloudLight` then reads the cover at the point and gives the share of the sun there. The frame's light stays dimmed by the global `weather.cloudCover`, so the shader divides by that dimming (`u_cloudFieldLight.y`); a shader that takes the sun from `sunVisibility` and wants the field's shade multiplies by it. Without the slot `LIGHTING` is the include, unchanged.
+Under radial up (see [Local up](#local-up)) `cloudFieldSlot(field)` (in `env`) makes the cloud cover vary by place instead of one `weather.cloudCover` for the whole world: a profile by the angle to an axis plus drifting patches. With the slot the environment link registers `lightingGlsl({ cloudField: true })` as `lighting`, so `cloudLight` reads the cover at each point, and `CloudShellLayer` (in `runtime`) draws the clouds as a shell over their own shadows. The field, the division by the frame's dimming (`u_cloudFieldLight.y`), the CPU twins `cloudFieldCover` and `cloudFieldSun`, the shell's light and its cost per vertex and per fragment are in [Cloud cover by place](environment.md#cloud-cover-by-place) and [The cloud shell](environment.md#the-cloud-shell).
 
-`cloudFieldCover(field, up, radiusM)` and `cloudFieldSun(cover, noise, darkness)` are the same functions on the CPU: an app asks them for the weather under the eye. Every cover 0 (`active` 0) means full sun without a lookup.
-
-`CloudShellLayer` (in `runtime`) draws the clouds themselves as a shell `heightM` above a sphere (`center`, `baseRadiusM`, render space) with the same field, so the clouds sit over their shadows. `toField` (3 × 3, row-major) turns render directions into the field's frame, `light` is the direction to the sun, `opacity` 0 draws nothing. It throws without the slot. Add it before transparent layers that should be drawn over it.
-
-<!-- check: wrap -->
-```ts
-import { PerspectiveOrbitRig, definePalette } from 'wallhammer-web';
-import { cloudFieldSlot } from 'wallhammer-web/env';
-import { CloudShellLayer, createEngine } from 'wallhammer-web/runtime';
-declare const canvas: HTMLCanvasElement;
-
-const slot = cloudFieldSlot({ axis: [0, 1, 0], zonal: [0.6, 0.5, 0.3, 0.3, 0.4, 0.5, 0.5, 0.3], patchAmount: 0.4, patchSizeM: 45_000, patchWarp: 0.6, patchOffset: [0, 0, 0], darkness: 0.3 });
-const engine = createEngine({ canvas, view: new PerspectiveOrbitRig(), palette: definePalette({ ground: '#4d4335' }), background: [0.6, 0.7, 0.8], slots: [slot] });
-const shell = new CloudShellLayer(engine.renderer, engine.link);
-shell.baseRadiusM = 600_000;
-shell.center = [0, -600_000, 0];
-engine.add(shell);
-// Each frame: drift the patches with the time of the app.
-slot.params.patchOffset = [0, 0, 3 * engine.env.time.time];
-```
+`createEngine({ cloudShadows: true })` adds `cloudShadowSlot()` and `CloudShadowLayer`, with or without the cover by place: `cloudLight` then reads a texture of the share of the sun, drawn every few frames along the light, instead of computing the cloud pattern per fragment. See [Cloud shadows from a texture](environment.md#cloud-shadows-from-a-texture).
 
 ## The environment
 
-`Environment` (in `env`) holds:
-
-- `mode`: `'studio'` (default, fixed light), `'day'` (sun from `site`, date and hour) or `'fixed'` (a light given directly, see below).
-- Two clocks. `time` drives wind, clouds and transient pieces; it plays by default (`animate: true`). `day` is the hour; it wraps at 24 and is **paused** by default. Default hour 13.
-- `weather` (`cloudCover`, `precipitation`, `precipitationKind`, `snowCover`, `wetness`, `fog`, all 0..1), `wind`, `clouds`, `fogLayer`, `site`.
+`Environment` (in `env`) holds the light mode (`'studio'` by default, `'day'` or `'fixed'`), two clocks (`time`, which plays by default, and `day`, the hour, which is paused by default), the weather, the wind, the clouds, the fog layer and the site. [The environment](environment.md) describes all of it: time and light, the sky and the atmosphere, weather, clouds, fog, wind, seasons and snow, its slots and the shader functions that receive it.
 
 ### A fixed light
 
-`env.setFixedLight(toLight, light?)` switches to `mode: 'fixed'`: the sun stands in the world direction `toLight`
-(toward the light, need not be unit, normalised each frame; the sun's height is its angle over the horizontal plane) and the colours and
-strengths are the ones given, not derived from a sun position. `light` (type `FixedLight` without `toLight`) may set
-`sun`, `ambient`, `skyFill`, `bounce`, `warmTint` (RGB), `exposure` and `backdrop`; what it leaves out keeps its value.
-Call it again at any time to move or recolour the light (a new direction refits the shadow map as any sun movement
-does). `EnvironmentConfig.fixed` gives the starting values (`DEFAULT_FIXED`); the day clock is paused in this mode.
-Sky colour and fog are the day values of the weather. `'studio'` and `'day'` are unchanged.
-
-<!-- check: wrap -->
-```ts
-import { Environment } from 'wallhammer-web/env';
-
-const env = new Environment({ fixed: { exposure: 1.1 } });
-env.setFixedLight([-0.4, 0.8, 0.3], { sun: [1.0, 0.95, 0.85], ambient: [0.30, 0.32, 0.38] });
-env.setFixedLight([0.6, 0.5, -0.2]); // later: only the direction
-console.log(env.mode, env.fixed.exposure);
-```
+`env.setFixedLight(toLight, light?)` switches to `mode: 'fixed'`: the light stands in one world direction with the colours and strengths given, changeable at any time. See [A fixed light](environment.md#a-fixed-light).
 
 ## Shadows
 
@@ -391,6 +359,8 @@ Rules for code that goes around the usual path:
 - A fragment shader with its own `#version` line instead of `<header>` is not wrapped. In the logarithmic mode use it only for draws with the depth test off.
 - A vertex shader that writes clip coordinates directly must not assume that z = 1 is far. Draw such things with the depth test off (as the sky and the precipitation layers do), or put hidden vertices outside the clip volume on x or y.
 - Bind the main target only with `device.target(null)`, and read pixels of the frame only after `renderer.render` has returned.
+- A full-screen draw that writes its own depth (as the volumetric clouds do in the standard mode: the clouds' distance, so that the depth test hides them behind terrain) gets its source through `renderer.resolve(src, 'other')` and writes `gl_FragDepth` itself in the mode in effect: `0.5 × z / w + 0.5` in the standard mode, `z / w` in the reversed one, `log2(1 + w) × u_camUp.w` in the logarithmic one (`w` the clip coordinate). Writing `gl_FragDepth` turns off the early depth test for that draw. Cheaper where it fits: geometry built in the vertex shader (`device.drawVertices`) at a depth of its own, as the volumetric clouds' quads per tile in the reversed and logarithmic modes, keeps it.
+- `device.sceneDepth()` copies the depth drawn so far (reversed and logarithmic modes, or two samples) for a layer to read, e.g. in `prepare` the last frame's depth with `renderer.projection` of that frame. A vertex shader that reads a texture drawn earlier in the same frame can stall the pass on some drivers (about 0.3 ms on Apple GPUs through Metal): read it in the fragment shader.
 
 ## Local up
 
@@ -427,10 +397,65 @@ What follows the option in the engine:
 - **Rigs.** `RigLayer` stands every rig along the up of its position, turns its heading in the local horizon and culls it there.
 - **Instances.** `InstancedLayerOptions.upCenter` (pass `() => renderer.upCenter()`) culls instance boxes that extend along the local up; `cullInstances` takes the same centre as its sixth argument. The streamed world culls by cell boxes and needs nothing.
 - **Slots of `gen-ground` and `gen-vegetation`.** `snowOn` settles snow by the local up; the plant shader stands plants along the up of their base and sways them in the local horizon.
-- **Precipitation.** `PrecipitationLayer` lets rain and snow fall along the up under the eye (towards `renderer.upCenter()`), with the wind across it.
-- **Cloud cover by place.** See [Cloud cover by place](#cloud-cover-by-place).
+- **Precipitation.** `PrecipitationLayer` lets rain and snow fall along the up at the eye (towards `renderer.upCenter()`), with the wind across it; its landing marks lie on the surfaces that face that up (see [Rain and snow](environment.md#rain-and-snow)).
+- **Cloud cover by place.** See [Cloud cover by place](environment.md#cloud-cover-by-place).
 
 Not adapted: the shadow modes `'snapped'` and `'cascades'` and the light horizon (they assume ground along y), the `sky` include and the sky layer, `InstanceCellLayer`, `PieceLayer`, `TransientLayer` and the value layers, the shaders of `gen-arch`, and the joint pattern of the rig finish `'tiles'` (a grid in render-space xz). The environment computes one sun direction for a site whose up is +y. `localFrame` has no shortest rotation exactly opposite +y: where up is within a quarter of a degree of −y (cosine under −0.99999, a disc of 450 m radius on a sphere of 100 km) the frame is the world turned by half a turn about x, so objects there stand along −y exactly, and headings jump at the rim of that disc.
+
+## A medium below a level
+
+A clear medium that fills everything below a level (water under a sea's surface, haze in a basin) dims what is seen through it and adds its own scattered light. `core` holds the arithmetic for both sides, as TypeScript functions and, with the same names, in `MEDIUM_GLSL` (any stage, needs nothing before it). The functions take heights relative to the level, so one formula serves a radial world (`localHeight(p)` minus the level) and a flat one (`p.y` minus the level).
+
+| Function | Gives |
+| --- | --- |
+| `mediumPath(fromHeight, toHeight, lengthM)` | the part of a straight segment that lies below the level, the height taken as linear along it |
+| `mediumThrough(extinction, lengthM)` | the share of light per channel that crosses that length, `exp(-extinction * d)` |
+| `mediumApply(color, inscatter, extinction, lengthM)` (GLSL only) | a colour seen through the medium: dimmed, with the medium's own light added by the share that was lost |
+| `mediumClearDistance(extinction, share)` (TypeScript only) | the distance at which every channel has fallen to `share`: beyond it the medium hides everything, so a backdrop may stand there |
+| `mediumFresnel(cosI, eta)` | the share the boundary reflects (Schlick), with total reflection from the denser side (`eta` > 1) |
+
+The engine does not draw the medium. The content chooses the level, the extinction and the inscattered colour, and calls these from its materials: a fragment applies `mediumApply` over `mediumPath(eyeHeight, fragmentHeight, distance)`, and from inside the medium a layer can stand a backdrop at `mediumClearDistance` in place of the sky. The `planet` example does this for its sea ([The sea](planet.md#the-sea)).
+
+```ts
+import { mediumClearDistance, mediumFresnel, mediumPath, mediumThrough } from 'wallhammer-web/core';
+
+const extinction = [0.2, 0.062, 0.068] as const; // per metre: red is lost first
+const eyeHeight = -3; // the eye 3 m below the level
+const path = mediumPath(eyeHeight, 2, 50); // a point 50 m away, 2 m above the level: the part under it
+const left = mediumThrough(extinction, path); // the share of each channel that reaches the eye
+const backdropM = mediumClearDistance(extinction, 0.01); // where 99 % of every channel is gone
+const reflected = mediumFresnel(0.3, 1.33); // looking up at a grazing angle from below: all of it
+console.log(path, left, backdropM, reflected);
+```
+
+## A moving surface of waves
+
+`gen-core` holds a field of waves for the surface of a liquid: a sum of up to eight trochoidal (Gerstner) trains, with sharp crests and wide troughs. It is a pure function of the trains, a point of a plane and the time, as TypeScript functions and, with the same names, in `WAVES_GLSL` (any stage, needs nothing before it). The engine does not know what the surface lies on: the caller maps its points to the plane (a flat world's x and z, a chart of a sphere) and the displacement back to its own space.
+
+| Function | Gives |
+| --- | --- |
+| `waveTrains(options)` | the trains of a sea raised by a wind: wavelengths from the peak of a fully developed sea (Pierson–Moskowitz) down to `shortest` of it, heights from the spectrum's energy, directions spread round the wind and phases from the seed |
+| `waveDisplace(trains, x, z, timeS, sampleM)` | the displacement of a point of the plane: toward the crests and up |
+| `waveNormal(trains, x, z, timeS, sampleM)` | the normal of the displaced surface and the Jacobian of the horizontal displacement (below 1 where the surface is squeezed into a crest: the place for foam) |
+| `waveHeight(trains, x, z, timeS, sampleM)` | the height of the surface over a point, the displacement toward the crests undone; for the CPU to tell above from below the surface as the picture does |
+| `waveFade(lengthM, sampleM)` | how much of a train is kept where one sample (a vertex, a pixel) is `sampleM` across: all of it up to a quarter of its length, none from half of it |
+| `waveUnresolved(trains, sampleM)` | the slope variance of what has faded, to widen a glint |
+| `waveUniforms(trains, timeS, originX, originZ, out?)` | the uniforms of `WAVES_GLSL`: per train `u_waveTrain0`–`7` (direction times wave number, amplitude, shift) and the phases at an origin in `u_wavePhase0`, `u_wavePhase1`, computed in double |
+
+In GLSL the functions take the point relative to the origin given to `waveUniforms` and no time: the time is in the phases. A shader therefore works with small numbers anywhere on the plane, and a frame is the same function of the time on every run, so a recorded movie shows the same waves. A vertex shader moves a dense mesh near the eye with `waveDisplace`, its spacing as `sampleM`; a fragment shader takes `waveNormal` at the pixel's footprint, so the trains a pixel cannot hold fade into roughness instead of aliasing.
+
+```ts
+import { WAVES_GLSL, waveHeight, waveNormal, waveTrains, waveUniforms } from 'wallhammer-web/gen-core';
+
+const trains = waveTrains({ windSpeedMs: 6, towardX: 1, towardZ: 0.3, seed: 7 });
+const timeS = 12.5;
+const surfaceM = waveHeight(trains, 40, -12, timeS); // the surface over that point at that time
+const { normal, jacobian } = waveNormal(trains, 40, -12, timeS); // foam where jacobian falls under about 0.8
+const uniforms = waveUniforms(trains, timeS, 40, -12); // the shader's points are then relative to (40, -12)
+console.log(surfaceM, normal, jacobian, Object.keys(uniforms).length, WAVES_GLSL.length);
+```
+
+The `planet` example builds its sea with them ([The sea](planet.md#the-sea)): a chart of the sphere as the plane, a grid of rings round the eye moved by the waves, the flat water of the cells beyond it, and the eye's height above the moving surface from `waveHeight` on the CPU.
 
 ## Levels of detail with a fade
 
@@ -663,11 +688,40 @@ layer.view(eye, [gain]);
 `nearScale()`, `nearAxes(base)` (upright along `localFrame`, turned about up) and `nearPoint(unitPos)`, the vertex in
 render space. The unit shape stands on y = 0 and reaches y = 1; width scales x and z, height y.
 
+## Noise volumes
+
+`NoiseVolumes` (in `render`) makes two tileable noise volumes on the graphics card from a seed, for volumetric media such as the [volumetric clouds](environment.md#volumetric-clouds). Both repeat in all three axes.
+
+| Volume | Texels | Memory | What |
+| --- | --- | --- | --- |
+| `shape` | 128³, R8 | 2 MB | Perlin-Worley: four octaves of gradient noise from 4 cells across, dilated by three octaves of cellular noise (4, 8 and 16 cells) and eroded by the next three (8, 16 and 32). Its raw values lie between about 0.56 and 1; they are stretched from 0.6 … 1 to 0 … 1 (`low` of the recipe), median about 0.58. A cloud shader remaps them with the cover. |
+| `detail` | 32³, R8 | 32 KB | Three octaves of cellular noise (2, 4 and 8 cells), weights 0.625, 0.25 and 0.125. |
+
+Add it as a layer. It draws nothing; its `prepare` makes the layers once the driver has compiled both programs, `layersPerStep` of them per frame (default all 160 at once). `ready` is true when both are complete, `step(count)` makes layers by hand, and `bind(device, shapeUnit, detailUnit)` binds the volumes as `sampler3D`. After a context loss they are made again from the first layer. `NOISE_VOLUME_GLSL` gives the noise itself in GLSL (`worleyTile`, `perlinTile`; after `<noise>`).
+
+On an Apple M4 Pro the two programs take about 60–80 ms to compile, once, in parallel with the frames where the driver can. Making all layers afterwards takes 1.6–3.1 ms of GPU time (about 0.025 ms per shape layer, 0.019 ms per detail layer), so spreading them over frames is rarely needed.
+
+**The same volumes on the CPU.** `gen-tex` holds the recipe (`NOISE_VOLUME_SHAPE`, `NOISE_VOLUME_DETAIL`, `WORLEY_WEIGHTS`, the seeds of the octaves) and the same texel function: `shapeNoiseAt`, `detailNoiseAt` and `noiseVolumeData(kind, seed, size?)`, the whole volume as bytes. The features come from the integer hash of `<noise>` and are exact on both sides: a feature point is 10 bits per axis of one hash word, a gradient one of 12 cube edges. The arithmetic after them runs in single precision on the GPU and in double precision on the CPU, so a texel can differ by one step of 8 bits where its value lies on a rounding boundary. For seed 0 that was 3 texels of 49 152 compared in the shape volume and none in the detail volume. One device makes the same bytes on every run. The golden test hashes the CPU volumes.
+
+<!-- check: wrap -->
+```ts
+import { noiseVolumeData } from 'wallhammer-web/gen-tex';
+import { NoiseVolumes } from 'wallhammer-web/render';
+import type { Engine } from 'wallhammer-web/runtime';
+declare const engine: Engine;
+
+const volumes = new NoiseVolumes(engine.renderer.device, { seed: 7 });
+engine.add(volumes);
+// In the prepare of the layer that reads them, once volumes.ready: volumes.bind(device, 9, 10), with the samplers
+// fixed to those units (device.fixSampler('u_shape', 9)) and declared `uniform highp sampler3D u_shape;`.
+const reference = noiseVolumeData('detail', 7); // 32³ bytes, as the GPU makes them
+```
+
 ## The sky
 
-`createEngine({ sky: true })` or `sky: { hazeDistanceM, cloudHeightM, … }` adds the sky slot and `SkyLayer` as the first layer. Perspective views only. The sky draws a gradient, a sun glow, sun and moon discs, stars and clouds. The clouds use the same field as the cloud shadows (`CLOUD_OCTAVES`), so they agree. Materials end with `aerialPerspective(display, worldPos)` to fade into the sky.
+`createEngine({ sky: true })` or `sky: { hazeDistanceM, cloudHeightM, … }` adds the sky slot and `SkyLayer` as the first layer. Perspective views only. The sky draws a gradient, a sun glow, sun and moon discs, stars and clouds. The clouds use the same field as the cloud shadows (`CLOUD_OCTAVES`), so they agree. Materials end with `aerialPerspective(display, worldPos)` to fade into the sky. Its params, what the weather does to it and when to take the atmosphere instead are in [Sky and atmosphere](environment.md#sky-and-atmosphere). With `createEngine({ cloudVolume })` the sky is made with `{ clouds: false }` and draws no flat deck: the [volumetric clouds](environment.md#volumetric-clouds) take its place.
 
-**Behind the scene.** As the first layer the sky computes every pixel of the screen, and the scene then draws over most of them. `engine.moveSkyBefore(layer)` sets `SkyLayer.behindScene` and moves the sky to just before `layer` (null: after every layer added so far). It then draws at the far end of the depth range with the depth test on and without writing depth, so only the samples nothing has covered get the sky, and each of them the colour it got before. The image is the same as long as every layer drawn before the sky is opaque (writes depth where it draws); give it the first layer that blends or does not write depth (water, glass, particles). In the logarithmic depth mode the sky's fragment shader keeps the pipeline's depth of the far end, so a surface that the logarithm puts at exactly depth 1 (beyond the scene's far end) is covered by the sky. Off by default.
+**Behind the scene.** As the first layer the sky computes every pixel of the screen, and the scene then draws over most of them. `engine.moveSkyBefore(layer)` sets `SkyLayer.behindScene` and moves the sky to just before `layer` (null: after every layer added so far, but before the volumetric clouds and the precipitation). It then draws at the far end of the depth range with the depth test on and without writing depth, so only the samples nothing has covered get the sky, and each of them the colour it got before. The image is the same as long as every layer drawn before the sky is opaque (writes depth where it draws); give it the first layer that blends or does not write depth (water, glass, particles). In the logarithmic depth mode the sky's fragment shader keeps the pipeline's depth of the far end, so a surface that the logarithm puts at exactly depth 1 (beyond the scene's far end) is covered by the sky. Off by default.
 
 <!-- check: wrap -->
 ```ts
@@ -711,6 +765,7 @@ How it works:
 - **Materials** take the air between the eye and the surface at their vertices and apply it in the fragment shader: `v_air = atmosphereAir(worldPos, v_airThrough)` in the vertex shader (`airSteps` steps per vertex, two `vec3` varyings), and `atmosphereApply(display, v_world, v_air, v_airThrough)` at the end of the fragment shader, after `toDisplay` and `applyFog`. Both values change slowly over a surface, so this suits any mesh whose triangles are small against the distance over which the air changes (streamed terrain, objects). A material with very large triangles calls `atmosphereApply(display, worldPos)` instead, which integrates per fragment. A material that is also used without the slot needs no branch for this: the stand-ins give no air and return the input.
 - **Reference quality.** `params.reference = true` (may change at any time) makes every pixel integrate its own ray again: the sky per pixel, and `atmosphereApply` with the vertex values per fragment. It costs many times more and is there to compare the picture against. The layer also falls back to it for the sky where the graphics card cannot draw into 16-bit float textures.
 - **Light on surfaces.** `atmosphereLight(worldPos, n, sun, ao)` stands in the place of `lightOnAt`: the sun through the air above the point (white high up, red through a long way of air, none behind the sphere), the sky's light there, and `nightLight`. It is computed for the point, not for the eye, so the far side of a sphere is dark while the eye stands in daylight. `atmosphereSun(worldPos)` is the colour of the direct sun alone, e.g. for a glint.
+- **Under an overcast sky.** The slot carries how overcast the sky over the eye is (`u_atmCloud.x`, `atmosphereOvercast`: the frame's cloud cover from 0.5 to 0.9, gone for an eye above twice `cloudTopM`). There `atmosphereLight` takes a grey, even light from the clouds in place of the sky's, and `atmosphereApply` greys and dims the air. A material greys under the clouds only through these two calls. See [Overcast with the atmosphere](environment.md#weather).
 - **The sun.** The slot takes the direction to the sun from the environment (`sunDir` of the frame). For a world with one up that is the site's sun. For a sphere set `Environment.observer` every frame (default `null`): the sun then stands in the given world direction, and the values of the frame that follow its height (light colours, exposure, the direction of the shadow map, the swap to the moon) are computed for the place with the given up.
 
 <!-- check: skip -->
@@ -730,15 +785,17 @@ float sun = sunVisibility(v_world, n, 1.2);
 o_color = vec4(atmosphereApply(applyFog(toDisplay(lit), v_world), v_world, v_air, v_airThrough), 1.0);
 ```
 
-Params that may change at any time (`engine.atmosphere.slot.params`): `exposure` (scattered light to screen colour, `1 − exp(−light × exposure)`), `sunLight`, `skyLightGain`, `nightLight`, `sunDiscRad`, `stars`, `groundY`, `reference`. The medium and the step counts `skySteps` and `airSteps` are read once, when the slot is made. Without `createEngine`: pass `atmosphereSlot(params)` to `assembleFrameBlock` and to the `EnvironmentLink`, then add `new AtmosphereLayer(renderer, slot)` first.
+Params that may change at any time (`engine.atmosphere.slot.params`): `exposure` (scattered light to screen colour, `1 − exp(−light × exposure)`), `sunLight`, `skyLightGain`, `nightLight`, `sunDiscRad`, `stars`, `cloudTopM` (the clouds' top, 4000 m: above twice it the eye no longer stands under an overcast sky), `groundY`, `reference`. The medium and the step counts `skySteps` and `airSteps` are read once, when the slot is made. Without `createEngine`: pass `atmosphereSlot(params)` to `assembleFrameBlock` and to the `EnvironmentLink`, then add `new AtmosphereLayer(renderer, slot)` first.
 
-Limits: the atmosphere draws no clouds and no moon, and the weather does not change it (`applyFog` still does). The tables hold 8 bits per channel behind a square root. A pixel of the sky costs three reads of the sky table, and a fragment of a material that takes the air at its vertices costs nothing more than the two varyings; the steps (three table reads each) are paid per texel of the sky table (`skySteps`) and per vertex (`airSteps`). In the reference quality, and for `atmosphereApply(display, worldPos)`, they are paid per pixel. Across one triangle the air is interpolated, so a triangle that spans a long way of air (a single quad to the horizon) shows it only roughly: such a material integrates per fragment. The sky table follows the sun by 64 columns: the shadow line of the sphere in the sky at dusk is as sharp as that allows. Shadows still come from the one shadow map round the eye.
+Limits: the atmosphere draws no clouds and no moon, and of the weather only the cloud cover over the eye changes it (the overcast; `applyFog` still adds the fog). The tables hold 8 bits per channel behind a square root. A pixel of the sky costs three reads of the sky table, and a fragment of a material that takes the air at its vertices costs nothing more than the two varyings; the steps (three table reads each) are paid per texel of the sky table (`skySteps`) and per vertex (`airSteps`). In the reference quality, and for `atmosphereApply(display, worldPos)`, they are paid per pixel. Across one triangle the air is interpolated, so a triangle that spans a long way of air (a single quad to the horizon) shows it only roughly: such a material integrates per fragment. The sky table follows the sun by 64 columns: the shadow line of the sphere in the sky at dusk is as sharp as that allows. Shadows still come from the one shadow map round the eye.
 
 ## Resolution and antialiasing
 
 `createEngine({ maxPixelRatio })` caps the canvas's pixels per CSS pixel (default none: the device's own ratio, as before). With a cap below the device's ratio the image is drawn at fewer pixels and the browser scales the canvas up to its CSS size; the view's `dpr` is the ratio in effect, so input and pixel sizes stay right. Without the engine pass the same cap to `observeCanvasSize` and `syncCanvasSize` (`canvasPixelRatio(max)` gives the ratio).
 
 `renderer: { samples }` chooses the samples per pixel of the main target: 0, 2 or 4 (`Device.setMainSamples`; the engine also creates the context to match, by hand use `createContext(canvas, depth, samples)`). Default unchanged: the canvas's own antialiasing in the standard depth mode, 4 samples in the reversed and logarithmic modes. In the standard mode 0 and 4 keep drawing into the canvas (made without or with antialiasing); 2 draws into the device's offscreen target with a 32-bit float depth buffer and copies it to the canvas in `present`, as the other depth modes do, because a canvas cannot be asked for a sample count. `Device.mainSamples()` reports the count in effect.
+
+`renderer: { readableDepth: true }` makes the standard depth mode draw into the offscreen target too, with the samples it would have had (`Device.setReadableDepth`; by hand create the context with `createContext(canvas, 'standard', samples, true)`), so `device.sceneDepth()` can copy the depth for a layer to read. The picture is the same; the copy to the canvas in `present` costs about 0.15–0.3 ms a frame at 1600 × 900 on an Apple M4 Pro. `createEngine` turns it on when the precipitation draws its landing marks (`precipitation: true` in a perspective view, unless `impacts: false`; see [Rain and snow](environment.md#rain-and-snow)). The reversed and logarithmic modes and 2 samples draw offscreen anyway.
 
 <!-- check: wrap -->
 ```ts
@@ -819,5 +876,17 @@ What is not restored: anything drawn into a texture outside a bake, and GPU obje
 - Includes are a plain text replace without nesting or include guards.
 - Depth modes: the shadow map keeps 24-bit standard depth in every mode. With logarithmic depth a multisampled pixel has one depth for all its samples, so the line where two surfaces cut through each other is not antialiased (outlines are).
 - The shadow map does not follow animation time. Moving shadow casters other than `TransientLayer` batches need `invalidateShadows()`, or `shadowCasters: 'dynamic'` with `shadowDirty()` (see [Moving casters](#moving-casters)).
-- The data view (`tools`) uses fixed texture units 2–4 next to `MeshLayer`'s units starting at 1.
-- The atmosphere keeps its tables on texture unit 14 for the whole colour pass (unit 15 is the light horizon's). A layer that binds more than thirteen textures of its own would take the unit over. While it draws the sky the layer also uses units 1 to 3 for the sky table and leaves them empty.
+- Texture units are shared by convention, with no allocator. Some are held for a whole pass; a layer binds its own textures from unit 1 up and may use units 1–11:
+
+  | Unit | Held by | When |
+  | --- | --- | --- |
+  | 0 | the shadow map (`SHADOW_MAP_UNIT`) | always |
+  | 1–11 | the layer that is drawing (`MeshLayer` starts at 1) | during its own draws |
+  | 2–4 | the data view's ground (`tools`) | during its draws; next to `MeshLayer`'s units starting at 1 |
+  | 7–11 | `CloudVolumeLayer`: the noise volumes, the weather map, the scene's depth, its own targets | during its own draws in `prepare` and the colour pass |
+  | 12 | the cloud shadow texture (`CLOUD_SHADOW_UNIT`) | the whole colour pass, with `cloudShadows` |
+  | 13 | nobody: the spare unit the engine's layers select after their binds | keep it empty |
+  | 14 | the atmosphere's tables (`ATMOSPHERE_TABLE_UNIT`) | the whole colour pass, with `atmosphere` |
+  | 15 | the light horizon (`SHADOW_HORIZON_UNIT`) | with a light horizon |
+
+  A layer that binds a texture on unit 12 or above takes a held unit over. While it draws the sky the atmosphere layer also uses units 1 to 3 for the sky table and leaves them empty. A unit holds a 2D, a 3D and a cube texture side by side, and a program must not read two kinds from one unit.

@@ -56,12 +56,17 @@ export class SkyLayer implements Layer {
   private readonly axes = newOrthoFrame();
   private readonly rays = newCornerRays();
   private readonly eye: Vec3 = [0, 0, 0];
+  private readonly clouds: boolean;
 
-  /** The slot must be part of the renderer's Frame block (and its `EnvironmentLink`), so `<sky>` is the real one. */
-  constructor(renderer: Renderer, slot: EnvSlot<SkyParams, SkyValues>) {
+  /**
+   * The slot must be part of the renderer's Frame block (and its `EnvironmentLink`), so `<sky>` is the real one.
+   * `clouds: false` leaves out the flat cloud deck of `skyView` (for volumetric clouds drawn by another layer).
+   */
+  constructor(renderer: Renderer, slot: EnvSlot<SkyParams, SkyValues>, o: { clouds?: boolean } = {}) {
     this.slot = slot;
     this.renderer = renderer;
-    this.program = renderer.device.program('sky', SKY_VS, renderer.resolve(SKY_FS));
+    this.clouds = o.clouds ?? true;
+    this.program = renderer.device.program('sky', SKY_VS, this.source('main'));
     // Before the environment is packed, so the eye of this frame's view goes into this frame's block.
     renderer.beforeFrame.unshift((view) => {
       if (view.pixelGrowth <= 0) {
@@ -77,6 +82,15 @@ export class SkyLayer implements Layer {
     });
   }
 
+  /** The fragment shader, without the cloud deck when `clouds` is off. */
+  private source(kind: 'main' | 'other'): string {
+    const src = this.renderer.resolve(SKY_FS, kind);
+    if (this.clouds) return src;
+    const call = 'vec4 cl = skyClouds(dir);';
+    if (!src.includes(call)) throw new Error('SkyLayer: the sky shader has no cloud deck to leave out');
+    return src.replace(call, 'vec4 cl = vec4(0.0);');
+  }
+
   /**
    * The program of the sky behind the scene, made at its first use: the triangle at the far end of the depth range
    * of the renderer's depth mode. In the logarithmic mode the fragment shader is not wrapped (it would write a near
@@ -87,7 +101,7 @@ export class SkyLayer implements Layer {
     const r = this.renderer;
     const far = r.depthMode === 'reversed' ? '0.0' : '1.0';
     const vs = SKY_VS.replace('gl_Position = vec4(p * 2.0 - 1.0, 1.0, 1.0);', `gl_Position = vec4(p * 2.0 - 1.0, ${far}, 1.0);`);
-    this.behindProgram = r.device.program('sky behind', vs, r.resolve(SKY_FS, r.depthMode === 'logarithmic' ? 'other' : 'main'));
+    this.behindProgram = r.device.program('sky behind', vs, this.source(r.depthMode === 'logarithmic' ? 'other' : 'main'));
     return this.behindProgram;
   }
 

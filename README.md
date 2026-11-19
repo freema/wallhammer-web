@@ -100,7 +100,8 @@ The [documentation](packages/wallhammer-web/docs/) goes on from there: concepts,
 | <img src=".github/media/outpost.gif" alt="The lunar outpost: the camera sways round the domes while the rover drives its loop and the astronauts walk"><br>[`outpost`](examples/outpost/): a lunar research station in a comic look, with a rover and astronauts on a skeleton. | <img src=".github/media/system.gif" alt="The planet Hearth approached from 150 km down to 30 km; its seas, lakes and rivers sharpen as finer cells stream in"><br>[`system`](examples/system/): a descent to the planet Hearth, one of four bodies on their paths round a sun. |
 | <img src=".github/media/fantasy-village-street.jpg" alt="A village street in the afternoon: timber-framed houses, cobbles, villagers"><br>[`fantasy-village`](examples/fantasy-village/) at street level: timber-framed houses, cobbles and villagers. | <img src=".github/media/system-planet.jpg" alt="A generated planet from orbit with the marks of its plan: rivers by class and the edges of lakes"><br>[`system`](examples/system/): Hearth from orbit with the marks of its generated plan (rivers and lake edges). |
 
-- **Rendering.** A renderer that draws the layers it is given, materials with GLSL per pass, a shadow map, many point lights, particles, instance sets, the sky and an atmosphere, and an environment of time, sun, sky and weather. [Rendering](packages/wallhammer-web/docs/rendering.md)
+- **Rendering.** A renderer that draws the layers it is given, materials with GLSL per pass, a shadow map, many point lights, particles and instance sets, and a clear medium below a level (water seen from above and from inside). [Rendering](packages/wallhammer-web/docs/rendering.md)
+- **Environment.** The hour and the date with the sun on its path for a place, a moon and stars, a sky or an atmosphere from the ground to orbit, weather (volumetric clouds from the ground to orbit with their shadows, rain under raining clouds, overcast, snow, fog), wind, a cloud cover by place over a planet, and seasons; content adds its own through environment slots. [The environment](packages/wallhammer-web/docs/environment.md)
 - **Generators.** Randomness from named hash streams, meshes, textures, and three optional content modules: buildings with roofs, façades and chimneys (`gen-arch`), ground (`gen-ground`) and vegetation (`gen-vegetation`). [Generators](packages/wallhammer-web/docs/generators.md)
 - **Simulation.** A deterministic fixed-step simulation driven by a log of commands, with entity tables, navigation, movers, collision modes and agendas. It runs in plain Node too. [Simulation](packages/wallhammer-web/docs/simulation.md)
 - **Streaming.** Quadtree cells loaded and unloaded around the viewer, on a plane or a sphere, generated in workers or read from baked files, under a ceiling of GPU memory. [World streaming](packages/wallhammer-web/docs/streaming.md)
@@ -121,9 +122,9 @@ Then open <http://localhost:5281/>. It lists the examples, each at `http://local
 
 - [`fantasy-village`](examples/fantasy-village/) ([live](https://freema.github.io/wallhammer-web/fantasy-village/)): a living fantasy village made by code (architecture, terrain, vegetation, villagers, smoke and fire, late afternoon to evening). Engine only, with its own content modules in the example.
 - [`outpost`](examples/outpost/) ([live](https://freema.github.io/wallhammer-web/outpost/)): a lunar research station in a comic look (flat colours, outlines, hard shadows). Engine only, with its own materials, a rover and astronauts on a skeleton.
-- [`system`](examples/system/) ([live](https://freema.github.io/wallhammer-web/system/)): a sun and several bodies on orbits, with one continuous flight from the surface of one body to another. Uses the content modules for its structures and their destruction.
-- [`planet`](examples/planet/) ([live](https://freema.github.io/wallhammer-web/planet/)): a flight from the surface of a small planet up to orbit and back. Engine only.
-- [`endless`](examples/endless/) ([live](https://freema.github.io/wallhammer-web/endless/)): an endless streamed world in quadtree cells, generated in workers or read from baked files. Engine only. A second page, `sphere.html` ([live](https://freema.github.io/wallhammer-web/endless/sphere.html)), shows the sphere world.
+- [`system`](examples/system/) ([live](https://freema.github.io/wallhammer-web/system/)): a sun and several bodies on orbits, with one continuous flight from the surface of one body to another, and volumetric clouds over the planet Hearth. Uses the content modules for its structures and their destruction.
+- [`planet`](examples/planet/) ([live](https://freema.github.io/wallhammer-web/planet/)): a flight from the surface of a small planet up to orbit and back, with volumetric clouds and rain, biomes and woods, a sea you can dive into and a movie mode (`#movie=1`). Engine only.
+- [`endless`](examples/endless/) ([live](https://freema.github.io/wallhammer-web/endless/)): an endless streamed world in quadtree cells, generated in workers or read from baked files, under volumetric clouds (`#vol=0` turns them off). Engine only. A second page, `sphere.html` ([live](https://freema.github.io/wallhammer-web/endless/sphere.html)), shows the sphere world.
 - [`destruction`](examples/destruction/) ([live](https://freema.github.io/wallhammer-web/destruction/)): generated structures on plain ground that break part by part. Uses the content modules (`gen-arch`, `sim/destruction`).
 - [`walk`](examples/walk/) ([live](https://freema.github.io/wallhammer-web/walk/)): a walking test course: a collision world, a walker and a follow camera.
 - [`minimal-3d`](examples/minimal-3d/) ([live](https://freema.github.io/wallhammer-web/minimal-3d/)): a perspective orbit view of an island with standing stones. Engine only.
@@ -136,7 +137,7 @@ The repository is a pnpm workspace:
 - `examples/`: the example pages above, each with its own `README.md`.
 - `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`) and host tools (`shot/shot.mjs`, `bench`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
-- `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending).
+- `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending, releasing).
 - `internal/`: internal working material, ignored by git (see [Internal notes](#internal-notes)).
 
 ## Running
@@ -181,14 +182,15 @@ docker compose exec -T dev sh -c 'cd /app && pnpm build:examples'   # dist-pages
 ```sh
 docker compose exec -T dev sh -c 'cd /app && pnpm typecheck'          # types of the engine and the examples; no error
 docker compose exec -T dev sh -c 'cd /app && pnpm check:layers'       # layers: 0 violation(s)
-docker compose exec -T dev sh -c 'cd /app && pnpm check:layers:test'  # ok: known-bad fixture fails with all 16 expected findings
-docker compose exec -T dev sh -c 'cd /app && pnpm test:golden'        # golden: 72 of 72 …, then golden: 25 of 25 generators unchanged
+docker compose exec -T dev sh -c 'cd /app && pnpm check:layers:test'  # ok: known-bad fixture fails with all … expected findings
+docker compose exec -T dev sh -c 'cd /app && pnpm test:golden'        # golden: N of N generators unchanged, twice (engine set, then examples set)
 docker compose exec -T dev sh -c 'cd /app && pnpm check:docs'         # docs: … 0 finding(s)
-docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'         # check:mesh: 27/27 ok in … ms
-docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'       # motion: 26 of 26 scenarios ok, … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'         # check:mesh: N/N ok in … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'       # motion: N of N scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'         # walk: N of N scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:follow'       # N/N follow cases passed in … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the packed package installs, loads and type-checks
+docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'  # planet: all checks passed
 ```
 
 - `check:layers` guards the module layers, the boundary between the engine, the content modules and the examples, and that WebGL is only in `gpu` and DOM only in `platform`. There are no exceptions.
@@ -197,6 +199,7 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the 
 - `check:mesh` and `check:motion` test, in plain Node, the mesh builder with bare shapes (`gen-mesh`) and the motion module (`motion`).
 - `check:walk` tests, in plain Node, the collision world, the walker (including saving and restoring its state), the follow camera and the course of `examples/walk`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
 - `check:pack` checks the package in the shape it is published to npm (see below). It needs the network.
+- `pnpm verify` in `examples/planet` is that example's own headless check (generator, flight, streaming, movie). `examples/endless` has one too (`pnpm verify --seed 7`), for its baked cells; it needs `pnpm bake` first and is not part of CI.
 
 ## Pictures
 

@@ -24,7 +24,9 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 - `tools/golden/engine/` (engine recipes) and `tools/golden/` (recipes that need example code): golden hashes, each set with its own `hashes.json`.
 - `tools/walk`, `tools/follow-check`: checks of walking and the follow camera (`check:walk`, `check:follow`).
 - `tools/serve` (one server for all examples), `tools/vite` (dev-server plugin), `tools/shot` (pictures: `page-shot.mjs` in the `shot` service, `shot.mjs` on the host), `tools/bench` (performance, on the host).
-- `.claude/skills/`: `wallhammer-run` (running), `wallhammer-verify` (checks), `wallhammer-extend` (where things go when extending).
+- `tools/pages`: the static build of the examples for the live demos (`pnpm build:examples`).
+- `examples/planet/scripts/verify.ts`, `examples/endless/scripts/verify.ts`: the examples' own headless checks (`pnpm verify` in the example's folder).
+- `.claude/skills/`: `wallhammer-run` (running), `wallhammer-verify` (checks), `wallhammer-extend` (where things go when extending), `wallhammer-release` (releasing a version).
 - `internal/`: internal working material, never committed.
 - `.github/workflows/`: `checks.yml` (all checks on push and pull request), `publish.yml` (npm publish when a GitHub release is published), `pages.yml` (live demos: the examples built to GitHub Pages on push to `main`).
 - `README.md`: running, checks, pictures, npm publishing and release, origin, the copy in the city repository.

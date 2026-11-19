@@ -38,3 +38,5 @@ jobs:
       - run: pnpm check:walk
       - run: pnpm check:follow
       - run: pnpm check:pack
+      # The planet example's own headless check (generator, flight, streaming, movie); about 10 s.
+      - run: pnpm --filter wallhammer-example-planet verify

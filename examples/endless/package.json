@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "description": "Endless streamed world on wallhammer-web: noise terrain in quadtree cells, generated in workers or read from baked files.",
+  "description": "Endless streamed world on wallhammer-web: noise terrain in quadtree cells, generated in workers or read from baked files, under a sky with weather and volumetric clouds.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

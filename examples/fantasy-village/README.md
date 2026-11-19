@@ -54,6 +54,17 @@ reopens the same picture. Measuring parameters are kept in the hash when given:
 | `sh=` | `0` | shadow redraws per second of animation time caused by moving parts; `0` = in every frame they move |
 | `sky=` | `behind` | `first` draws the sky before the scene (shades every pixel); `behind` only where the scene left gaps |
 | `aa=` | browser | `0`, `2` or `4` samples per pixel (`renderer.samples`) |
+| `cs=` | `1` | `0` computes the cloud shadows in every lit fragment instead of reading them from the engine's cloud shadow texture (`createEngine({ cloudShadows: true })`) |
+
+The cloud shadows come from the engine's cloud shadow texture: the same pattern, drawn into a texture every few frames
+instead of three noise lookups in every lit fragment. The picture is the same (a mean difference under 0.2 of 255 in
+the presets); on an Apple M4 Pro at 2560 × 1440 the frame (`profile(30)`, the shadow kept) fell from 5.4–5.6 to
+4.9–5.1 ms in `overview`, from 4.0 to 3.5 ms in `street` and from 5.1 to 4.5 ms in `far`.
+
+The engine's volumetric clouds (`cloudVolume`) are not used here. The sky of the village is a painted gradient seen
+through a haze of 450 m, mostly behind hills; clouds 1.5 to 4 km up disappear into that haze, so they were not to be
+seen in any preset, from the castle or in the tour, while they cost 0.2–0.9 ms more per frame at 2560 × 1440. Their
+shadows are kilometres wide and would darken the whole village at once.
 
 `movie=1` in the hash starts movie mode once the village is built, `walk=1` walk mode. Neither is written back: the
 hash is rewritten when the mode ends or a key is pressed, and then it is gone.

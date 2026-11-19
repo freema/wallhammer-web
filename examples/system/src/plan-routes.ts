@@ -1250,6 +1250,68 @@ export function lanePoint(plan: WorldPlan, line: number, alongM: number): { dir:
   return linePoint(plan, line, alongM, true);
 }
 
+// --- Main roads ------------------------------------------------------------------------------------------------------
+
+/**
+ * A route is a main road when at least this many sites lie on each side of it in the tree of routes (the traffic it
+ * carries); so is every line two routes or more share.
+ */
+export const MAIN_ROAD_SITES = 8;
+
+const mainOf = new WeakMap<WorldPlan, Uint8Array>();
+
+/**
+ * Per plan line, 1 for a road or deck line of a main road (drawn as gravel), else 0 (a track). A pure function of the
+ * plan's table of routes (stage ≥ 4), derived once per plan; nothing of it is stored in the plan.
+ */
+export function mainRoadLines(plan: WorldPlan): Uint8Array {
+  let main = mainOf.get(plan);
+  if (main) return main;
+  main = new Uint8Array(plan.lines.owner.length);
+  mainOf.set(plan, main);
+  const rt = plan.routes;
+  const S = plan.sites;
+  if (!rt || !S) return main;
+  const adj: number[][] = Array.from({ length: S.count }, () => []);
+  for (let r = 0; r < rt.count; r++) {
+    adj[rt.a[r]!]!.push(r);
+    adj[rt.b[r]!]!.push(r);
+  }
+  // The sites reached from `from` without route `without`, marked with `stamp`.
+  const mark = new Int32Array(S.count).fill(-1);
+  const sideSize = (from: number, without: number, stamp: number): number => {
+    const stack = [from];
+    mark[from] = stamp;
+    let n = 0;
+    while (stack.length > 0) {
+      const s = stack.pop()!;
+      n++;
+      for (const r of adj[s]!) {
+        if (r === without) continue;
+        const o = rt.a[r] === s ? rt.b[r]! : rt.a[r]!;
+        if (mark[o] !== stamp) {
+          mark[o] = stamp;
+          stack.push(o);
+        }
+      }
+    }
+    return n;
+  };
+  const uses = new Uint16Array(main.length);
+  for (let r = 0; r < rt.count; r++) {
+    const sa = sideSize(rt.a[r]!, r, 2 * r);
+    // Within a loop both ends stay joined without the route: the whole component lies on each side.
+    const sb = mark[rt.b[r]!] === 2 * r ? sa : sideSize(rt.b[r]!, r, 2 * r + 1);
+    const busy = Math.min(sa, sb) >= MAIN_ROAD_SITES;
+    for (let i = rt.lineStart[r]!; i < rt.lineStart[r + 1]!; i++) {
+      const l = rt.lineOf[i]!;
+      uses[l] = uses[l]! + 1;
+      if (busy || uses[l]! >= 2) main[l] = 1;
+    }
+  }
+  return main;
+}
+
 /** What the roads of a plan are: counts, lone sites, length, the steepest grade, deck clearance and span, deepest cut. */
 export interface RouteStats {
   routes: number;

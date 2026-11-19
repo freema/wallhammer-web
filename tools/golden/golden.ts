@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { borderSeams, fileEqualsGenerator, levelSeams, managerScript, orderIndependence, selectionScript, smoothCells } from './streaming-scenario.ts';
 import { horizonSamples, noiseTable, shapeScript, sphereCells, sphereCoverage, sphereSeams } from './sphere-scenario.ts';
-import { planetCells, planetFlight } from './planet-scenario.ts';
+import { planetCells, planetFlight, planetMovie, planetSeaPlaces, planetWeather } from './planet-scenario.ts';
 import { systemCells, systemFlights } from './system-scenario.ts';
 import { endlessStripScript, planetStripScript } from './strip-scenario.ts';
 import { damageScript } from './damage-scenario.ts';
@@ -64,6 +64,9 @@ const RECIPES: Record<string, () => string> = {
   'world plan: routes (stage 4: roads and decks within the grade limit, nodes at one height, decks clear the water; earlier fingerprints unchanged; same bytes twice; routePoint without jumps)': () => worldPlanRoutes(),
   'system example structures (five kinds in a village, mesh bytes, massing of a village and a span with piers and parapets, damage state there and back)': () => hash(structuresScript()),
   'system example flights (reaches nested or apart; surface to surface of a neighbour and a descent from the whole system: no jump, legs meet at one speed, the neighbour in the sky at the landing)': () => hash(systemFlights()),
+  'planet example weather (cloud cover by place at three times: profile within 0–1, patches drift with the wind, a forced cover; the weather at 400 places: rain only under a cover over 0.6, snow in the cold)': () => hash(planetWeather()),
+  'planet example sea places (shallow and deep place of three seeds: the floor at the depth asked for, below latitude 50; same places twice)': () => hash(planetSeaPlaces()),
+  'planet example movie (the plan from the seed; poses of the seven shots twice a second: pure, clamped to the shot, unit views; frames follow the shots, fades within 0–1, the movie loops)': () => hash(planetMovie()),
 };
 
 const accept = process.argv.includes('--accept');

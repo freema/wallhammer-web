@@ -4,10 +4,12 @@
 // comes from code; the same seed, tick, time and view always give the same image.
 //
 // URL hash: #seed=7&tick=600&hour=18.5&day=250&yaw=35&pitch=24&dist=105&w=rain   (tick: frozen at that tick)
+//   ground=follow: the ground starts dry and bare and follows the weather (`weatherGround` on the animation clock):
+//   with w=snow it whitens over a few minutes, with w=rain it is wet within half a minute.
 // Controls: drag orbits, the wheel zooms, [ ] move the hour, space runs the day, P pauses the figures, . steps one
 // tick, - and = halve and double their speed, C calls the wanderers to the gap in the ring.
 
-import { DEFAULT_WEATHER, PerspectiveOrbitRig, definePalette, heightFieldMesh } from 'wallhammer-web';
+import { DEFAULT_WEATHER, PerspectiveOrbitRig, definePalette, heightFieldMesh, weatherGround } from 'wallhammer-web';
 import type { InstanceData, MeshData, WeatherState } from 'wallhammer-web';
 import { InstancedLayer, MeshLayer, RigLayer } from 'wallhammer-web/render';
 import type { InstanceBatch, Material } from 'wallhammer-web/render';
@@ -30,6 +32,9 @@ const WEATHER: Record<string, Partial<WeatherState>> = {
   snow: { cloudCover: 0.7, precipitation: 0.6, precipitationKind: 'snow', snowCover: 0.8, fog: 0.2 },
   fog: { cloudCover: 0.3, fog: 0.7 },
 };
+/** With ground=follow the snow cover and the wetness come from the weather over time, not from the preset. */
+const groundFollows = q.get('ground') === 'follow';
+const weatherOf = (name: string): Partial<WeatherState> => ({ ...(WEATHER[name] ?? {}), ...(groundFollows ? { snowCover: 0, wetness: 0 } : {}) });
 
 // --- Engine: canvas, renderer, environment, view, simulation and the frame loop in one place -------------------------
 const glow = glowSlot();
@@ -44,13 +49,21 @@ const engine = createEngine({
   renderer: { shadowSoftnessM: 0.35, shadowDistanceM: 420 },
   sim: life.sim,
   // The moon stands low in the south, so the orbit view can see it.
-  environment: { mode: 'day', day: { moonAzimuthDeg: 150, moonElevationDeg: 13 }, site: { latitudeDeg: 51, longitudeDeg: 0, dayOfYear: num('day', 250), utcOffsetHours: 0 }, hour: num('hour', 18.5), hoursPerSecond: 0.5, weather: WEATHER[q.get('w') ?? 'clear'] ?? {}, wind: { fromDeg: 230, speedMs: 5 }, clouds: { sizeM: 520 } },
+  environment: { mode: 'day', day: { moonAzimuthDeg: 150, moonElevationDeg: 13 }, site: { latitudeDeg: 51, longitudeDeg: 0, dayOfYear: num('day', 250), utcOffsetHours: 0 }, hour: num('hour', 18.5), hoursPerSecond: 0.5, weather: weatherOf(q.get('w') ?? 'clear'), wind: { fromDeg: 230, speedMs: 5 }, clouds: { sizeM: 520 } },
   orbitControls: true,
   precipitation: true,
   sky: { hazeDistanceM: 1500, cloudHeightM: 1000 },
 });
 const { renderer, env, sim, view } = engine;
 env.day.pause();
+let groundTime = env.time.time;
+if (groundFollows) {
+  renderer.beforeFrame.push(() => {
+    const dt = env.time.time - groundTime;
+    groundTime = env.time.time;
+    if (dt > 0) env.weather = weatherGround(env.weather, Math.min(dt, 1));
+  });
+}
 
 // --- Scene -----------------------------------------------------------------------------------------------------------
 const field = islandField(seed);
@@ -125,7 +138,8 @@ const now = <T>(f: () => T): T => (f(), engine.renderNow(), undefined as T);
   setTimeOfDay: (h: number) => now(() => (env.day.pause(), env.day.set(h))),
   setTime: (s: number) => now(() => (env.time.pause(), env.time.set(s))),
   setTick: (n: number) => now(() => (sim.pause(), sim.seek(n))),
-  setWeather: (name: string) => now(() => (env.weather = { ...DEFAULT_WEATHER, ...(WEATHER[name] ?? {}) })),
+  // With ground=follow the ground keeps what it has and goes on from there.
+  setWeather: (name: string) => now(() => (env.weather = { ...DEFAULT_WEATHER, ...weatherOf(name), ...(groundFollows ? { snowCover: env.weather.snowCover, wetness: env.weather.wetness } : {}) })),
   rigs: () => ({ ...rigLayer.counts, track: life.track.table.count }),
   stats: () => ({ ...renderer.lastStats, renderer: engine.device.name, seed, tick: sim.tick, state: sim.stateHash(), figures: t.count, glow: engine.link.value(glow)?.strength ?? 0 }),
   benchmark: (n: number): number => renderer.benchmark(view, n),

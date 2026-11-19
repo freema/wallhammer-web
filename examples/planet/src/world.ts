@@ -5,11 +5,21 @@
 // pole), never of the face or the cell they are built in: two cells agree on their shared border, across the edges of
 // the cube as well, and a cell's bytes do not depend on which cells were built before it.
 //
-// Trees and rocks come from rules on fixed grids of the cube faces. The anchor of an object is a grid point; the object
-// belongs to the cell that contains its anchor and its id is a hash of (seed, rule, face, anchor). An object stands
-// along the local up of its base point: the instance record holds only the base and a turn about that up. Objects
-// exist in the two finest levels only. Farther away the surface carries the trees as a cover baked into its
-// vertices (`surfaceCover`), so a forest keeps its colour and its outline at any distance.
+// Plants and rocks come from rules on fixed grids of the cube faces. The anchor of an object is a grid point; the
+// object belongs to the cell that contains its anchor and its id is a hash of (seed, rule, face, anchor). An object
+// stands along the local up of its base point: the instance record holds only the base and a turn about that up.
+// Every object stands in the cells of `OBJECT_LEVEL` and finer; the tallest trees also stand, thinned by a rank, in
+// the three levels above it (`THIN_RANK`). Farther away the surface carries the plants as a cover baked into its
+// vertices (`surfaceCover`), so a wood keeps its colour and its outline at any distance; the materials lift it into a
+// canopy (shaders.ts).
+//
+// The climate (`climate`, `landWeights`) gives six biomes of land from latitude, height and a moisture noise of the
+// seed: tundra, taiga, broadleaf forest, meadow, dry land and rock, and ice where it is coldest. They colour the
+// ground and set the chances of four plants: conifers, broadleaf trees, trees with a flat crown and shrubs.
+//
+// The sea fills everything below the base sphere. Its floor is the ground itself (sand near the shore, rock in
+// patches, darker silt deeper down); the water is a second mesh of every cell that reaches below sea level, at the
+// base sphere (`waterPatch`), drawn translucent over the floor (shaders.ts).
 
 import type { InstanceData, MeshData, VertexLayout } from 'wallhammer-web/base';
 import { cubeDirection, cubeGrid, fractalNoise3, hashInts, shapeHash, spherePatchMesh, spherePatchRadius, unit, valueNoise3 } from 'wallhammer-web/gen-core';
@@ -22,13 +32,16 @@ export const SHAPE = new SphereWorld(RADIUS_M);
 /** The seed the page uses when the URL gives none. */
 export const DEFAULT_SEED = 2611;
 /** Raise when the output of the generator changes on purpose (it is written into every cell). */
-export const DOMAIN_VERSION = 1;
+export const DOMAIN_VERSION = 6;
 /** Quads along a cell edge, at every level. */
 export const QUADS = 32;
 /** Level 0 is a whole face of the cube (157 km along its middle); level 11 cells are 77 m with a vertex every 2.4 m. */
 export const ROOT_LEVEL = 0;
 export const LEAF_LEVEL = 11;
-/** Coarsest level whose cells hold objects. From there on the surface carries the trees as its cover. */
+/**
+ * Coarsest level whose cells hold every object. The three levels above it hold the tallest trees, thinned
+ * (`THIN_RANK`); from there on the surface carries the plants as its cover.
+ */
 export const OBJECT_LEVEL = 10;
 /** Selection of levels by screen-space error. */
 export const SELECTION = {
@@ -40,12 +53,13 @@ export const SELECTION = {
 } as const;
 /** The blend between levels is free of jumps while a cell is split at more than 2.02 edges. */
 export const MIN_SPLIT_EDGES = 2.05;
-/** Lowest height the surface has: the sea. */
+/** Height of the water: the sea fills everything below the base sphere. */
 export const MIN_HEIGHT_M = 0;
 /**
- * Radius of the sphere that hides what lies behind the horizon. It must lie under everything drawn: under the sea,
- * and under the flat triangles of the coarsest level, which dip inside the sphere between their vertices (taken
- * twice, to be on the safe side).
+ * Radius of the sphere that hides what lies behind the horizon, for an eye above the sea: under the water, which hides
+ * the sea floor beyond its own horizon (seen that far it lets nothing through), and under the flat triangles of the
+ * coarsest level, which dip inside the sphere between their vertices (taken twice, to be on the safe side). An eye
+ * under the water is inside the sphere and hides nothing.
  */
 export const HORIZON_RADIUS_M = RADIUS_M + MIN_HEIGHT_M - 2 * SHAPE.facetDropM(ROOT_LEVEL, QUADS);
 /** Thickness of the shell of air. The highest ground is about 6 km. */
@@ -75,13 +89,15 @@ interface Seeds {
   bumps: number;
   moisture: number;
   tint: number;
+  warmth: number;
+  damp: number;
 }
 const seedCache = new Map<number, Seeds>();
 function seeds(seed: number): Seeds {
   let s = seedCache.get(seed);
   if (!s) {
     const k = (i: number): number => hashInts(seed, 0x91a7e7, i);
-    s = { land: k(1), ridge: k(2), range: k(3), hills: k(4), bumps: k(5), moisture: k(6), tint: k(7) };
+    s = { land: k(1), ridge: k(2), range: k(3), hills: k(4), bumps: k(5), moisture: k(6), tint: k(7), warmth: k(8), damp: k(9) };
     seedCache.set(seed, s);
   }
   return s;
@@ -109,95 +125,218 @@ export function groundHeight(seed: number, x: number, y: number, z: number): num
   return land + range * r * r * 3200 + hills * (120 + 460 * range) + bumps * 2.2;
 }
 
-/** Height of the visible surface: the sea stays at the base sphere. */
+/** Height of the top of land or water: the sea stays at the base sphere. The terrain mesh shows the ground itself. */
 export function surfaceHeight(seed: number, x: number, y: number, z: number): number {
   return Math.max(MIN_HEIGHT_M, groundHeight(seed, x, y, z));
 }
 
+// --- Climate and biomes ----------------------------------------------------------------------------------------------
+// Temperature falls toward the poles of the y axis and with height; moisture is two octaves of value noise of the seed
+// with a drier belt round the 25th parallels. Six biomes of land come from the two and the height (`landWeights`):
+// tundra, taiga, broadleaf forest, meadow, dry land and rock, with ice where it is coldest. Every colour and chance is
+// taken from continuous weights round the thresholds, never from a hard biome id, so the levels agree and nothing steps.
+
+/** Thresholds of the biomes in temperature, moisture and height, and the half-widths of the blend round them. */
+const T_ICE = 0.16;
+const T_TUNDRA = 0.3;
+const T_TAIGA = 0.46;
+const T_DRY = 0.62;
+const M_TAIGA = 0.3;
+const M_FOREST = 0.54;
+const M_DRY = 0.34;
+const H_ROCK = 1900;
+const T_BLEND = 0.03;
+const M_BLEND = 0.05;
+const H_BLEND = 100;
+/** No plant above this height (metres), none on the beach below the second. */
+export const PLANT_TOP_M = 1700;
+const PLANT_BOTTOM_M = 4;
+
+/** Index of each land biome in the weights of `landWeights`. */
+export const BIOME = { ice: 0, tundra: 1, taiga: 2, forest: 3, meadow: 4, dry: 5, rock: 6 } as const;
+const BIOMES = 7;
+
+const above = (x: number, th: number, w: number): number => smooth(th - w, th + w, x);
+
 /** Temperature 0–1 (falls toward the poles of the y axis and with height) and moisture 0–1. */
-function climate(seed: number, x: number, y: number, z: number, h: number): { t: number; m: number } {
+export function climate(seed: number, x: number, y: number, z: number, h: number): { t: number; m: number } {
+  const s = seeds(seed);
   const lat = Math.abs(y) / RADIUS_M;
-  return { t: 1 - lat * lat * 0.9 - Math.max(0, h) / 4600, m: valueNoise3(x, y, z, 24000, seeds(seed).moisture) };
+  const t = 1 - lat * lat * 0.9 - Math.max(0, h) / 4600 + 0.08 * (valueNoise3(x, y, z, 18000, s.warmth) - 0.5);
+  // The sine of 25 degrees is 0.42: the dry belts of the subtropics.
+  const belt = 1 - smooth(0, 0.2, Math.abs(lat - 0.42));
+  const raw = 0.72 * valueNoise3(x, y, z, 24000, s.moisture) + 0.28 * valueNoise3(x, y, z, 5200, s.damp);
+  const m = Math.min(1, Math.max(0, 0.5 + (raw - 0.5) * 1.6 - 0.14 * belt + 0.04));
+  return { t, m };
+}
+
+/** Continuous weights of the land biomes (index by BIOME), summing to 1. */
+export function landWeights(t: number, m: number, h: number, out: Float64Array = new Float64Array(BIOMES)): Float64Array {
+  const ice = 1 - above(t, T_ICE, T_BLEND);
+  const rest = 1 - ice;
+  const rock = rest * above(h, H_ROCK, H_BLEND);
+  const L = rest - rock;
+  const a = above(t, T_TUNDRA, T_BLEND);
+  const b = above(t, T_TAIGA, T_BLEND);
+  const warm = above(t, T_DRY, T_BLEND);
+  const mT = above(m, M_TAIGA, M_BLEND);
+  const mF = above(m, M_FOREST, M_BLEND);
+  const mD = 1 - above(m, M_DRY, M_BLEND);
+  out[BIOME.ice] = ice;
+  out[BIOME.rock] = rock;
+  out[BIOME.tundra] = L * (1 - a + a * (1 - b) * (1 - mT));
+  out[BIOME.taiga] = L * a * (1 - b) * mT;
+  out[BIOME.forest] = L * b * mF;
+  out[BIOME.dry] = L * b * (1 - mF) * warm * mD;
+  out[BIOME.meadow] = L * b * (1 - mF) * (1 - warm * mD);
+  return out;
 }
 
 type RGB = readonly [number, number, number];
 const SAND: RGB = [202, 188, 140];
-const GRASS: RGB = [104, 134, 62];
-const WOOD: RGB = [58, 90, 46];
+const TUNDRA: RGB = [130, 128, 100];
+const TAIGA: RGB = [80, 100, 60];
+const FOREST: RGB = [74, 112, 50];
+const MEADOW: RGB = [104, 134, 62];
 const DRY: RGB = [196, 152, 98];
-const HEATH: RGB = [130, 128, 100];
 const ROCK: RGB = [120, 112, 104];
 const SNOW: RGB = [238, 241, 245];
-const SHALLOW: RGB = [44, 104, 118];
-const DEEP: RGB = [12, 38, 72];
+/** The sea floor: wet sand near the shore, rock in patches, silt further down. */
+const SEA_SAND: RGB = [184, 168, 122];
+const SEA_ROCK: RGB = [112, 108, 100];
+const SEA_SILT: RGB = [128, 130, 120];
 const mixRgb = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
-/** Share of the anchors of the tree rule that hold a tree, 0–1, from the climate. */
-function forest(t: number, m: number): number {
-  return smooth(0.42, 0.6, m) * smooth(0.25, 0.4, t);
-}
-
-/** Chance of a tree at an anchor on ground of height `h`. */
-function treeChance(t: number, m: number, h: number): number {
-  return h < 4 || h > 1700 ? 0 : 0.8 * forest(t, m) + 0.03;
-}
+/** Scratch weights; every caller fills them before it reads them. */
+const weights = new Float64Array(BIOMES);
 
 /**
- * RGBA bytes of the surface; alpha 255 marks the sea. A function of the point alone, so every level agrees. `h` is the
- * height of the visible surface: 0 is the sea, whose colour follows the depth of the broad term under it.
+ * RGBA bytes of the ground; alpha 255 marks the sea floor (ground under the water). A function of the point alone, so
+ * every level agrees. `h` is the height of the ground.
  */
 export function surfaceColor(seed: number, x: number, y: number, z: number, h: number): [number, number, number, number] {
-  if (h <= 0) {
-    const c = mixRgb(SHALLOW, DEEP, smooth(0, 600, -landHeight(seed, x, y, z)));
-    return [Math.round(c[0]), Math.round(c[1]), Math.round(c[2]), 255];
+  if (h < 0) {
+    const s = seeds(seed);
+    // Rock in patches about 100 m across; silt and a little darkness with depth.
+    const rock = smooth(0.56, 0.7, valueNoise3(x, y, z, 110, s.tint) * 0.8 + 0.2 * valueNoise3(x, y, z, 23, s.bumps));
+    let c = mixRgb(SEA_SAND, SEA_SILT, smooth(6, 120, -h));
+    c = mixRgb(c, SEA_ROCK, rock * 0.85);
+    const v = (0.9 + 0.2 * valueNoise3(x, y, z, 37, s.damp)) * (1 - 0.3 * smooth(60, 600, -h));
+    return [Math.round(c[0] * v), Math.round(c[1] * v), Math.round(c[2] * v), 255];
   }
   const { t, m } = climate(seed, x, y, z, h);
-  let c = mixRgb(GRASS, WOOD, forest(t, m) * 0.6);
-  c = mixRgb(c, DRY, smooth(0.72, 0.86, t) * (1 - smooth(0.28, 0.44, m)));
-  c = mixRgb(c, HEATH, 1 - smooth(0.2, 0.34, t));
-  c = mixRgb(c, SAND, 1 - smooth(3, 26, h));
-  c = mixRgb(c, ROCK, smooth(1000, 2100, h) * 0.85);
-  c = mixRgb(c, SNOW, 1 - smooth(0.05, 0.16, t));
+  const w = landWeights(t, m, h, weights);
+  const ice = w[BIOME.ice]!;
+  const rest = 1 - ice;
+  let c: RGB = [0, 0, 0];
+  if (rest > 0) {
+    const k = (b: number): number => w[b]! / rest;
+    const add = (col: RGB, f: number): RGB => [c[0] + col[0] * f, c[1] + col[1] * f, c[2] + col[2] * f];
+    c = add(TUNDRA, k(BIOME.tundra));
+    c = add(TAIGA, k(BIOME.taiga));
+    c = add(FOREST, k(BIOME.forest));
+    c = add(MEADOW, k(BIOME.meadow));
+    c = add(DRY, k(BIOME.dry));
+    c = add(ROCK, k(BIOME.rock));
+  }
+  c = mixRgb(c, SAND, (1 - smooth(3, 26, h)) * rest);
+  c = mixRgb(c, ROCK, smooth(1000, 2100, h) * 0.85 * rest);
+  c = mixRgb(c, SNOW, 1 - smooth(0.05, T_ICE, t));
   const v = 0.9 + 0.2 * valueNoise3(x, y, z, 420, seeds(seed).tint);
   return [Math.min(255, Math.round(c[0] * v)), Math.min(255, Math.round(c[1] * v)), Math.min(255, Math.round(c[2] * v)), 0];
 }
 
-/** Share of an anchor's square a tree hides from a slanted view, and how much darker a stand of trees is than a lit plane of their colour. */
-const COVER_PER_TREE = 0.45;
-const COVER_SHADE = 0.85;
+// --- Plants ----------------------------------------------------------------------------------------------------------
+// One grid of anchors (`PLANT_GRID`, about 19 m apart) carries every plant: one draw per anchor picks at most one of
+// four kinds by their chances (a conifer, a broadleaf tree, a tree with a flat crown, a shrub), so they never stand on
+// each other. The far cover is the expected value of the same rule.
 
-/** Colour of a tree before its own brightness: darker and bluer where it is cold. */
-function treeColor(cold: number): RGB {
-  return [0.2 - 0.06 * cold, 0.34 - 0.05 * cold, 0.15 + 0.03 * cold];
+/** Chances per anchor of the four plants, from the biome weights. */
+function plantChances(t: number, h: number, w: Float64Array): [conifer: number, broadleaf: number, flat: number, shrub: number] {
+  if (h > PLANT_TOP_M || h < PLANT_BOTTOM_M) return [0, 0, 0, 0];
+  const conifer = 0.78 * w[BIOME.taiga]! + 0.16 * w[BIOME.forest]! + 0.04 * w[BIOME.tundra]! + 0.02 * w[BIOME.meadow]!;
+  const broadleaf = 0.7 * w[BIOME.forest]! + 0.05 * w[BIOME.meadow]!;
+  const flat = 0.06 * w[BIOME.dry]! + 0.025 * w[BIOME.meadow]! * smooth(0.7, 0.8, t);
+  const shrub = 0.14 * w[BIOME.meadow]! + 0.12 * w[BIOME.tundra]! + 0.1 * w[BIOME.forest]! + 0.08 * w[BIOME.dry]! + 0.05 * w[BIOME.taiga]!;
+  return [conifer, broadleaf, flat, shrub];
 }
 
+/** Colours of the plants before their own brightness. */
+const coniferColor = (cold: number): RGB => [0.2 - 0.06 * cold, 0.34 - 0.05 * cold, 0.15 + 0.03 * cold];
+const broadleafColor = (warm: number): RGB => [0.24 - 0.04 * warm, 0.38 + 0.02 * warm, 0.14 - 0.02 * warm];
+const FLAT_COLOR: RGB = [0.3, 0.36, 0.13];
+const shrubColor = (dry: number): RGB => [0.3 + 0.12 * dry, 0.36 + 0.02 * dry, 0.16];
+/** How cold a conifer is (0–1: darker, bluer, a little snow), how warm a broadleaf tree, how dry a shrub. */
+const coldOf = (t: number): number => 1 - smooth(0.3, 0.5, t);
+const warmOf = (t: number): number => smooth(0.7, 0.95, t);
+const dryOf = (t: number, m: number): number => smooth(0.5, 0.75, t) * (1 - smooth(0.3, 0.5, m));
+
+/** Share of an anchor's square each plant hides from a slanted view, and how much darker a stand is than a lit plane. */
+const COVER_CONIFER = 0.45;
+const COVER_BROADLEAF = 0.55;
+const COVER_FLAT = 0.4;
+const COVER_SHRUB = 0.15;
+const COVER_SHADE = 0.85;
+
 /**
- * What the trees look like from afar, as RGBA bytes: rgb their mean colour, alpha the share of the ground they hide.
- * It is the tree rule itself taken as an expected value (the same chance per anchor, the same colours), a function of
- * the point alone, so the far look has the borders of the forest and every level agrees.
+ * What the plants look like from afar, as RGBA bytes: rgb their chance-weighted mean colour, alpha the share of the
+ * ground they hide. It is the plant rule itself taken as an expected value (the same chances, the same colours), a
+ * function of the point alone, so the far look has the borders of the woods and every level agrees.
  */
 export function surfaceCover(seed: number, x: number, y: number, z: number, h: number): [number, number, number, number] {
   const { t, m } = climate(seed, x, y, z, h);
-  const c = treeColor(1 - smooth(0.3, 0.5, t));
+  const [cc, cb, cf, cs] = plantChances(t, h, landWeights(t, m, h, weights));
+  const kc = cc * COVER_CONIFER;
+  const kb = cb * COVER_BROADLEAF;
+  const kf = cf * COVER_FLAT;
+  const ks = cs * COVER_SHRUB;
+  const sum = kc + kb + kf + ks;
+  if (sum <= 0) return [0, 0, 0, 0];
+  const conifer = coniferColor(coldOf(t));
+  const broadleaf = broadleafColor(warmOf(t));
+  const shrub = shrubColor(dryOf(t, m));
   // Mean of the rule's brightness term, 0.85 + 0.25 r.
-  const v = 0.975 * COVER_SHADE * 255;
-  return [Math.round(c[0] * v), Math.round(c[1] * v), Math.round(c[2] * v), Math.round(255 * (1 - Math.exp(-treeChance(t, m, h) * COVER_PER_TREE)))];
+  const v = (0.975 * COVER_SHADE * 255) / sum;
+  const ch = (k: 0 | 1 | 2): number => Math.round((conifer[k] * kc + broadleaf[k] * kb + FLAT_COLOR[k] * kf + shrub[k] * ks) * v);
+  return [ch(0), ch(1), ch(2), Math.round(255 * (1 - Math.exp(-sum)))];
 }
+
+/**
+ * The trees from afar. Every anchor of the plant grid has a rank (0–1, in steps of 1/1024 plus half a step, so it
+ * never lies on a threshold, from a stream of its own); a tree's height and turn grow with it. A cell `d` levels
+ * coarser than `OBJECT_LEVEL` holds the trees ranked from `THIN_RANK[d]` up: the tallest quarter one level up, the
+ * tallest sixteenth two levels up, the tallest 64th three levels up. So the trees of a coarse cell are some of its
+ * children's, at the same places with the same sizes, and the trees of a level leave in the order of their rank
+ * toward its far end (`THIN_GLSL` in shaders.ts holds the same thresholds). Shrubs and rocks stay at the object level.
+ */
+export const THIN_RANK = [0, 768 / 1024, 960 / 1024, 1008 / 1024] as const;
+const RANK_STEPS = 1024;
+
+/** Values of one object: reach, height, turn, width, depth, r, g, b, variant. */
+type Placed = readonly number[];
 
 /** A scatter rule: objects on a grid of `2^gridLevel` intervals across a face, shown from `OBJECT_LEVEL` to the leaves. */
 interface Rule {
   id: number;
-  /** Name of the archetype the instances are drawn with. */
-  name: string;
+  /** Names of the archetypes the instances are drawn with; `place` answers with an index into them. */
+  names: readonly string[];
   gridLevel: number;
-  /** Returns reach, height, turn, width, depth, r, g, b, variant; or null for no object. `h` is the ground height. */
-  place: (seed: number, x: number, y: number, z: number, h: number, r: (k: number) => number) => readonly number[] | null;
+  /** Which of `names` also stand, thinned by rank, in the cells of the `THIN_RANK.length - 1` levels above `OBJECT_LEVEL`. */
+  thinned: readonly boolean[];
+  /** Rank of the anchor (i, j) of the rule's grid on a face, 0–1, for the thinned names. */
+  rank?: (seed: number, face: number, i: number, j: number) => number;
+  /** The kind (index into `names`) and the values of the object at an anchor, or null for none. `h` is the ground height. */
+  place: (seed: number, x: number, y: number, z: number, h: number, r: (k: number) => number, rank: number) => { kind: number; p: Placed } | null;
 }
+
+/** Grid level of the plant rule: anchors about 19 m apart. */
+const PLANT_GRID = 13;
 
 export const RULES: readonly Rule[] = [
   {
     id: 1,
-    name: 'rock',
+    names: ['rock'],
+    thinned: [false],
     gridLevel: 12,
     place: (seed, x, y, z, h, r) => {
       if (h < 2) return null;
@@ -205,21 +344,49 @@ export const RULES: readonly Rule[] = [
       if (r(3) > 0.06 + 0.4 * rangeShare(seed, x, y, z) + 0.2 * smooth(1200, 2200, h)) return null;
       const size = 1.2 + 6 * r(4) * r(4);
       const tone = 0.8 + 0.3 * r(5);
-      return [size, size * (0.5 + 0.4 * r(6)), r(7) * 6.2832, size, size * (0.7 + 0.5 * r(8)), 0.5 * tone, 0.47 * tone, 0.43 * tone, 0];
+      return { kind: 0, p: [size, size * (0.5 + 0.4 * r(6)), r(7) * 6.2832, size, size * (0.7 + 0.5 * r(8)), 0.5 * tone, 0.47 * tone, 0.43 * tone, 0] };
     },
   },
   {
     id: 2,
-    name: 'tree',
-    gridLevel: 13,
-    place: (seed, x, y, z, h, r) => {
+    names: ['tree', 'broadleaf', 'flat-crown', 'shrub'],
+    thinned: [true, true, true, false],
+    gridLevel: PLANT_GRID,
+    rank: (seed, face, i, j) => (Math.floor(unit(hashInts(seed, 0x716, face, i, j)) * RANK_STEPS) + 0.5) / RANK_STEPS,
+    place: (seed, x, y, z, h, r, rank) => {
       const { t, m } = climate(seed, x, y, z, h);
-      if (r(3) >= treeChance(t, m, h)) return null;
-      const height = 9 + 13 * r(4);
-      const cold = 1 - smooth(0.3, 0.5, t);
-      const c = treeColor(cold);
+      const chances = plantChances(t, h, landWeights(t, m, h, weights));
+      // One draw picks the kind: the slices of the chances one after the other.
+      const u = r(3);
+      let kind = 0;
+      let from = 0;
+      while (kind < 4 && u >= from + chances[kind]!) from += chances[kind++]!;
+      if (kind === 4) return null;
       const v = 0.85 + 0.25 * r(5);
-      return [height * 0.35, height, r(6) * 6.2832, height * (0.28 + 0.08 * r(7)), 0, c[0] * v, c[1] * v, c[2] * v, cold > 0.5 ? 1 : 0];
+      const turn = rank * 2 * Math.PI;
+      if (kind === 0) {
+        const height = 9 + 13 * rank;
+        const cold = coldOf(t);
+        const c = coniferColor(cold);
+        return { kind, p: [height * 0.35, height, turn, height * (0.28 + 0.08 * r(7)), 0, c[0] * v, c[1] * v, c[2] * v, cold > 0.5 ? 1 : 0] };
+      }
+      if (kind === 1) {
+        const height = 10 + 10 * rank;
+        const width = height * (0.55 + 0.15 * r(7));
+        const c = broadleafColor(warmOf(t));
+        // A few crowns a little yellower or redder than the rest.
+        const hue = 0.06 * (r(9) - 0.5);
+        return { kind, p: [width * 0.5, height, turn, width, width * (0.85 + 0.3 * r(8)), (c[0] + hue) * v, c[1] * v, c[2] * v, 0] };
+      }
+      if (kind === 2) {
+        const height = 6 + 6 * rank;
+        const width = height * (0.9 + 0.4 * r(7));
+        return { kind, p: [width * 0.5, height, turn, width, width * (0.8 + 0.4 * r(8)), FLAT_COLOR[0] * v, FLAT_COLOR[1] * v, FLAT_COLOR[2] * v, 0] };
+      }
+      const height = 0.8 + 1.6 * r(4);
+      const width = height * (1.3 + 0.6 * r(7));
+      const c = shrubColor(dryOf(t, m));
+      return { kind, p: [width * 0.5, height, r(6) * 6.2832, width, width * (0.8 + 0.4 * r(8)), c[0] * v, c[1] * v, c[2] * v, t < 0.3 ? 1 : 0] };
     },
   },
 ];
@@ -233,11 +400,36 @@ function patchOptionsOf(seed: number, cell: CellId): SpherePatchOptions {
     x: cell.x,
     y: cell.y,
     quads: QUADS,
-    heightAt: (x, y, z) => surfaceHeight(seed, x, y, z),
+    heightAt: (x, y, z) => groundHeight(seed, x, y, z),
     colorAt: (x, y, z, h) => surfaceColor(seed, x, y, z, h),
     coverAt: (x, y, z, h) => surfaceCover(seed, x, y, z, h),
     skirtDepth: Math.max(0.5, SHAPE.edgeM(cell.level) * 0.004),
   };
+}
+
+/** Byte of the colour of a water vertex that holds the depth of the floor under it: 64 m · (byte / 255)², fine near 0. */
+export function waterDepthByte(depthM: number): number {
+  return Math.round(Math.sqrt(Math.min(1, Math.max(0, depthM / 64))) * 255);
+}
+
+/**
+ * The water of a cell: a patch on the base sphere over the whole cell (the ground hides it where it rises above the
+ * sea), with the cell's skirt. Its colour holds the depth of the floor under it (`waterDepthByte`, red), for the foam
+ * of the shore; the rest of its look is the material's.
+ */
+function waterPatch(o: SpherePatchOptions): ReturnType<typeof spherePatchMesh> {
+  const floor = o.heightAt;
+  return spherePatchMesh({
+    radiusM: o.radiusM,
+    face: o.face,
+    level: o.level,
+    x: o.x,
+    y: o.y,
+    quads: o.quads,
+    heightAt: () => 0,
+    colorAt: (x, y, z) => [waterDepthByte(-floor(x, y, z)), 0, 0, 255],
+    skirtDepth: o.skirtDepth,
+  });
 }
 
 /**
@@ -270,14 +462,20 @@ export function buildPlanetCell(seed: number, cell: CellId, hooks: PlanetCellHoo
   const land = patch.maxHeight >= 2;
 
   const instances: CellInstances[] = [];
-  for (const rule of cell.level >= OBJECT_LEVEL ? RULES : []) {
+  // Levels above the object level: only the thinned kinds, from the rank of that level up.
+  const up = OBJECT_LEVEL - cell.level;
+  const fromRank = up <= 0 ? 0 : up < THIN_RANK.length ? THIN_RANK[up]! : 2;
+  for (const rule of fromRank <= 1 ? RULES : []) {
+    if (up > 0 && !rule.thinned.includes(true)) continue;
     // Every anchor of the rule's grid that lies inside the cell (the grids are finer than the cells that show them).
     const k = 2 ** (rule.gridLevel - cell.level);
     const n = 2 ** rule.gridLevel;
-    const data: number[] = [];
-    const ids: number[] = [];
+    const data: number[][] = rule.names.map(() => []);
+    const ids: number[][] = rule.names.map(() => []);
     for (let j = cell.y * k; j < (cell.y + 1) * k; j++) {
       for (let i = cell.x * k; i < (cell.x + 1) * k; i++) {
+        const rank = rule.rank ? rule.rank(seed, cell.face, i, j) : 0;
+        if (rank < fromRank) continue;
         const r = (q: number): number => unit(hashInts(seed, rule.id, cell.face, i, j, q));
         // A point inside the anchor's square of the grid.
         const d = cubeDirection(cell.face, cubeGrid(i + 0.1 + 0.8 * r(1), n), cubeGrid(j + 0.1 + 0.8 * r(2), n));
@@ -285,9 +483,10 @@ export function buildPlanetCell(seed: number, cell: CellId, hooks: PlanetCellHoo
         const y = d[1] * RADIUS_M;
         const z = d[2] * RADIUS_M;
         const h = groundHeight(seed, x, y, z);
-        const p = rule.place(seed, x, y, z, h, r);
-        if (!p) continue;
+        const placed = rule.place(seed, x, y, z, h, r, rank);
+        if (!placed || (up > 0 && !rule.thinned[placed.kind])) continue;
         if (hooks?.keepObject && !hooks.keepObject(x, y, z)) continue;
+        const p = placed.p;
         // Base: on the mesh of this level and never above the ground itself, sunk a little.
         const ideal = RADIUS_M + Math.max(MIN_HEIGHT_M, h);
         const sink = 0.15 * p[0]!;
@@ -296,8 +495,8 @@ export function buildPlanetCell(seed: number, cell: CellId, hooks: PlanetCellHoo
         const lx = d[0] * own - o[0];
         const ly = d[1] * own - o[1];
         const lz = d[2] * own - o[2];
-        data.push(lx, ly, lz, ...p, coarse - own);
-        ids.push(hashInts(seed, 0x1d, rule.id, cell.face, i, j), hashInts(seed, 0x2d, rule.id, cell.face, i, j));
+        data[placed.kind]!.push(lx, ly, lz, ...p, coarse - own);
+        ids[placed.kind]!.push(hashInts(seed, 0x1d, rule.id, cell.face, i, j), hashInts(seed, 0x2d, rule.id, cell.face, i, j));
         // The object reaches at most its height and its reach from the base, at either end of the blend.
         const reach = p[0]! + p[1]! + Math.abs(coarse - own);
         const local = [lx, ly, lz];
@@ -307,11 +506,22 @@ export function buildPlanetCell(seed: number, cell: CellId, hooks: PlanetCellHoo
         }
       }
     }
-    if (data.length === 0) continue;
-    const inst: InstanceData = { layout: OBJECT_LAYOUT, data: Float32Array.from(data) };
-    instances.push({ archetype: rule.name, data: inst, ids: Uint32Array.from(ids) });
+    rule.names.forEach((name, kind) => {
+      if (data[kind]!.length === 0) return;
+      const inst: InstanceData = { layout: OBJECT_LAYOUT, data: Float32Array.from(data[kind]!) };
+      instances.push({ archetype: name, data: inst, ids: Uint32Array.from(ids[kind]!) });
+    });
   }
   const meshes: CellContent['meshes'] = [{ material: 'terrain', mesh: patch.mesh }];
+  // The water, where the ground of the cell reaches below the sea.
+  if (patch.minHeight < 0) {
+    const water = waterPatch(patchOptions);
+    meshes.push({ material: 'water', mesh: water.mesh });
+    for (let c = 0; c < 3; c++) {
+      min[c] = Math.min(min[c]!, water.bounds.min[c]!);
+      max[c] = Math.max(max[c]!, water.bounds.max[c]!);
+    }
+  }
   for (const m of hooks?.extra ? hooks.extra(patchOptions, o) : []) {
     meshes.push({ material: m.material, mesh: m.mesh });
     for (let c = 0; c < 3; c++) {
@@ -387,4 +597,62 @@ export function findStart(seed: number): StartPlace {
   }
   const [latDeg, lonDeg] = candidate(0);
   return { latDeg, lonDeg, toward: step(directionAt(latDeg, lonDeg), 0, 8000) };
+}
+
+export interface SeaPlace {
+  latDeg: number;
+  lonDeg: number;
+  /** Height of the floor there (negative). */
+  groundM: number;
+  /** A direction from the centre toward the rising floor nearby: something to look at. */
+  toward: [number, number, number];
+}
+
+/**
+ * Two places under the sea, a pure function of the seed: a shallow one (the floor 5–10 m down in warm water, the
+ * floor rising toward the shore close by) and a deep one (70–120 m down, on a slope). The first points of a fixed
+ * sequence over the latitudes below 50 degrees that qualify; null where the world has none.
+ */
+export function findSeaPlaces(seed: number): { shallow: SeaPlace | null; deep: SeaPlace | null } {
+  const ground = (d: readonly [number, number, number]): number => groundHeight(seed, d[0] * RADIUS_M, d[1] * RADIUS_M, d[2] * RADIUS_M);
+  const step = (d: readonly [number, number, number], a: number, m: number): [number, number, number] => {
+    const [lat, lon] = latLonOf(d);
+    const north = directionAt(lat + 90, lon);
+    const east: [number, number, number] = [d[1] * north[2] - d[2] * north[1], d[2] * north[0] - d[0] * north[2], d[0] * north[1] - d[1] * north[0]];
+    const c = Math.cos(m / RADIUS_M);
+    const s = Math.sin(m / RADIUS_M);
+    return [d[0] * c + (north[0] * Math.cos(a) + east[0] * Math.sin(a)) * s, d[1] * c + (north[1] * Math.cos(a) + east[1] * Math.sin(a)) * s, d[2] * c + (north[2] * Math.cos(a) + east[2] * Math.sin(a)) * s];
+  };
+  /** The direction of the eight at `m` metres where the floor rises most, and how much. */
+  const rising = (d: readonly [number, number, number], h: number, m: number): { toward: [number, number, number]; rise: number } => {
+    let best: [number, number, number] = step(d, 0, m);
+    let rise = -Infinity;
+    for (let q = 0; q < 8; q++) {
+      const e = step(d, (q * Math.PI) / 4, m);
+      const r = ground(e) - h;
+      if (r > rise) (rise = r), (best = e);
+    }
+    return { toward: best, rise };
+  };
+  let shallow: SeaPlace | null = null;
+  let deep: SeaPlace | null = null;
+  for (let k = 0; k < 20000 && !(shallow && deep); k++) {
+    const latDeg = 50 * (2 * ((k * 0.6180339887) % 1) - 1);
+    const lonDeg = ((k * 137.50776) % 360) - 180;
+    const d = directionAt(latDeg, lonDeg);
+    const h = ground(d);
+    if (!shallow && h > -10 && h < -5) {
+      const x = d[0] * RADIUS_M;
+      const y = d[1] * RADIUS_M;
+      const z = d[2] * RADIUS_M;
+      // Warm water, and the floor rising by at least 3 m within 150 m.
+      const r = rising(d, h, 150);
+      if (climate(seed, x, y, z, 0).t > 0.62 && r.rise > 3) shallow = { latDeg, lonDeg, groundM: h, toward: r.toward };
+    }
+    if (!deep && h > -120 && h < -70) {
+      const r = rising(d, h, 300);
+      if (r.rise > 15) deep = { latDeg, lonDeg, groundM: h, toward: r.toward };
+    }
+  }
+  return { shallow, deep };
 }

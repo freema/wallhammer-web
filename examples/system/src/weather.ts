@@ -17,11 +17,17 @@ import { latLonOf } from './world.ts';
 /** The wind of Hearth's page and how fast the clouds move with it (`CloudConfig.speedFactor`). */
 export const HEARTH_WIND = { fromDeg: 240, speedMs: 6 } as const;
 export const HEARTH_CLOUD_SPEED = 1.5;
-/** Cover by |up · axis| = 0, 1/7 … 1: wet tropics, dry belts, wet middle latitudes, clearer poles. */
-const ZONAL = [0.62, 0.5, 0.3, 0.28, 0.45, 0.58, 0.5, 0.35] as const;
-const PATCH_AMOUNT = 0.38;
-const PATCH_SIZE_M = 45_000;
-const PATCH_WARP = 0.6;
+/**
+ * Cover by |up · axis| = 0, 1/7 … 1: wet tropics, dry belts, wet middle latitudes, clearer poles. The profile alone
+ * is broken cloud at most (0.44); the patches (weather systems of about 55 km and 24 km, bent by the warp) carry it
+ * from clear country up to overcast and rain. About a quarter of the planet is then clear, half broken to mostly
+ * cloudy, an eighth overcast and a twenty-fifth raining or snowing; from orbit the cloud hides about two fifths of the
+ * ground, so the continents and the seas show.
+ */
+const ZONAL = [0.44, 0.36, 0.2, 0.16, 0.26, 0.38, 0.36, 0.24] as const;
+const PATCH_AMOUNT = 0.8;
+const PATCH_SIZE_M = 55_000;
+const PATCH_WARP = 0.8;
 const DARKNESS = 0.3;
 
 const smooth = (a: number, b: number, x: number): number => {
@@ -29,15 +35,18 @@ const smooth = (a: number, b: number, x: number): number => {
   return t * t * (3 - 2 * t);
 };
 
-/** Hearth's cloud cover by place at the time of the system `timeS`, in the body's own frame (axis +y). */
-export function hearthCloudField(timeS: number): CloudCoverField {
+/**
+ * Hearth's cloud cover by place at the time of the system `timeS`, in the body's own frame (axis +y). `cover`: one
+ * cover for every place in place of the profile and its patches (the page's `cover=`); the pattern still drifts.
+ */
+export function hearthCloudField(timeS: number, cover: number | null = null): CloudCoverField {
   // The wind blows from `fromDeg` (0 = from +z, 90 = from +x); the patches drift at half the speed of the clouds.
   const toward = ((HEARTH_WIND.fromDeg + 180) * Math.PI) / 180;
   const drift = 0.5 * HEARTH_WIND.speedMs * HEARTH_CLOUD_SPEED * timeS;
   return {
     axis: [0, 1, 0],
-    zonal: ZONAL,
-    patchAmount: PATCH_AMOUNT,
+    zonal: cover === null ? ZONAL : Array.from({ length: 8 }, () => cover),
+    patchAmount: cover === null ? PATCH_AMOUNT : 0,
     patchSizeM: PATCH_SIZE_M,
     patchWarp: PATCH_WARP,
     patchOffset: [Math.sin(toward) * drift, 0, Math.cos(toward) * drift],
@@ -72,10 +81,11 @@ export function placeAt(plan: WorldPlan, dir: Vec3): { h: number; t: number; m: 
 
 /**
  * The weather at the place under the unit direction `dir` of the body at the time of the system `timeS`. Pure.
- * `place`: `placeAt(plan, dir)` when the caller already has it (it saves a probe of the ground).
+ * `place`: `placeAt(plan, dir)` when the caller already has it (it saves a probe of the ground). `cover`: as for
+ * `hearthCloudField`.
  */
-export function weatherAt(plan: WorldPlan, dir: Vec3, timeS: number, place: { t: number; m: number } = placeAt(plan, dir)): WeatherState {
-  const c = cloudFieldCover(hearthCloudField(timeS), dir, plan.grid.radiusM);
+export function weatherAt(plan: WorldPlan, dir: Vec3, timeS: number, place: { t: number; m: number } = placeAt(plan, dir), cover: number | null = null): WeatherState {
+  const c = cloudFieldCover(hearthCloudField(timeS, cover), dir, plan.grid.radiusM);
   const { t, m } = place;
   const precipitation = smooth(0.6, 0.9, c) * (0.35 + 0.65 * m);
   const snow = t < 0.2;
@@ -155,10 +165,12 @@ export function climateViews(plan: WorldPlan, daylight: (dir: Vec3) => number): 
   views.push(view('pole-close', pole, 3, 3));
   const equator = dirs.find((d) => Math.abs(d[1]) < 0.06 && land(d));
   if (equator) views.push(view('equator-close', equator, 3, 3));
-  // Rain over 0.4 and snowfall, each at its own time with the sun up.
+  // Rain over 0.4 and snowfall, each at its own time with the sun up (snowfall short of the circle of the polar
+  // night, |up · axis| under 0.92).
   for (const kind of ['rain', 'snow'] as const) {
     const at = dirs.find((d) => {
-      if (!land(d) || (kind === 'snow' ? Math.abs(d[1]) < 0.85 : Math.abs(d[1]) > 0.8)) return false;
+      const a = Math.abs(d[1]);
+      if (!land(d) || (kind === 'snow' ? a < 0.85 || a > 0.92 : a > 0.8)) return false;
       const w = weatherAt(plan, d, daylight(d));
       return w.precipitationKind === kind && w.precipitation > 0.4;
     });

@@ -17,11 +17,17 @@ ability of the walker; the HUD names the pad under the feet:
 | Footbridge | 20, 60 | a plank over a 3 m pit, a ramp out of the pit |
 
 Everything is drawn from the collision world itself (`src/meshes.ts`), so what is seen is what stops the body. The
-figure is seven boxes in the engine's instance set (`InstanceSetLayer`); legs and arms swing with the distance walked,
-and it casts a moving shadow. The example imports only `wallhammer-web` (`pnpm check:layers` enforces that).
+figure is eleven boxes in the engine's instance set (`InstanceSetLayer`) and casts a moving shadow. On the ground the
+legs and arms swing with the distance walked. A jump keeps the speed and heading of take-off until landing (the
+engine's `Walker` defaults; the view still turns), and the pose follows the vertical speed (`src/pose.ts`). It goes
+from the push-off through the knees drawn up while rising to the legs reaching down before landing. Running, the lead
+knee goes up first; standing, both legs move together. A squat as deep as the impact follows on landing and is gone
+within half a second. There is no stride in the air. The example imports only `wallhammer-web` (`pnpm check:layers`
+enforces that).
 
 The course is pure data (`src/course.ts`) and the scripted walk is pure too (`src/drive.ts`): `pnpm check:walk` walks
-every pad headless the same way the page's `__wh.walkTo` does (`tools/walk/course-scenarios.ts`).
+every pad headless the same way the page's `__wh.walkTo` does, and the figure's poses through a jump
+(`tools/walk/course-scenarios.ts`).
 
 ## Run
 
@@ -46,6 +52,8 @@ Then open <http://localhost:5281/walk/>. Another port: `EXAMPLES_PORT=5291 docke
 | --- | --- |
 | `state()` | Position, velocity, horizontal speed, heading, `grounded`, `steep`, the pad under the feet. |
 | `walkTo(x, z, seconds, { run?, jump?, within? })` | Holds a direction toward the point for that many seconds of fixed steps (synchronously), then draws; `jump` jumps by itself at edges and ledges. Returns the state. |
+| `hold({ forward?, right?, run?, jump? }, seconds)` | Holds that input (relative to the view, each −1 to 1; `jump` in the first step only) for that many seconds of fixed steps, then draws. Returns the state. |
+| `freeze(on)` | Stops the page's own stepping and the keyboard, so `hold` alone moves the figure (for pictures of a pose). |
 | `teleport(x, y?, z, yawDeg?)` | Puts the feet there (`y` omitted or `NaN`: on the ground). |
 | `setView({ at?, yawDeg?, pitchDeg?, distance? })`, `getView()`, `presets()` | The view; `at: [x, z, yawDeg?]` puts the figure there first. One preset per pad. |
 | `stats()`, `profile(frames?)`, `profileText(frames?)` | Draw statistics and measured frame times; the engine's frame profile while the figure walks in a circle. |

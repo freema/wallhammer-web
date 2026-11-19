@@ -1,10 +1,13 @@
 // Checks the planet example without a browser:
 //   - the generator: a cell's bytes do not depend on which cells were generated before it, they survive a round trip
-//     through the cell format, and every object of a cell is found again in exactly one of its children;
+//     through the cell format, and every object of a cell (the thinned trees of levels 7 to 9 too) is found again in
+//     exactly one of its children;
 //   - the flight: it starts and ends at the same pose, climbs without a step and reaches a height from which the
 //     whole sphere with its air fits the view;
 //   - the streaming along the flight with the real cells: the sphere is covered at every step, nothing is drawn
-//     twice, the plan stays inside its budget of cells, and the bytes held at the worst moment fit the GPU budget.
+//     twice, the plan stays inside its budget of cells, and the bytes held at the worst moment fit the GPU budget;
+//   - the movie (movie.ts): every shot keeps above the ground (with the strips; under the sea above its floor and
+//     under the troughs) and moves without a jump inside it.
 //
 //   node scripts/verify.ts [--seed 2611] [--height 1080] [--width 1920]
 //
@@ -15,6 +18,9 @@ import type { CellContent, CellId } from 'wallhammer-web/gen-core';
 import { decodeCell, encodeCell, pixelsPerRadian } from 'wallhammer-web/world';
 import { DEFAULT_FLIGHT, flightDuration, flightPose, wholeSphereHeight } from '../src/flight.ts';
 import { checkFlight } from '../src/flight-check.ts';
+import { planMovie } from '../src/movie.ts';
+import { stripGroundHeight } from '../src/strips.ts';
+import { planetWeatherAt } from '../src/weather.ts';
 import { AIR_HEIGHT_M, DEFAULT_SEED, LEAF_LEVEL, MIN_SPLIT_EDGES, OBJECT_LEVEL, RADIUS_M, SELECTION, SHAPE, directionAt, findStart, generatePlanetCell, surfaceHeight } from '../src/world.ts';
 
 const arg = (name: string, d: number): number => {
@@ -41,9 +47,10 @@ for (const c of cells) {
   if (!eq(encodeCell(generatePlanetCell(seed, c)), alone)) fail(`cell ${cellKey(c)} differs after other cells were generated`);
   if (!eq(encodeCell(decodeCell(alone)), alone)) fail(`cell ${cellKey(c)} does not survive a round trip through the cell format`);
 }
-// Objects: the cells of the coarsest level with objects round the start, and their children.
+// Objects: the cells of the coarsest level with every object round the start, and their children; and the cells of
+// the three levels above it, whose thinned trees are each one of a child's (the same id), in exactly one child.
 let objects = 0;
-for (const c of [SHAPE.cellAt(at, OBJECT_LEVEL), ...SHAPE.neighbours(SHAPE.cellAt(at, OBJECT_LEVEL))]) {
+for (const c of [7, 8, 9].map((l) => SHAPE.cellAt(at, l)).concat([SHAPE.cellAt(at, OBJECT_LEVEL), ...SHAPE.neighbours(SHAPE.cellAt(at, OBJECT_LEVEL))])) {
   if (c.level >= LEAF_LEVEL) break;
   const kids = SHAPE.children(c).map((k) => generatePlanetCell(seed, k));
   for (const set of generatePlanetCell(seed, c).instances) {
@@ -135,6 +142,31 @@ try {
   if (gpuMb >= 600) fail(`the GPU memory at the worst step (${gpuMb.toFixed(0)} MB) is over the budget of 600 MB`);
 } catch (e) {
   fail((e as Error).message);
+}
+
+// --- The movie --------------------------------------------------------------------------------------------------------
+{
+  const ground = (d: readonly number[]): number => stripGroundHeight(seed, d[0]! * RADIUS_M, d[1]! * RADIUS_M, d[2]! * RADIUS_M);
+  const movie = planMovie({ seed, radiusM: RADIUS_M, topM: needM * 1.25, dayOfYear: 172, groundAt: (d) => Math.max(0, ground(d)), floorAt: ground, weatherAt: (d, g, t) => planetWeatherAt(seed, d, g, t) });
+  let lowest = Infinity;
+  for (const shot of movie.shots) {
+    let prev: readonly number[] | null = null;
+    for (let i = 0; i <= shot.seconds * 60; i++) {
+      const p = shot.pose(i / 60);
+      const r = Math.hypot(p.eye[0], p.eye[1], p.eye[2]);
+      // Under the sea's level the eye is measured to the floor, and it keeps under the troughs of the waves.
+      const level = r - RADIUS_M;
+      const floor = ground([p.eye[0] / r, p.eye[1] / r, p.eye[2] / r]);
+      const clear = level < 0 ? level - floor : level - Math.max(0, floor);
+      lowest = Math.min(lowest, clear);
+      if (level < 0 ? clear < 1 : clear < 3) fail(`movie shot ${shot.key} is ${clear.toFixed(1)} m above the ground at ${(i / 60).toFixed(2)} s`);
+      if (level < 0 && level > -1.5) fail(`movie shot ${shot.key} is only ${(-level).toFixed(1)} m under the sea's level at ${(i / 60).toFixed(2)} s`);
+      // No jump: a frame at 60 Hz moves the eye by less than a tenth of its height above the ground (and 2 km).
+      if (prev && Math.hypot(p.eye[0] - prev[0]!, p.eye[1] - prev[1]!, p.eye[2] - prev[2]!) > Math.min(2000, Math.max(1, 0.1 * clear))) fail(`movie shot ${shot.key} jumps at ${(i / 60).toFixed(2)} s`);
+      prev = p.eye;
+    }
+  }
+  console.log(`movie: ${movie.shots.length} shots, ${movie.seconds} s (${movie.shots.map((s) => `${s.key} ${s.seconds}`).join(', ')}); the eye never lower than ${lowest.toFixed(1)} m above the ground`);
 }
 
 for (const p of problems) console.log(`FAILED: ${p}`);

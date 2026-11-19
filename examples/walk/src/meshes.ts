@@ -1,5 +1,5 @@
 // Meshes of the course drawn from the collision world itself (one source of truth: what is drawn is what stops the
-// walker), and the walking figure: six boxes posed every frame into the engine's instance set.
+// walker), and the walking figure: eleven boxes posed every frame into the engine's instance set.
 
 import type { MeshData, VertexLayout } from 'wallhammer-web/base';
 import { triangulateRing } from 'wallhammer-web/gen-mesh';
@@ -7,6 +7,8 @@ import { instanceSet, writeInstance } from 'wallhammer-web/render';
 import type { InstanceSet } from 'wallhammer-web/render';
 import type { CollisionWorld, SolidInfo } from 'wallhammer-web/world';
 import { STATIONS } from './course.ts';
+import { ANKLE_M, HEEL_M, HIP_M, SHIN_M, THIGH_M, TOE_M } from './pose.ts';
+import type { FigureMotion } from './pose.ts';
 
 /** Solids: position, normal and colour, all float. */
 export const SOLID_LAYOUT: VertexLayout = {
@@ -116,88 +118,103 @@ function unitBox(): MeshData {
   return { layout: PART_LAYOUT, vertices: new Float32Array(v), indices: new Uint32Array(idx), count: idx.length };
 }
 
-/**
- * One part of the figure in its own frame (feet at the origin, facing −z, right +x): the joint it swings about, the
- * box's centre relative to the joint, the box's size, its colour, and which swing it follows (0 none, ±1 legs,
- * ±2 arms; the sign is the side, so the two sides swing against each other).
- */
-interface Part {
-  joint: [number, number, number];
-  offset: [number, number, number];
-  size: [number, number, number];
-  color: [number, number, number];
-  swing: number;
-}
+type Rgb = readonly [number, number, number];
+const COAT: Rgb = [0.86, 0.42, 0.18];
+const TROUSERS: Rgb = [0.2, 0.24, 0.34];
+const SKIN: Rgb = [0.92, 0.74, 0.6];
+const VISOR: Rgb = [0.12, 0.12, 0.14];
+const SHOES: Rgb = [0.16, 0.13, 0.11];
 
-const COAT: [number, number, number] = [0.86, 0.42, 0.18];
-const TROUSERS: [number, number, number] = [0.2, 0.24, 0.34];
-const SKIN: [number, number, number] = [0.92, 0.74, 0.6];
-const PARTS: readonly Part[] = [
-  { joint: [0, 1.15, 0], offset: [0, 0, 0], size: [0.42, 0.6, 0.24], color: COAT, swing: 0 },
-  { joint: [0, 1.57, 0], offset: [0, 0, 0], size: [0.24, 0.26, 0.24], color: SKIN, swing: 0 },
-  // A dark visor on the face shows where the figure looks.
-  { joint: [0, 1.6, -0.12], offset: [0, 0, 0], size: [0.18, 0.06, 0.04], color: [0.12, 0.12, 0.14], swing: 0 },
-  { joint: [-0.11, 0.85, 0], offset: [0, -0.425, 0], size: [0.15, 0.85, 0.17], color: TROUSERS, swing: 1 },
-  { joint: [0.11, 0.85, 0], offset: [0, -0.425, 0], size: [0.15, 0.85, 0.17], color: TROUSERS, swing: -1 },
-  { joint: [-0.28, 1.42, 0], offset: [0, -0.31, 0], size: [0.11, 0.62, 0.12], color: COAT, swing: -2 },
-  { joint: [0.28, 1.42, 0], offset: [0, -0.31, 0], size: [0.11, 0.62, 0.12], color: COAT, swing: 2 },
-];
-
-/** Metres walked per full stride cycle (left and right step). */
-const STRIDE_M = 1.5;
+/** Shoulders above the hips and out to the side, metres; arm length. */
+const SHOULDER_Y = 0.57;
+const SHOULDER_X = 0.28;
+const ARM_M = 0.62;
+const HIP_X = 0.11;
+/** Parts in instance order. */
+const TORSO = 0, HEAD = 1, EYES = 2, ARM = 3, THIGH = 5, SHIN = 7, FOOT = 9, PART_COUNT = 11;
 
 /**
- * The walking figure as an instance set: legs and arms swing by the distance walked, the swing grows with the speed,
- * and in the air the legs hold a stride.
+ * The walking figure as an instance set of eleven boxes (body, head, a dark visor that shows where it looks, arms,
+ * thighs, shins and feet), posed every frame from the channels of a `FigureMotion` (src/pose.ts).
  */
 export class Figure {
   readonly set: InstanceSet;
   private readonly m = new Float64Array(12);
+  private cy = 1;
+  private sy = 0;
+  private x = 0;
+  private y = 0;
+  private z = 0;
 
   constructor() {
-    this.set = instanceSet(unitBox(), PARTS.length, { name: 'figure', castShadow: true });
-    this.set.count = PARTS.length;
+    this.set = instanceSet(unitBox(), PART_COUNT, { name: 'figure', castShadow: true });
+    this.set.count = PART_COUNT;
+  }
+
+  /** Poses every part: feet at (x, y, z), heading `yaw` (0 faces −z), the limbs from `motion`. */
+  pose(x: number, y: number, z: number, yaw: number, motion: FigureMotion): void {
+    this.cy = Math.cos(yaw);
+    this.sy = Math.sin(yaw);
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    // The upper body turns about the hips by the lean (a forward lean is a negative turn about x).
+    const py = HIP_M - motion.drop;
+    const up = -motion.lean;
+    const cu = Math.cos(up), su = Math.sin(up);
+    // A point of the upper body (relative to the hips, upright) in the figure's frame: hips + R_x(up) · (0, vy, vz).
+    const uy = (vy: number, vz: number): number => py + cu * vy - su * vz;
+    const uz = (vy: number, vz: number): number => su * vy + cu * vz;
+    this.part(TORSO, 0, uy(0.3, 0), uz(0.3, 0), up, 0, 0.42, 0.6, 0.24, COAT);
+    this.part(HEAD, 0, uy(0.72, 0), uz(0.72, 0), up, 0, 0.24, 0.26, 0.24, SKIN);
+    this.part(EYES, 0, uy(0.75, -0.12), uz(0.75, -0.12), up, 0, 0.18, 0.06, 0.04, VISOR);
+    for (let i = 0; i < 2; i++) {
+      const side = i === 0 ? -1 : 1;
+      // Arm: from the shoulder, swung forward against the body and spread out; its middle half its length down.
+      const a = up + motion.arm[i]!;
+      const b = side * motion.spread[i]!;
+      const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+      const h = ARM_M / 2;
+      this.part(ARM + i, side * SHOULDER_X + h * sb, uy(SHOULDER_Y, 0) - h * ca * cb, uz(SHOULDER_Y, 0) - h * sa * cb, a, b, 0.11, ARM_M, 0.12, COAT);
+      // Leg: thigh from the hip, shin from the knee, foot from the ankle (toes ahead, −z).
+      const hx = side * HIP_X;
+      const t = motion.hip[i]!;
+      const s = t - motion.knee[i]!;
+      const ct = Math.cos(t), st = Math.sin(t), cs = Math.cos(s), ss = Math.sin(s);
+      this.part(THIGH + i, hx, py - (THIGH_M / 2) * ct, -(THIGH_M / 2) * st, t, 0, 0.15, THIGH_M + 0.03, 0.17, TROUSERS);
+      const ky = py - THIGH_M * ct, kz = -THIGH_M * st;
+      this.part(SHIN + i, hx, ky - (SHIN_M / 2) * cs, kz - (SHIN_M / 2) * ss, s, 0, 0.13, SHIN_M + 0.03, 0.15, TROUSERS);
+      const ay = ky - SHIN_M * cs, az = kz - SHIN_M * ss;
+      // The foot turns by minus its toe pitch (a turn about x lifts the toes); its middle is between toe and heel.
+      const f = -motion.toe[i]!;
+      const cf = Math.cos(f), sf = Math.sin(f);
+      const oy = -ANKLE_M / 2, oz = -(TOE_M - HEEL_M) / 2;
+      this.part(FOOT + i, hx, ay + cf * oy - sf * oz, az + sf * oy + cf * oz, f, 0, 0.13, ANKLE_M, TOE_M + HEEL_M, SHOES);
+    }
+    this.set.dirty = true;
   }
 
   /**
-   * Poses every part: feet at (x, y, z), heading `yaw` (0 faces −z), `travelled` metres walked, horizontal `speed`,
-   * `grounded`.
+   * Writes one box: centre (px, py, pz) in the figure's frame (feet at the origin, facing −z, right +x), turned by
+   * R_x(a) · R_z(b), sized (sx, sy, sz); then the heading R_y(yaw) and the feet's position.
    */
-  pose(x: number, y: number, z: number, yaw: number, travelled: number, speed: number, grounded: boolean): void {
-    const cy = Math.cos(yaw), sy = Math.sin(yaw);
-    const phase = (travelled / STRIDE_M) * Math.PI * 2;
-    const amp = grounded ? 0.55 * Math.min(1, speed / 2.2) : 0;
+  private part(i: number, px: number, py: number, pz: number, a: number, b: number, sx: number, sy: number, sz: number, c: Rgb): void {
     const m = this.m;
-    for (let i = 0; i < PARTS.length; i++) {
-      const p = PARTS[i]!;
-      let phi = 0;
-      if (p.swing !== 0) {
-        const side = p.swing > 0 ? 1 : -1;
-        const arms = Math.abs(p.swing) === 2;
-        phi = grounded ? side * amp * Math.sin(phase) * (arms ? 0.8 : 1) : side * (arms ? -0.5 : 0.35);
-      }
-      const cp = Math.cos(phi), sp = Math.sin(phi);
-      // Linear part: R_y(yaw) · R_x(phi) · scale, column by column.
-      const [sx, syz, sz] = p.size;
-      m[0] = cy * sx;
-      m[1] = 0;
-      m[2] = -sy * sx;
-      m[3] = sy * sp * syz;
-      m[4] = cp * syz;
-      m[5] = cy * sp * syz;
-      m[6] = sy * cp * sz;
-      m[7] = -sp * sz;
-      m[8] = cy * cp * sz;
-      // Translation: feet + R_y · (joint + R_x · offset).
-      const o = p.offset;
-      const qx = p.joint[0] + o[0];
-      const qy = p.joint[1] + cp * o[1] - sp * o[2];
-      const qz = p.joint[2] + sp * o[1] + cp * o[2];
-      m[9] = x + cy * qx + sy * qz;
-      m[10] = y + qy;
-      m[11] = z - sy * qx + cy * qz;
-      writeInstance(this.set, i, m, p.color[0], p.color[1], p.color[2], 0);
-    }
-    this.set.dirty = true;
+    const cy = this.cy, sy_ = this.sy;
+    const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+    // Columns of R_x(a) · R_z(b): (cb, ca sb, sa sb), (−sb, ca cb, sa cb), (0, −sa, ca); each turned by R_y and scaled.
+    m[0] = (cy * cb + sy_ * sa * sb) * sx;
+    m[1] = ca * sb * sx;
+    m[2] = (-sy_ * cb + cy * sa * sb) * sx;
+    m[3] = (-cy * sb + sy_ * sa * cb) * sy;
+    m[4] = ca * cb * sy;
+    m[5] = (sy_ * sb + cy * sa * cb) * sy;
+    m[6] = sy_ * ca * sz;
+    m[7] = -sa * sz;
+    m[8] = cy * ca * sz;
+    m[9] = this.x + cy * px + sy_ * pz;
+    m[10] = this.y + py;
+    m[11] = this.z - sy_ * px + cy * pz;
+    writeInstance(this.set, i, m, c[0], c[1], c[2], 0);
   }
 }

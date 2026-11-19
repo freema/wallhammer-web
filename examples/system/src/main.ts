@@ -42,7 +42,7 @@ import type { Material, SceneBounds } from 'wallhammer-web/render';
 import { CloudShellLayer, StreamedWorld, createEngine, viewerTickets } from 'wallhammer-web/runtime';
 import type { StreamArchetype } from 'wallhammer-web/runtime';
 import { DEFAULT_STREAMING, GeneratorCellProvider, decodeCell, pixelsPerRadian } from 'wallhammer-web/world';
-import type { CellProvider, CellResult, SphereWorld, StreamingConfig } from 'wallhammer-web/world';
+import type { CellProvider, CellResult, SphereWorld, StreamingConfig, Ticket } from 'wallhammer-web/world';
 import { CLOCK_HZ, SUN, SURFACES, bodyDefs } from './bodies.ts';
 import type { SurfaceSpec } from './bodies.ts';
 import { FarLayer, ShellLayer } from './far.ts';
@@ -61,8 +61,8 @@ import type { Inhabited, PlannedBody } from './inhabited.ts';
 import { PLAN_BODY, STAGE, STAGE_MAX } from './plan.ts';
 import type { WorldPlan } from './plan.ts';
 import { createLoader } from './loader.ts';
-import { CLIMATE_OBJECT_MATERIAL, CLIMATE_TERRAIN_MATERIAL, OBJECT_MATERIAL, PLANNED_TERRAIN_MATERIAL, TERRAIN_MATERIAL, WATER_MATERIAL, WAY_MATERIAL } from './shaders.ts';
-import { SHADE_OBJECT_MATERIAL, SHADE_TERRAIN_MATERIAL, SHADE_WATER_MATERIAL, SHADE_WAY_MATERIAL } from './shaders.ts';
+import { CLIMATE_OBJECT_MATERIAL, CLIMATE_TERRAIN_MATERIAL, CLIMATE_TREE_MATERIAL, CLIMATE_WATER_MATERIAL, OBJECT_MATERIAL, PLANNED_TERRAIN_MATERIAL, TERRAIN_MATERIAL, WATER_MATERIAL, WAY_MATERIAL } from './shaders.ts';
+import { SHADE_OBJECT_MATERIAL, SHADE_TERRAIN_MATERIAL, SHADE_TREE_MATERIAL, SHADE_WATER_MATERIAL, SHADE_WAY_MATERIAL } from './shaders.ts';
 import { LightsLayer, shadeViews } from './lights.ts';
 import { broadleafMesh, flatCrownMesh, rockMesh, shardMesh, shrubMesh, treeMesh } from './shapes.ts';
 import { NO_CLOUD_FIELD, climateViews, hearthCloudField, placeAt as climatePlaceAt, weatherAt } from './weather.ts';
@@ -218,6 +218,8 @@ const surfaces: Surface[] = SURFACES.map((spec, index) => {
   const roots: (CellContent | null)[] = [null, null, null, null, null, null];
   const far: FarBody = { radiusM: spec.radiusM, topM: spec.radiusM + spec.airM, airColor: spec.tint, cells: [], center: [0, 0, 0], model: new Float32Array(16), toSun: [0, 1, 0], size: 1, solid: false, shell: 0 };
   // No `face`: cells of all six faces are streamed, and every root is always wanted, so the far side stays covered.
+  // At most 12 jobs in flight: the pool runs them in the order they came, so a deeper queue (16 was measured) holds
+  // jobs the camera has already left behind and the cells it needs next wait longer.
   const config: StreamingConfig = { ...DEFAULT_STREAMING, shape, rootLevel: ROOT_LEVEL, leafLevel: spec.leafLevel, rootRange: Infinity, prefetch: 0.2, hysteresis: 0.3, maxInFlight: 12, memoryBudgetBytes: 320 * MB, screenError: { ...SELECTION, maxCells, maxErrorPx } };
   return {
     index,
@@ -323,6 +325,8 @@ document.addEventListener('visibilitychange', () => {
 /** From stage 2: Hearth's cloud cover by place (weather.ts), and whether the clouds are shown (`clouds=0`, key C). */
 const cloudSlot = stage >= STAGE.climate ? cloudFieldSlot({ ...NO_CLOUD_FIELD }) : null;
 let showClouds = q.get('clouds') !== '0';
+/** `cover=`: one cloud cover for all of Hearth in place of the profile by latitude and its patches, null without it. */
+const forcedCover = q.has('cover') ? Math.min(1, Math.max(0, num('cover', 0))) : null;
 /** Height of the cloud shell above the base sphere, metres. */
 const CLOUD_SHELL_M = 3000;
 
@@ -340,6 +344,9 @@ const engine = createEngine({
   // The default air of the engine fitted to a body. Every body with air has a shell of the same share of its radius,
   // so the tables computed here hold for all of them (see `AIR_PER_RADIUS`).
   atmosphere: atmosphereFor(firstAir.radiusM, firstAir.airM),
+  // From stage 2 the shadows of Hearth's clouds, and below 15 km its clouds as the engine's volumetric clouds (they hand
+  // over to the cloud shell up to 30 km; `volume=0` keeps the shell at every height).
+  ...(cloudSlot ? { cloudShadows: true, ...(q.get('volume') !== '0' ? { cloudVolume: true } : {}) } : {}),
   onFrame: () => meter.end(performance.now()),
 });
 const { renderer, env } = engine;
@@ -379,6 +386,8 @@ if (cloudShell) {
   cloudShell.opacity = 0;
   cloudShell.heightM = CLOUD_SHELL_M;
   renderer.addBefore(cloudShell, shellLayer);
+  // The volumetric clouds right after the shell: after every solid layer, before the shells of air.
+  engine.moveCloudsBefore(shellLayer);
 }
 
 /** The paths: one round of every body, in the frame of the body it goes round. */
@@ -455,6 +464,7 @@ plannedB?.roots.then(
     });
     // The planned cells carry the depth code in the alpha of their colour (planned-cell.ts).
     planned.far.depthCode = 1;
+    if (stage >= STAGE.climate) planned.far.forestFloor = 1;
     if (stage >= STAGE.shade) planned.far.shade = 1;
     plannedRootsIn = true;
     engine.invalidate();
@@ -512,10 +522,10 @@ const [terrain, object] = [TERRAIN_MATERIAL, OBJECT_MATERIAL].map((m) => rendere
 /** The planned body's own materials (stage ≥ 1): the terrain with standing water and the rivers. */
 const plannedMaterials = inh
   ? stage >= STAGE.shade
-    ? { terrain: renderer.material(SHADE_TERRAIN_MATERIAL), water: renderer.material(SHADE_WATER_MATERIAL), object: renderer.material(SHADE_OBJECT_MATERIAL) }
+    ? { terrain: renderer.material(SHADE_TERRAIN_MATERIAL), water: renderer.material(SHADE_WATER_MATERIAL), object: renderer.material(SHADE_OBJECT_MATERIAL), tree: renderer.material(SHADE_TREE_MATERIAL) }
     : cloudSlot
-    ? { terrain: renderer.material(CLIMATE_TERRAIN_MATERIAL), water: renderer.material(WATER_MATERIAL), object: renderer.material(CLIMATE_OBJECT_MATERIAL) }
-    : { terrain: renderer.material(PLANNED_TERRAIN_MATERIAL), water: renderer.material(WATER_MATERIAL), object }
+    ? { terrain: renderer.material(CLIMATE_TERRAIN_MATERIAL), water: renderer.material(CLIMATE_WATER_MATERIAL), object: renderer.material(CLIMATE_OBJECT_MATERIAL), tree: renderer.material(CLIMATE_TREE_MATERIAL) }
+    : { terrain: renderer.material(PLANNED_TERRAIN_MATERIAL), water: renderer.material(WATER_MATERIAL), object, tree: object }
   : null;
 /** Stage 3: the lanes of the planned cells, and the massing of the settlements near the eye. */
 const wayMaterial = inh && stage >= STAGE.sites ? renderer.material(stage >= STAGE.shade ? SHADE_WAY_MATERIAL : WAY_MATERIAL) : null;
@@ -576,12 +586,23 @@ function applyFixedHits(): void {
   hitDone();
   hitDone = null;
 }
-/** The shapes of stage 2 (climate.ts places them on Hearth). */
+/**
+ * Where a tree changes to its coarse mesh: at 700 m a crown is only 10 to 15 pixels wide on a screen 900 pixels high,
+ * so the switch is not seen as a jump of the shape.
+ */
+const TREE_FINE_M = 700;
+/**
+ * From stage 2 the trees of Hearth also stand, thinned, in the three levels above the object level (material 'tree',
+ * climate.ts `THIN_RANK`); the coarsest of them reaches about 4.7 km from the eye, and its cells' boxes start nearer.
+ */
+const TREE_FAR_M = 5000;
+/** The shapes of stage 2 (climate.ts places them on Hearth); the trees replace the terrain's own. */
 const climateArchetypes: Readonly<Record<string, StreamArchetype>> = cloudSlot
   ? {
-      broadleaf: { material: 'object', lods: [{ mesh: broadleafMesh(true), maxDistance: 260 }, { mesh: broadleafMesh(false), maxDistance: 2600 }] },
+      tree: { material: 'tree', lods: [{ mesh: treeMesh(true), maxDistance: TREE_FINE_M }, { mesh: treeMesh(false), maxDistance: TREE_FAR_M }] },
+      broadleaf: { material: 'tree', lods: [{ mesh: broadleafMesh(true), maxDistance: TREE_FINE_M }, { mesh: broadleafMesh(false), maxDistance: TREE_FAR_M }] },
       shrub: { material: 'object', lods: [{ mesh: shrubMesh(true), maxDistance: 120 }, { mesh: shrubMesh(false), maxDistance: 900 }] },
-      'flat-crown': { material: 'object', lods: [{ mesh: flatCrownMesh(true), maxDistance: 260 }, { mesh: flatCrownMesh(false), maxDistance: 2600 }] },
+      'flat-crown': { material: 'tree', lods: [{ mesh: flatCrownMesh(true), maxDistance: TREE_FINE_M }, { mesh: flatCrownMesh(false), maxDistance: TREE_FAR_M }] },
       shard: { material: 'object', lods: [{ mesh: shardMesh(true), maxDistance: 140 }, { mesh: shardMesh(false), maxDistance: 1600 }] },
     }
   : {};
@@ -626,9 +647,9 @@ function syncWorld(): void {
     horizon: { center: [0, 0, 0], radiusM: horizonRadiusM(want.packed) },
     // Everything the page holds on the GPU stays under the budget: over the ceiling the least needed cells leave.
     ...(gpuCeilingMb > 0 ? { gpuCeilingBytes: gpuCeilingMb * MB } : {}),
-    materials: want === planned && plannedMaterials ? { terrain: plannedMaterials.terrain, object: plannedMaterials.object, water: plannedMaterials.water, ...(wayMaterial ? { way: wayMaterial } : {}) } : { terrain, object },
+    materials: want === planned && plannedMaterials ? { terrain: plannedMaterials.terrain, object: plannedMaterials.object, tree: plannedMaterials.tree, water: plannedMaterials.water, ...(wayMaterial ? { way: wayMaterial } : {}) } : { terrain, object },
     archetypes: {
-      tree: { material: 'object', lods: [{ mesh: treeMesh(true), maxDistance: 260 }, { mesh: treeMesh(false), maxDistance: 2600 }] },
+      tree: { material: 'object', lods: [{ mesh: treeMesh(true), maxDistance: TREE_FINE_M },{ mesh: treeMesh(false), maxDistance: 2600 }] },
       rock: { material: 'object', lods: [{ mesh: rockMesh(true), maxDistance: 140 }, { mesh: rockMesh(false), maxDistance: 2600 }] },
       ...(want === planned ? climateArchetypes : {}),
     },
@@ -1016,6 +1037,27 @@ function ticketPixels(): number {
   return Math.max(pixelsPerRadian(engine.canvas.clientHeight || engine.canvas.height, FOV_DEG * DEG), (MIN_SPLIT_EDGES * maxErrorPx) / SELECTION.errorPerEdge);
 }
 
+/**
+ * The tickets of the streamed surface of `s`: the camera with its prediction and, on a flight down to this body, the
+ * place of the landing, whose cells load at the full detail without changing what is drawn (`preload`), so they are
+ * there when the camera comes, the trees with them. The prediction looks two seconds ahead, never farther than a part
+ * of the height, or it would land under the ground. A full-detail preload 1.5 s ahead of the camera was measured and
+ * left out: in a fast low flight on a slow machine it doubled the frames with bare ground (its jobs queue in front of
+ * the ones the camera needs).
+ */
+function surfaceTickets(eye: Vec3, s: Surface): Ticket[] {
+  const px = ticketPixels();
+  const speed = len(rig.velocity);
+  const cap = 0.3 * Math.max(rig.clearance, 10);
+  const tickets = viewerTickets({ eye, altitude: rig.clearance, forward: rig.axes().forward, velocity: speed > cap ? mul(rig.velocity, cap / speed) : rig.velocity, pixelsPerRadian: px });
+  const last = flight ? flight.legs[flight.legs.length - 1] : undefined;
+  if (last && last.kind === 'surface' && !last.rising && last.body === s.body) {
+    const site = frames.convertPoint(mul(last.site, last.body.radius + last.groundM), last.body.turningFrame, drawFrame);
+    tickets.push({ id: 'landing', kind: 'predict', center: site, altitude: last.lowM, base: 0, pixelsPerRadian: px, preload: true });
+  }
+  return tickets;
+}
+
 /** True when the bodies are there and the surface round the camera has loaded. */
 const loaded = (): boolean => rootsLeft === 0 && planSettled && (!world || (world.settled && !world.busy)) && (inh?.details()?.settled() ?? true);
 
@@ -1056,10 +1098,7 @@ function syncView(): void {
     world.setFocus(eye);
     rig.origin = [world.origin[0], world.origin[1], world.origin[2]];
     world.setEye(eye);
-    // The prediction looks two seconds ahead: never farther than a part of the height, or it would land under the ground.
-    const speed = len(rig.velocity);
-    const cap = 0.3 * Math.max(rig.clearance, 10);
-    world.setTickets(viewerTickets({ eye, altitude: rig.clearance, forward: rig.axes().forward, velocity: speed > cap ? mul(rig.velocity, cap / speed) : rig.velocity, pixelsPerRadian: ticketPixels() }));
+    world.setTickets(surfaceTickets(eye, h));
     // Asked only until the streamed surface has taken over: its coarsest cells stay loaded from then on.
     if (!covered) {
       const st = world.stats();
@@ -1138,13 +1177,18 @@ function syncClimate(toSun: Vec3): void {
   env.time.set(timeS);
   const plan = inh?.plan() ?? null;
   const onHearth = attachedSurface() === planned;
+  const volume = engine.cloudVolume;
   if (!plan || !onHearth || !showClouds) {
     cloudSlot.params = { ...NO_CLOUD_FIELD };
     cloudShell.opacity = 0;
+    if (volume) {
+      volume.enabled = false;
+      volume.shell = null;
+    }
     env.weather = { ...DEFAULT_WEATHER };
     weatherHere = null;
     if (!plan || !onHearth) return;
-  } else cloudSlot.params = hearthCloudField(timeS);
+  } else cloudSlot.params = hearthCloudField(timeS, forcedCover);
   // The body's turning frame → render space (its 3 × 3 part), and the eye's direction in the body's frame.
   const m = planned.far.model;
   const p = sub(rig.position, centers[planned.index + 1]!);
@@ -1156,7 +1200,7 @@ function syncClimate(toSun: Vec3): void {
   const pc = placeCache;
   if (!pc || pc.plan !== plan || pc.dir[0] !== dir[0] || pc.dir[1] !== dir[1] || pc.dir[2] !== dir[2]) placeCache = { plan, dir, place: climatePlaceAt(plan, dir) };
   const place = placeCache!.place;
-  const w = weatherAt(plan, dir, timeS, place);
+  const w = weatherAt(plan, dir, timeS, place, forcedCover);
   weatherHere = { biome: place.biome, cover: showClouds ? w.cloudCover : 0, rain: w.precipitationKind === 'rain' ? w.precipitation : 0, snow: w.precipitationKind === 'snow' ? w.precipitation : 0 };
   if (!showClouds) return;
   // Cloud cover and fog fade out between one and two shell heights, the falling rain or snow between 1.5 and 2 km,
@@ -1178,6 +1222,11 @@ function syncClimate(toSun: Vec3): void {
   cloudShell.light = [toSun[0], toSun[1], toSun[2]];
   cloudShell.toField.set([m[0]!, m[1]!, m[2]!, m[4]!, m[5]!, m[6]!, m[8]!, m[9]!, m[10]!]);
   cloudShell.opacity = 1;
+  // Below 30 km the volumetric clouds take over from the shell: they set its opacity in every frame.
+  if (volume) {
+    volume.enabled = true;
+    volume.shell = cloudShell;
+  }
 }
 
 /** Names of the biomes, for the panel. */
@@ -1242,6 +1291,27 @@ function measureFrame(count = 30): number {
   meter.previousAt = 0;
   lastFrameMs = 0;
   return ms;
+}
+
+/**
+ * Cells on the screen that are coarser than the level holding the objects although they lie nearer than where that
+ * level starts to blend into its parent: there the ground shows only the cover, the objects have not arrived yet
+ * (for the script interface; 0 without a streamed surface).
+ */
+function bareCells(): number {
+  const h = home();
+  if (!world || !h) return 0;
+  const level = objectLevel(h.index);
+  const range = world.manager.morphRange(level);
+  if (!range) return 0;
+  const alt = Math.max(0, rig.clearance);
+  let n = 0;
+  for (const c of world.manager.drawn()) {
+    if (c.level >= level) continue;
+    const d = h.shape.distanceM(c, rig.position);
+    if (d * d + alt * alt < range.startM * range.startM) n++;
+  }
+  return n;
 }
 
 // --- Names, keys, panel, URL -----------------------------------------------------------------------------------------
@@ -1420,7 +1490,7 @@ setInterval(() => {
   // Once after a finished flight, when the view has loaded again: a frame with the graphics work finished.
   if (report && report.finished && report.endFrameMs === 0 && !flight && !scripted && loaded()) report.endFrameMs = measureFrame();
   if (flight || scripted) return;
-  const keep = ['pace', 'px', 'cells', 'gpu'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+  const keep = ['pace', 'px', 'cells', 'gpu', 'cover', 'volume'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
   const s = home();
   let where = '';
   if (s) {
@@ -1632,7 +1702,7 @@ const routeStatsOf = new WeakMap<WorldPlan, RouteStats>();
     tick = Math.round(n);
     engine.renderNow();
   },
-  stats: () => ({ ...renderer.lastStats, renderer: engine.device.name, seed, time: tick / CLOCK_HZ, attached: system.bodies[attached]!.name, near, streaming: world ? world.stats() : null, provider: providerName, memory: engine.device.memory(), frame: { cpuMs: meter.cpuMs, intervalMs: meter.intervalMs }, system: system.fingerprint(), plan: inh?.report() ?? null, details: inh?.details()?.stats() ?? null, life: inh?.life()?.stats() ?? null, structures: settlementLayer?.stats() ?? null }),
+  stats: () => ({ ...renderer.lastStats, renderer: engine.device.name, seed, time: tick / CLOCK_HZ, attached: system.bodies[attached]!.name, near, streaming: world ? world.stats() : null, bareCells: bareCells(), provider: providerName, memory: engine.device.memory(), frame: { cpuMs: meter.cpuMs, intervalMs: meter.intervalMs }, system: system.fingerprint(), plan: inh?.report() ?? null, details: inh?.details()?.stats() ?? null, life: inh?.life()?.stats() ?? null, structures: settlementLayer?.stats() ?? null }),
   /** A strike at the structure part in the middle of the view (key X); keys of the structures it changed. */
   strike: (): number[] => (engine.invalidate(), strikeView()),
   /** Hash of the damage table of the structures, or null below stage 3. */

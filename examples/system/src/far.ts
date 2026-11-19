@@ -43,6 +43,8 @@ export interface FarBody {
    * drawn where the depth is above zero. Absent or 0: the alpha is 0 on land, 1 on the sea.
    */
   depthCode?: number;
+  /** 1 when the ground under a wood is the forest floor (Hearth from stage 2, as its streamed surface draws it). */
+  forestFloor?: number;
 }
 
 /** A closed path: a line mesh in the frame of the body it goes round. */
@@ -216,6 +218,7 @@ export class FarLayer implements Layer {
       this.body.vec3v('u_toSun', b.toSun);
       if (this.shade) this.body.float('u_shade', b.shade ?? 0);
       this.body.float('u_depthCode', b.depthCode ?? 0);
+      this.body.float('u_forestFloor', b.forestFloor ?? 0);
       for (const c of b.cells) {
         this.body.vec3v('u_cellOrigin', c.origin);
         device.draw(c.mesh);

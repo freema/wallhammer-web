@@ -7,7 +7,9 @@
 // Measuring parameters (kept in the hash when given): pr=1.5 cap of the canvas pixel ratio (default 1.5; 0 = none),
 // sh=0 shadow redraws per second for moving parts (default 0 = every frame they move), sky=behind|first (default
 // behind: the sky is shaded only where the scene left the screen empty), aa=0|2|4 samples per pixel (default: the
-// browser's antialiasing), movie=1 starts the movie mode after the build, walk=1 the walk mode (neither written back).
+// browser's antialiasing), cs=0 computes the cloud shadows per fragment instead of reading them from the engine's
+// cloud shadow texture (default: the texture; the same picture, cheaper), movie=1 starts the movie mode after the
+// build, walk=1 the walk mode (neither written back).
 // Controls: drag orbits, the wheel zooms, 1 overview, 2 street level, E afternoon/evening, P or space pause, V villagers,
 // M movie mode (a looping tour, src/movie.ts), Escape (or a drag, the wheel) leaves it.
 // G walk mode (src/walk/): a figure on the square, W A S D or the arrows walk, Shift runs, Space jumps, a drag turns,
@@ -46,8 +48,10 @@ const samples = aaParam === '0' ? 0 : aaParam === '2' ? 2 : aaParam === '4' ? 4 
 const movieAtStart = q.get('movie') === '1';
 /** Start in walk mode once the village is built. */
 const walkAtStart = q.get('walk') === '1';
+/** The cloud shadows from the engine's texture (on unless cs=0, which computes them per fragment as before). */
+const cloudShadowTexture = q.get('cs') !== '0';
 /** The measuring parameters as given in the address, written back unchanged by `hash()`. */
-const extraHash = ['pr', 'sh', 'sky', 'aa'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+const extraHash = ['pr', 'sh', 'sky', 'aa', 'cs'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
 
 interface ViewPreset {
   name: string;
@@ -100,6 +104,8 @@ const engine = createEngine<PerspectiveOrbitRig | FollowRig>({
   },
   orbitControls: true,
   sky: { hazeDistanceM: 450 },
+  // The same cloud shadows, drawn into a texture every few frames instead of computed in every lit fragment.
+  ...(cloudShadowTexture ? { cloudShadows: true } : {}),
 });
 const { renderer, env } = engine;
 env.day.pause();

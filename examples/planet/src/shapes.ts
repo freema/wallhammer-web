@@ -1,4 +1,5 @@
-// Shapes the cells place as instances: a conifer and a boulder, each with a fine and a coarse level of detail.
+// Shapes the cells place as instances: a conifer, a broadleaf tree, a tree with a flat crown, a shrub and a boulder,
+// each with a fine and a coarse level of detail.
 // Unit-sized, base at y = 0 and top at y = 1; the instance scales them (width, height, depth), turns them about their
 // up and stands them along the local up of their base. Built once on the main thread, so they are not part of the
 // cell bytes.
@@ -100,5 +101,81 @@ export function rockMesh(fine: boolean): MeshData {
     return [p[0] * r * 0.5, (p[1] * r * 0.5 + 0.4) / 0.96, p[2] * r * 0.5];
   };
   for (const [a, c, d] of tris) b.tri(lump(a), lump(c), lump(d), [0, 0.42, 0]);
+  return b.mesh();
+}
+
+/** A lumpy ball of an octahedron subdivided `levels` times: centre (0, cy, 0), radii rx, ry, rz. */
+function ball(b: Builder, levels: number, cy: number, rx: number, ry: number, rz: number, seed: number): void {
+  const base: P[] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  let tris: [P, P, P][] = [];
+  for (const sx of [0, 1]) for (const sy of [2, 3]) for (const sz of [4, 5]) tris.push([base[sx]!, base[sy]!, base[sz]!]);
+  const norm = (p: P): P => {
+    const l = Math.hypot(p[0], p[1], p[2]);
+    return [p[0] / l, p[1] / l, p[2] / l];
+  };
+  const mid = (p: P, q: P): P => norm([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2]);
+  for (let s = 0; s < levels; s++) {
+    const next: [P, P, P][] = [];
+    for (const [a, c, d] of tris) {
+      const ab = mid(a, c);
+      const bc = mid(c, d);
+      const ca = mid(d, a);
+      next.push([a, ab, ca], [ab, c, bc], [ca, bc, d], [ab, bc, ca]);
+    }
+    tris = next;
+  }
+  const lump = (p: P): P => {
+    const r = levels > 0 ? 0.86 + 0.24 * unit(hashInts(seed, Math.round(p[0] * 1000), Math.round(p[1] * 1000), Math.round(p[2] * 1000))) : 1;
+    return [p[0] * r * rx, cy + p[1] * r * ry, p[2] * r * rz];
+  };
+  for (const [a, c, d] of tris) b.tri(lump(a), lump(c), lump(d), [0, cy, 0]);
+}
+
+/** A trunk of `sides` faces from the ground to `top`. */
+function trunk(b: Builder, sides: number, radius: number, top: number): void {
+  const t0 = ring(sides, radius, 0);
+  const t1 = ring(sides, radius * 0.8, top);
+  for (let k = 0; k < sides; k++) {
+    const k1 = (k + 1) % sides;
+    b.tri(t0[k]!, t1[k]!, t1[k1]!);
+    b.tri(t0[k]!, t1[k1]!, t0[k1]!);
+  }
+}
+
+/** Broadleaf tree: a trunk and a lumpy round crown (fine, 42 triangles), or a squashed octahedron (coarse, 8). */
+export function broadleafMesh(fine: boolean): MeshData {
+  const b = new Builder();
+  if (!fine) {
+    ball(b, 0, 0.58, 0.5, 0.42, 0.5, 0);
+    return b.mesh();
+  }
+  trunk(b, 5, 0.05, 0.4);
+  ball(b, 1, 0.6, 0.5, 0.4, 0.5, 4211);
+  return b.mesh();
+}
+
+/** Shrub: a low lumpy dome sitting on the ground (fine, 32 triangles; coarse, 8). */
+export function shrubMesh(fine: boolean): MeshData {
+  const b = new Builder();
+  ball(b, fine ? 1 : 0, 0.5, 0.5, 0.5, 0.5, 4217);
+  return b.mesh();
+}
+
+/** Tree with a flat crown: a tall trunk under a wide, thin crown (fine, 28 triangles; coarse, 11). */
+export function flatCrownMesh(fine: boolean): MeshData {
+  const b = new Builder();
+  const sides = fine ? 9 : 4;
+  if (fine) trunk(b, 5, 0.04, 0.78);
+  else {
+    // A thin three-sided spike for the trunk.
+    const t0 = ring(3, 0.04, 0);
+    for (let k = 0; k < 3; k++) b.tri(t0[k]!, t0[(k + 1) % 3]!, [0, 0.8, 0], [0, 0.4, 0]);
+  }
+  const rim = ring(sides, 0.5, 0.86);
+  for (let k = 0; k < sides; k++) {
+    const k1 = (k + 1) % sides;
+    b.tri(rim[k]!, rim[k1]!, [0, 1, 0], [0, 0.86, 0]);
+    b.tri(rim[k]!, rim[k1]!, [0, 0.76, 0], [0, 0.86, 0]);
+  }
   return b.mesh();
 }

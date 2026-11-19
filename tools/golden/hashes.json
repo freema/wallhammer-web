@@ -12,10 +12,10 @@
   "streaming sphere cells (order-independent bytes, shape hash and error, instances owned by one cell per level and standing on the surface)": "a0b35594a59fa6b1",
   "world horizon test (never hides what a straight line of sight reaches; far radius of a box)": "3bbfc48ee49b8c82",
   "streaming sphere coverage (descent from 300 km to 30 m across an edge of the cube and back: all six faces covered exactly once, no hole)": "6f7862f309310029",
-  "planet example cells (start place from the seed; order-independent bytes, round trip, every object of a cell in exactly one child)": "2ddf58074f91c02b",
+  "planet example cells (start place from the seed; order-independent bytes, round trip, every object of a cell in exactly one child)": "43eac0d50531b2dc",
   "planet example flight (poses from the ground to the whole sphere in view and back, mirrored; the sphere covered exactly once at every step of the flight)": "d4e216fd429a1cea",
   "system example cells (every body its own surface from one generator; order-independent bytes, round trip, a place to land from the seed)": "07b2073d2f3fd74f",
-  "planet example strips (main line 50 km over an edge of the cube, a node of three lines; strip mesh at levels 0, 4, 8 and 10–11 near the edge and the node: lengths, shared sections, blend to the parent, never under the ground; surface = shape; whole cells order-free, round trip)": "6eb51c3b998bde71",
+  "planet example strips (main line 50 km over an edge of the cube, a node of three lines; strip mesh at levels 0, 4, 8 and 10–11 near the edge and the node: lengths, shared sections, blend to the parent, never under the ground; surface = shape; whole cells order-free, round trip)": "c4dd463b8c71dbac",
   "endless example strips (strip mesh at levels 6 and 9: lengths, shared sections, blend to the parent, never under the ground; whole cells order-free, round trip; off the strips the smooth cell under another domain version)": "e85050450a7aab5c",
   "endless example damage (the demo structure hit by the page's two events: the cells that draw it are the same bytes alone, after other cells, after leaving and after the state was saved and loaded; the same events give the same store hash; no edits = intact; a ceiling of 60 units holds over many hit structures)": "7faf71f573b7ea7a",
   "world plan: water (stage 1, seed 725: rivers fall, 30–160 m steps, lines ≤ 1300 m, nodes join two lines, every walk downstream ends in the sea or a lake at its level; lakes on land; round trip, same bytes twice, seed 726 differs; tile index = brute force)": "304f40b58ceef8cb",
@@ -23,5 +23,8 @@
   "world plan: sites (stage 3: ≥ 40 sites 9 km apart, the town first; on flat dry land with 2–6 gates; earlier fingerprints unchanged; round trip)": "dc7fb31d8609f936",
   "world plan: routes (stage 4: roads and decks within the grade limit, nodes at one height, decks clear the water; earlier fingerprints unchanged; same bytes twice; routePoint without jumps)": "7897786138424a1f",
   "system example structures (five kinds in a village, mesh bytes, massing of a village and a span with piers and parapets, damage state there and back)": "167b83b20a0469c6",
-  "system example flights (reaches nested or apart; surface to surface of a neighbour and a descent from the whole system: no jump, legs meet at one speed, the neighbour in the sky at the landing)": "646fd7dce4e6e084"
+  "system example flights (reaches nested or apart; surface to surface of a neighbour and a descent from the whole system: no jump, legs meet at one speed, the neighbour in the sky at the landing)": "646fd7dce4e6e084",
+  "planet example weather (cloud cover by place at three times: profile within 0–1, patches drift with the wind, a forced cover; the weather at 400 places: rain only under a cover over 0.6, snow in the cold)": "ff36680d02b4594f",
+  "planet example sea places (shallow and deep place of three seeds: the floor at the depth asked for, below latitude 50; same places twice)": "760f913ef36195c3",
+  "planet example movie (the plan from the seed; poses of the seven shots twice a second: pure, clamped to the shot, unit views; frames follow the shots, fades within 0–1, the movie loops)": "6188a80435806d62"
 }

@@ -69,6 +69,8 @@ URL hash (kept up to date while flying by hand):
 | `world` | 5 | Stage of the plan of Hearth, 0 to 5. `0` builds no plan and the page is the one before the plan; `1` builds the cells of Hearth from the plan (lakes, rivers, valleys); `2` adds the climate (biomes, moisture by the water, frozen sea, cloud cover by place, rain and snow); `3` adds the settlements (one town and villages, their pads, lanes, fields and massing); `4` the roads; `5` the shade of the relief and the lights at night. Written to the hash only when given. |
 | `site` | — | Stage 3: starts over settlement `n` (0 is the town), `alt` above the ground (default 300 m), as `G`. |
 | `clouds` | 1 | `0` hides the clouds of Hearth and their shadows (as `C`; stage 2). |
+| `volume` | 1 | `0` draws the clouds of Hearth as the flat cloud shell at every height, without the volumetric clouds (stage 2). |
+| `cover` | — | `0` to `1`: one cloud cover for all of Hearth in place of the profile by latitude and its patches (stage 2), to see a weather from the ground anywhere. The clouds, their shadows and the weather under the eye follow from it: from about `0.55` the deck is closed, from `0.6` it rains or snows (snow where it is cold) and the ground gets wet. |
 | `map` | 0 | `1` draws the marks of the plan (as `M`). |
 | `details` | 1 | `0` leaves out the details near the camera (tufts, stones, flowers; stage 2). |
 | `life` | 1 | `0` leaves out the creatures near the camera (villagers, beasts, skeletons, grazers; stage 3). |
@@ -182,20 +184,117 @@ cells of Hearth take their colour, cover and objects from the climate; `world=1`
 - **Objects.** The plants share one draw per anchor: conifers (a dark variant in the cold), broadleaf trees, shrubs,
   trees with a flat crown, rocks, and shards on frozen water. They ask `planClear` themselves.
 - **Frozen water.** The sea and the lakes freeze toward the poles with a ragged edge; the rivers do not.
-- **Weather.** A cloud cover by place (the engine's `cloudFieldSlot`): a profile by latitude plus patches drifting with
-  the wind; the clouds as a `CloudShellLayer` 3 km up over their shadows. Under the eye `weatherAt` gives rain or
-  snow, wet ground, fresh snow and fog, faded with the height. All pure functions of plan, place and time.
+- **Weather.** A cloud cover by place (the engine's `cloudFieldSlot`): a profile by latitude (wet tropics, dry belts,
+  wet middle latitudes, clearer poles) that stays under the cover at which a deck closes, plus weather systems of about
+  55 km and 24 km, bent and drifting with the wind, that carry it from clear country up to overcast and rain. About a
+  quarter of Hearth is clear, half broken to mostly cloudy, an eighth overcast and a twenty-fifth under rain or snow;
+  from orbit the cloud hides about two fifths of the ground. Below 15 km the clouds are the engine's volumetric
+  clouds (`cloudVolume`): heaped clouds from 1.5 to 4 km with light through them, read from the same cover by place.
+  Between 15 and 30 km they fade into a `CloudShellLayer` 3 km up over their shadows; seen from above, a deck stands
+  in the sun over its own place (the engine's `atmosphereSun`). The shadows come from a texture (`cloudShadows`).
+  `volume=0` keeps the shell at every height. Under the eye `weatherAt` gives rain or
+  snow, wet ground, fresh snow and fog, faded with the height. All pure functions of plan, place and time. The fog
+  reaches `env.weather` but nothing draws it: the page's materials take the air of the atmosphere
+  (`atmosphereApply`), and the engine's fog (`applyFog`) is the one of a scene without it. `cover=` sets one cover
+  for the whole body, to see a given weather from the ground.
 
 Views of stage 2 in `__wh.presets()`: `world-climate-orbit`, `world-climate-river-25km`, `world-climate-clouds-8km`,
 `world-climate-clouds-below`, `world-climate-pole-30km`, `world-climate-pole-close`, `world-climate-equator-close`,
 `world-climate-rain`, `world-climate-snow` and `world-climate-level-border` (each only where the search finds a
 place). Orbit without clouds and before the climate: the same view with `clouds=0` or `world=1`.
 
+## Forests from afar
+
+Trees are objects in the cells of level 10 (edge about 150 m) and finer; on Hearth from stage 2 the tallest of them
+also stand in the cells of levels 9 to 7 (thinned trees, below). Farther out the ground draws them as its cover (the
+alpha of the cover), and in the band where a cell blends into its parent the objects shrink away one by one while the
+cover takes over (`coverFade`, `coverKeep`). The canopy makes that cover look like the trees it stands for.
+
+- **Relief.** Where the cover is a wood (its alpha from 0.04, a meadow, to 0.26 and more), the vertices of the ground
+  rise by up to 13 m times the share of the far look, in the colour pass and in the shadow pass alike: a wood stands
+  above a meadow on a skyline and casts its shadow. Water, roads, sites and fields have no cover and stay flat. The
+  normal bends with the lifted edge (a surface gradient from screen derivatives) and with a fine noise of the crowns.
+- **Seen from the side.** The share of the canopy grows as the view grazes the ground (`canopyShare`:
+  1 − (1 − a)^k, k from 1 at 45 degrees and steeper up to 10 at the horizon), and the canopy darkens as the view
+  grazes it (the shaded sides of the crowns). From 45 degrees and steeper the look is the cover as baked. Where the objects hand over to the cover
+  the tone does not jump: the brightness of cover against trees was 0.98 to 1.07 in four views.
+- **Edges.** The cover is known per vertex, so its edge would follow the triangles. The edge of a wood is drawn per
+  pixel with value noise (24, 80 and 320 m), and the tree line follows the height of the ground up to `PLANT_TOP_M`
+  (1700 m), ragged by about 30 m; the lift fades out over the last 150 m below it.
+- **Look ahead.** Besides the camera's ticket and its prediction, a preload ticket at full detail stands at the landing
+  site of a planned flight: its cells are fetched but change nothing that is drawn. A preload ticket 1.5 s ahead of
+  the camera was tried and left out (see the measures below).
+- **Workers.** One pool of four workers serves the cells, the details and the settlements in the order the jobs came.
+  A detail or settlement job starts only when no job waits and a worker is idle, so the cells of the surface go
+  first. At most 12 cell jobs are in flight.
+- **Fine trees.** Conifers, broadleaf trees and trees with a flat crown keep their fine shape to 700 m (`TREE_FINE_M`),
+  where a crown is 10 to 15 pixels wide on a screen 900 pixels high.
+
+Nothing of this is in the cells' bytes. Measured on an Apple M4 Pro, 1600 × 900 at a pixel ratio of 2 (frame cost:
+the least of five runs of 20 frames, views `d300`, `r-60` and `side` from 300, 60 and 150 m). A frame is bare when a
+cell coarser than level 10 is drawn nearer than where level 10 starts to blend (`__wh.stats().bareCells` above 0).
+
+| Measure | Result |
+| --- | --- |
+| frame, canopy against the plain cover | +0.04 to +0.42 ms (most on the grazing ridge `r-60`) |
+| frame, fine trees to 700 m against 260 m | +0.07 to +0.18 ms; triangles +35 000 to +43 000 (7 to 8 %) |
+| low flight at 150 m, normal speed and fast, real CPU | no bare frame |
+| fast low flight at 150 m, CPU slowed 4 times | 9 to 13 % bare frames, as before the change |
+| the same with a preload 1.5 s ahead (left out) | 20 to 25 % |
+| the same with 16 jobs in flight (left out) | 52 to 70 % |
+| planned flight to Hearth, CPU slowed 4 times | no bare frame in the descent or after the landing |
+| peak memory in those flights | streamed cells 116 to 230 MB, GPU 227 to 241 MB, as before |
+
+### Thinned trees
+
+On Hearth from stage 2 the trees do not end where level 10 ends: the tallest of them also stand in the cells of
+levels 9, 8 and 7 and thin out toward the horizon, so there is no edge where the trees stop and the canopy begins.
+
+- **Subsets per level.** Every anchor of the plants' grid has a rank (`plantRank` in climate.ts: 1024 steps from a
+  hash of its place, a stream of its own). The turn of a conifer, a broadleaf tree or a tree with a flat crown is that
+  rank, and its height grows with it (9–22, 10–20 and 6–12 m). A cell one, two and three levels above level 10 holds
+  the trees ranked from 0.75, 0.9375 and 0.984375 up (`THIN_RANK`: the tallest quarter, sixteenth and 64th), so the
+  trees of a coarse cell are some of its children's, at the same place with the same size, turn and kind. Shrubs,
+  stones and shards stay at level 10. The planned cells build them through the `thin` hook of `buildBodyCell`
+  (world.ts); their domain version grows by 10 with it. Other bodies and stages 0 and 1 do not change.
+- **Hand-over.** Over the far part of each level's band, from 75, 60, 55 and 50 % of the distance where the cells of
+  levels 10, 9, 8 and 7 blend into their parent (about 440–580 m, 700–1170 m, 1.3–2.3 km and 2.3–4.7 km, the height
+  counted), the trees ranked under the next threshold shrink away in the order of their rank (`thinKeep` in
+  shaders.ts), and the canopy takes over exactly the share of the trees that have left (`coverShareAt`): a layer of
+  crowns of that share (the gap fraction to the power of the share) over the forest floor, lifted by the same share.
+  A level hands its parent the trees and the canopy the parent starts with, so nothing changes where the cells switch.
+  From a low view: every tree and no lift to about 440 m, then the tallest trees out of a canopy that thickens, from
+  4.7 km the canopy alone. On a descent the trees come out of the canopy as dots from about 1.2 km and fill in by 350 m.
+- **Forest floor.** Under a wood (the extent of the canopy, `canopyAt`) the ground turns toward litter and moss in
+  patches and lies in the shade of the crowns (`forestFloor`: 45 % litter and moss, 0.8 of the light); along the
+  wood's ragged edge it blends back into the open ground. The far body does the same with the mean of the patches.
+- **Tone.** The canopy of the thinned trees is 0.57 of the cover's colour seen from the side and 0.85 from above
+  (`THIN_SHADE`; elsewhere 0.58 and 0.95), so it matches the trees over the darker floor: the brightness of the canopy
+  against the trees (five views, bands from 80 m to 4.8 km) is 0.98 to 1.06 from 450 m out, where the canopy is drawn,
+  and 1.10 at 200–450 m, where every tree stands and none is drawn. Woods read about 5 to 10 % darker than before
+  from 2 to 20 km up and about 20 % darker from under 1 km.
+
+Measured as above (frame cost: interleaved runs against the code before; cells: 24 per level of stage 5, in Node;
+flights: one run each against the code before, the CPU slowed in the browser for the last column).
+
+| Measure | Result |
+| --- | --- |
+| frame, views `d300`, `r-60`, `side` | +0.23 to +0.27 ms (6.9 to 7.7 ms); triangles +15 600 to +24 300 (2 to 4 %); draws +86 to +108 |
+| instances drawn | 3600 to 4300 against 1400 to 2200 |
+| cell bytes, levels 9, 8, 7 | +1.6 KB (89 to 94 KB): 23 trees a cell on the mean, at most 69; levels 10 and finer and 6 and coarser unchanged |
+| cell job, levels 9, 8, 7 (median) | +0.9 to +1.8 ms (6.9 to 7.9 ms) |
+| GPU memory in the three views | +2 MB |
+| low flight at normal speed, boost, CPU 4× slower: frames without ground | 0, 0, 31 of 415 (before 0, 0, 55 of 417) |
+| low flight: peak streamed memory | CPU 142, 226, 227 MB, GPU 254 MB (before 141, 226, 226 MB and 252 to 253 MB) |
+| landing from 20 km, normal and CPU 4× slower | no frame without ground; CPU 117 MB, GPU 243 MB at the peak (before 116 and 240 MB) |
+| a slow walk over the switch of levels 9 and 10, 40 frames 1.5 m apart | 8 single pixels change shape between frames (before 947) |
+
 ## Details near the camera
 
 From stage 2 (`details=1`, the default) tufts, stones and flowers stand round the camera on Hearth. `details.ts` makes
 them per square of quadtree level 13 (8 × 8 quads of the finest mesh, about 19 m) with the engine's `nearScatter`;
-`details-page.ts` asks for the squares round the eye (a `details` job on the pool, two at a time, nearest first) and
+`details-page.ts` asks for the squares round the eye (a `details` job on the pool, two at a time, nearest first, each
+only when no cell job waits for a worker) and
 draws them with the engine's `NearInstanceLayer`.
 
 - **Seed.** `hashInts(packed, 0x717)`, key `[face, i, j]`: a square gives the same bytes in Node, a worker and the
@@ -326,6 +425,19 @@ change). Everything is a pure function of the stage-3 plan; the numbers are `ROA
   measured straight between two points of a route with at most one turn between them, not only along it. Roads are cut into the ground like the
   lanes (profile 4, a low crown on a 0.15 m bed, a 5 m shoulder); decks are never carved, only drawn (profile 5, a
   skirt under each edge), and nothing of the wild stands within a metre of one.
+- **Look** (`planned-cell.ts` packs it per vertex, the way shader of `shaders.ts` draws it; the plan is not touched).
+  A road is a *main road* where it carries traffic: a route with at least `MAIN_ROAD_SITES` (8) sites on each side of
+  it in the tree of routes, or a line two routes share (`mainRoadLines`, about 44 % of the road length). A main road is
+  gravel: loose stones heaped between two pressed wheel bands per direction, damp stains. Any other road is a track:
+  packed earth with two wandering ruts, grass on the hump between them and in patches toward the edges. Both end in a
+  soft ragged verge inside the half-width, where the ground shows through. Setts (in rows across, running bond, dirt in
+  the joints, kerbs along a wide paved edge) where the paving passes one half: the town's streets, a road from 40 m
+  inside the town's radius to about 100 m outside it, a village's lanes and the road through it. A deck is planks
+  across with gaps, two runners under the wheels, timber kerbs and the skirt. The ground of the shoulder turns to bare
+  earth where the road cuts or fills more than 0.5 m (a bank, darker in a cut). The relief bends the normal; each
+  detail fades to its mean once a pixel covers half of it, so nothing shimmers and from the air a road is a line.
+  Rain darkens it, makes it glossy and fills the ruts and potholes with water that mirrors the sky; snow covers it,
+  thinner and greyer in the wheel tracks.
 - `M` draws the roads in pale yellow; the line at the bottom says how many routes and decks there are and how many
   sites have no road; `__wh.routes()` returns `routeStats` (counts, length, steepest grade, least deck clearance,
   longest deck, deepest cut).

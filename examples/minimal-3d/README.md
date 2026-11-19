@@ -27,7 +27,7 @@ Then open <http://localhost:5281/minimal-3d/>. Another port: `EXAMPLES_PORT=5291
 - Drag to orbit, use the wheel to zoom.
 - `[` and `]` move the hour by half an hour, space runs the day.
 - `P` pauses the figures, `.` steps one tick, `-` and `=` halve and double their speed, `C` calls the wanderers to the gap in the ring.
-- URL hash: `#seed=7&tick=900&hour=18.5&day=250&yaw=35&pitch=24&dist=105&w=rain` (`w` is `clear`, `clouds`, `rain`, `snow` or `fog`; `tick` freezes the simulation at that tick).
+- URL hash: `#seed=7&tick=900&hour=18.5&day=250&yaw=35&pitch=24&dist=105&w=rain` (`w` is `clear`, `clouds`, `rain`, `snow` or `fog`; `tick` freezes the simulation at that tick). `ground=follow` starts the ground dry and bare and lets it follow the weather (`weatherGround`): snow whitens it over a few minutes, rain wets it within half a minute, and it dries when nothing falls.
 
 Screenshots (on the host, against the running container):
 

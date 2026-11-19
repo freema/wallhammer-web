@@ -1,12 +1,13 @@
 // Scenarios over the real test course of the walking example (examples/walk/src/course.ts): every station walked
 // the way the page's `__wh.walkTo` walks it (examples/walk/src/drive.ts), so a change of the engine that breaks an
-// ability shows up here before anyone opens the page.
+// ability shows up here before anyone opens the page; and the figure's poses through a jump (examples/walk/src/pose.ts).
 
-import { Walker } from '../../packages/wallhammer-web/src/world/walker.ts';
+import { Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
 import { PIT, PILLAR_GAPS_M, PILLAR_RADIUS_M, PILLAR_Z, PLATFORMS, RAMP_HEIGHT_M, buildCourse, pillarGapX } from '../../examples/walk/src/course.ts';
 import type { Course } from '../../examples/walk/src/course.ts';
 import { driveTo } from '../../examples/walk/src/drive.ts';
 import type { DriveOptions, WalkState } from '../../examples/walk/src/drive.ts';
+import { FigureMotion, HIP_M, legReach } from '../../examples/walk/src/pose.ts';
 import { f, verdict } from './scenario.ts';
 import type { Scenario } from './scenario.ts';
 
@@ -151,4 +152,66 @@ const footbridge: Scenario = {
   },
 };
 
-export const COURSE_SCENARIOS: Scenario[] = [walls, pillars, steps, ramps, platforms, passages, thinWall, footbridge];
+const jumpPose: Scenario = {
+  name: 'course-figure-jump-pose',
+  run() {
+    // A running jump on the start pad with a turn held in the air, the figure's motion (examples/walk/src/pose.ts) fed
+    // every step as the page feeds it. A second motion gets the distance walked shifted in the air: equal channels
+    // mean no stride in the air. The phases must read: feet drawn up while rising, legs reaching down before landing,
+    // a squat on landing, standing again 0.6 s later.
+    const w = standAt(60, 66, 0);
+    const a = new FigureMotion(w.setup);
+    const b = new FigureMotion(w.setup);
+    const it = newWalkIntent();
+    const sample = (m: FigureMotion, shift: number): void =>
+      m.update({ time: w.steps * w.stepSeconds, travelled: w.travelled + shift, speed: Math.hypot(w.velocity[0]!, w.velocity[2]!), vy: w.velocity[1]!, grounded: w.grounded });
+    const same = (): boolean => ['hip', 'knee', 'toe', 'arm', 'spread'].every((k) => {
+      const p = a[k as 'hip'], q = b[k as 'hip'];
+      return p[0] === q[0] && p[1] === q[1];
+    }) && a.drop === b.drop && a.lean === b.lean;
+    let airSteps = 0;
+    let swung = 0;
+    let tuck = Infinity;
+    let reach = 0;
+    let squat = 0;
+    let standDrop = Infinity;
+    let landedAt = -1;
+    let yawAir = NaN;
+    let yawMoved = 0;
+    const lowest = (m: FigureMotion): number => Math.max(legReach(m.hip[0]!, m.knee[0]!, m.toe[0]!), legReach(m.hip[1]!, m.knee[1]!, m.toe[1]!));
+    // Settle onto the ground first (a teleported body touches down in its first step).
+    w.step(it);
+    sample(a, 0);
+    sample(b, 0);
+    for (let s = 0; s < 240; s++) {
+      const wasAir = !w.grounded;
+      it.moveX = s < 90 ? 0 : landedAt < 0 ? 1 : 0;
+      it.moveZ = s < 90 ? -1 : 0;
+      it.run = s < 90;
+      it.jump = s === 90;
+      w.step(it);
+      const air = !w.grounded;
+      sample(a, 0);
+      sample(b, air && wasAir ? 0.4 + s * 0.01 : 0);
+      if (air) {
+        airSteps++;
+        if (Number.isNaN(yawAir)) yawAir = w.yaw;
+        yawMoved = Math.max(yawMoved, Math.abs(w.yaw - yawAir));
+        if (!same()) swung++;
+        const u = w.velocity[1]! / w.setup.jumpSpeed;
+        if (u > 0.2 && u < 0.5) tuck = Math.min(tuck, lowest(a));
+        if (u < -0.85) reach = Math.max(reach, lowest(a));
+      } else if (wasAir && landedAt < 0) {
+        landedAt = s;
+        squat = a.drop;
+      } else if (landedAt >= 0 && s === landedAt + 36) standDrop = Math.abs(a.drop);
+      if (landedAt >= 0 && s > landedAt + 36) break;
+    }
+    // Standing still after landing: the turn input stopped on landing, so the figure stands.
+    const ok = airSteps > 40 && swung === 0 && yawMoved === 0 && tuck < HIP_M - 0.18 && reach > HIP_M - 0.06 && squat > 0.08 && standDrop < 0.02;
+    return verdict(ok,
+      `${airSteps} steps in the air, ${swung} with a stride, heading change ${f(yawMoved, 6)} rad; soles below the hips: rising ${f(tuck)} m, before landing ${f(reach)} m (straight ${HIP_M}); squat on landing ${f(squat)} m, 0.6 s later ${f(standDrop)} m`);
+  },
+};
+
+export const COURSE_SCENARIOS: Scenario[] = [walls, pillars, steps, ramps, platforms, passages, thinWall, footbridge, jumpPose];

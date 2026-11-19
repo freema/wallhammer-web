@@ -7,7 +7,8 @@
 //   lock=1     a click locks the pointer (Escape lets it go)  pr  cap of the canvas pixel ratio (default 1.5; 0 = none)
 // Controls: W A S D or the arrows walk, Shift runs, Space jumps, a drag turns, the wheel moves the camera in and out;
 // F first person and back, C the wireframe of the solids, R back to the start. A gamepad works too (left stick,
-// right stick, A, RT or the left stick pressed).
+// right stick, A, RT or the left stick pressed). A jump keeps the speed and the heading of take-off until landing (the
+// walker's defaults); the view can still be turned in the air. The figure's poses come from src/pose.ts.
 
 import { definePalette } from 'wallhammer-web/core';
 import { heightFieldMesh } from 'wallhammer-web/gen-mesh';
@@ -24,6 +25,8 @@ import { COURSE_SIZE_M, LIMIT_TAG, STATIONS, buildCourse, stationAt } from './co
 import { driveTo, walkState } from './drive.ts';
 import type { DriveOptions, WalkState } from './drive.ts';
 import { Figure, solidsMesh } from './meshes.ts';
+import { FigureMotion } from './pose.ts';
+import type { MotionSample } from './pose.ts';
 import { FIGURE_MATERIAL, GROUND_MATERIAL, SOLID_MATERIAL, WIRE_MATERIAL } from './shaders.ts';
 
 const q = new URLSearchParams(location.hash.slice(1));
@@ -81,6 +84,18 @@ const [groundMat, solidMat, figureMat, wireMat] = [GROUND_MATERIAL, SOLID_MATERI
 engine.add(new MeshLayer({ name: 'ground', material: groundMat, mesh: renderer.createMesh(heightFieldMesh(field, field.minY - 4), groundMat) }));
 engine.add(new MeshLayer({ name: 'solids', material: solidMat, mesh: renderer.createMesh(solidsMesh(world), solidMat) }));
 const figure = new Figure();
+const motion = new FigureMotion(walker.setup);
+const sample: MotionSample = { time: 0, travelled: 0, speed: 0, vy: 0, grounded: true };
+/** The figure's motion from the walker at `a` of the way between its last two steps. */
+function sampleMotion(a: number): void {
+  const v = walker.velocity;
+  sample.time = (walker.steps - 1 + a) * walker.stepSeconds;
+  sample.travelled = walker.renderTravelled(a);
+  sample.speed = Math.hypot(v[0]!, v[2]!);
+  sample.vy = v[1]!;
+  sample.grounded = walker.grounded;
+  motion.update(sample);
+}
 const figureLayer = new InstanceSetLayer(renderer, { name: 'figure', material: figureMat });
 figureLayer.add(figure.set);
 engine.add(figureLayer);
@@ -117,6 +132,8 @@ const lastEye: [number, number, number] = [0, 0, 0];
 const eye: [number, number, number] = [0, 0, 0];
 let moving = false;
 let asking = false;
+/** While true the frame loop does not move the walker: a script steps it with `__wh.hold` and photographs a pose. */
+let frozen = false;
 
 function place(x: number, z: number, yaw: number): void {
   walker.teleport(x, world.groundAt(x, z, 1e4, 0), z, yaw);
@@ -129,6 +146,10 @@ place(startX, startZ, startYaw);
 
 engine.onInput(() => {
   input.read(state, engine.frameSeconds);
+  if (frozen) {
+    asking = false;
+    return;
+  }
   rig.forward(fw);
   // Forward along the view's heading, right along screen right (−fw.z, fw.x).
   intent.moveX = fw[0]! * state.forward - fw[2]! * state.right;
@@ -167,11 +188,13 @@ engine.onExtract(() => {
     frameIntervals[k] = realMs;
     frameCpu[k] = renderer.lastStats.cpuMs;
   }
-  walker.renderPosition(at);
+  // A frozen walker is drawn at its last step.
+  const a = frozen ? 1 : walker.alpha;
+  walker.renderPosition(at, a);
   rig.follow(at[0]!, at[1]!, at[2]!);
   rig.update(engine.frameSeconds);
-  const v = walker.velocity;
-  figure.pose(at[0]!, at[1]!, at[2]!, walker.renderYaw(), walker.travelled, Math.hypot(v[0]!, v[2]!), walker.grounded);
+  sampleMotion(a);
+  figure.pose(at[0]!, at[1]!, at[2]!, walker.renderYaw(a), motion);
   // In first person the body would fill the near plane.
   const firstPerson = rig.boom < 0.35;
   if (figure.set.visible === firstPerson) {
@@ -189,7 +212,7 @@ engine.onExtract(() => {
   if (++hudFrame % 6 === 0) hudEl.textContent = hud();
 });
 // The loop draws on demand; while the body or the view still moves, or a key is held, it keeps going.
-engine.animateWhile(() => moving || asking || !walker.grounded || walker.steep || input.gamepadConnected);
+engine.animateWhile(() => !frozen && (moving || asking || !walker.grounded || walker.steep || input.gamepadConnected));
 
 // --- HUD ---------------------------------------------------------------------------------------------------------------------
 const hudEl = document.getElementById('hud')!;
@@ -292,6 +315,40 @@ function profile(frames = 20): FrameProfile {
   return result;
 }
 
+/** A held input for `__wh.hold`: forward and right in the view's frame (−1..1), as the keys give them. */
+interface HoldInput {
+  forward?: number;
+  right?: number;
+  run?: boolean;
+  /** Ask a jump in the first step. */
+  jump?: boolean;
+}
+
+const held = newWalkIntent();
+/**
+ * Holds an input for `seconds` of fixed walker steps, synchronously, the direction taken from the view as the keys
+ * take it; the figure sees every step, as frames at the step rate would. Then draws and returns the state.
+ */
+function hold(o: HoldInput, seconds: number): WalkState {
+  const n = Math.max(0, Math.round(seconds * walker.setup.stepHz));
+  const f = o.forward ?? 0;
+  const r = o.right ?? 0;
+  rig.forward(fw);
+  held.moveX = fw[0]! * f - fw[2]! * r;
+  held.moveZ = fw[2]! * f + fw[0]! * r;
+  held.run = o.run ?? false;
+  for (let i = 0; i < n; i++) {
+    held.jump = i === 0 && (o.jump ?? false);
+    walker.step(held);
+    sampleMotion(1);
+  }
+  walker.renderPosition(at, 1);
+  rig.follow(at[0]!, at[1]!, at[2]!);
+  rig.snap();
+  engine.renderNow();
+  return walkState(walker);
+}
+
 const nextFrame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()));
 let resolveReady: () => void = () => {};
 const ready = new Promise<void>((resolve) => (resolveReady = resolve));
@@ -326,6 +383,16 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
     rig.snap();
     engine.renderNow();
     return end;
+  },
+  /**
+   * Holds `{ forward?, right?, run?, jump? }` (in the view's frame, as the keys) for `seconds` of fixed steps, the
+   * figure posed after every step, then draws. With `freeze(true)` first the page then stays at that step.
+   */
+  hold,
+  /** true: the frame loop stops moving the walker (a script steps it with `hold` and photographs it); false: back. */
+  freeze: (on: boolean): void => {
+    frozen = on;
+    engine.invalidate();
   },
   /** Puts the feet at (x, y, z); y omitted or NaN: on the ground there. */
   teleport: (x: number, y?: number, z?: number, yawDeg?: number): WalkState => {

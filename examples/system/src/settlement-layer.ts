@@ -230,7 +230,7 @@ export class SettlementLayer extends MeshLayer {
         this.held.delete(c);
       }
     }
-    if (this.held.size < MAX_CLUSTERS) {
+    if (this.held.size < MAX_CLUSTERS && this.poolFree()) {
       let best: Held | null = null;
       let bestD = Infinity;
       const centres = clusterCentres(plan);
@@ -273,6 +273,11 @@ export class SettlementLayer extends MeshLayer {
       h.mesh = data.count > 0 ? this.renderer.createMesh(data, this.material) : null;
       h.skip = sig;
     }
+  }
+
+  /** True when a job would start at once: the workers go to the cells of the surface first (or there is no pool). */
+  private poolFree(): boolean {
+    return !this.pool || (this.pool.queued === 0 && this.pool.busy < this.pool.size);
   }
 
   /** The massing of a cluster: a worker job, or on the page at once with `src=main`. */
@@ -350,7 +355,7 @@ export class SettlementLayer extends MeshLayer {
       this.fulls.set(r.key, f);
     }
     for (const [c, items] of ask) {
-      for (let i = 0; i < items.length && this.jobs < JOBS_IN_FLIGHT; i += ITEMS_PER_JOB) this.askFull(plan, c, items.slice(i, i + ITEMS_PER_JOB));
+      for (let i = 0; i < items.length && this.jobs < JOBS_IN_FLIGHT && this.poolFree(); i += ITEMS_PER_JOB) this.askFull(plan, c, items.slice(i, i + ITEMS_PER_JOB));
     }
     while (this.fulls.size > FULL_KEEP) {
       const [key, f] = this.fulls.entries().next().value as [number, Full];

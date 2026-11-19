@@ -9,8 +9,8 @@ import type { CellContent, CellId, SpherePatchOptions, StripHit, StripLine, Stri
 import { stripMesh } from 'wallhammer-web/gen-mesh';
 import { QUADS, RADIUS_M, ROOT_LEVEL, buildPlanetCell, findStart, groundHeight, surfaceColor, surfaceCover } from './world.ts';
 
-/** Domain version of the cells with strips (the plain generator has 1). */
-export const STRIP_DOMAIN_VERSION = 2;
+/** Domain version of the cells with strips (the plain generator has 6). */
+export const STRIP_DOMAIN_VERSION = 7;
 /** Half-widths of the main line and the two lines from its node, in metres. */
 export const STRIP_HALF_WIDTHS = [9, 6, 4.5] as const;
 /** Length of the main line and of the two lines from its node, in metres. */
@@ -216,9 +216,11 @@ export function stripLiftM(surface: StripSurface, level: number): number {
 /** Colour the shoulders are tinted toward: bare ground. */
 const BARE: readonly [number, number, number] = [134, 118, 96];
 
-/** The ground height with the strips: cut and filled, never under the sea. */
+/** The ground height with the strips: cut and filled, never under the sea where they cut or fill it. */
 export function stripGroundHeight(seed: number, x: number, y: number, z: number): number {
-  return Math.max(0, stripCarve(planetStrips(seed), x, y, z, groundHeight(seed, x, y, z)));
+  const ground = groundHeight(seed, x, y, z);
+  const carved = stripCarve(planetStrips(seed), x, y, z, ground);
+  return carved === ground ? ground : Math.max(0, carved);
 }
 
 /** The surface the strip mesh stands on: the sphere of the cells, drawn over the carved ground. */

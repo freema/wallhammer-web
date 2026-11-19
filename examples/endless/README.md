@@ -143,6 +143,20 @@ back (off by default; not together with `#strip=1`). It implies `lod=smooth` and
   `dmg-away` (30 km away; its cells are forgotten), `dmg-back` (back: the same picture and hash as `dmg-hit`),
   `dmg-far` (700 m) and `dmg-levels` (level tints, 400 m).
 
+### Volumetric clouds and their shadows (`#vol=0` switches them off)
+
+The clouds are the engine's volumetric clouds (`createEngine({ cloudVolume: true })`): heaped clouds from 1.5 to 4 km
+above the plane, with light through them, in place of the sky's flat deck. Their shadows on the ground come from the
+engine's cloud shadow texture (`cloudShadows: true`), so they lie under the clouds that are drawn, and rain falls only
+under a cloud (`w=rain`). They follow the weather's cloud cover (`w=clouds`, `w=rain`, …) and the hour; `w=clear`
+(the default) has none and costs nothing extra. The orbit camera reaches up to about 4 km, into the layer.
+
+`#vol=0` switches both off: the sky's flat deck and the cloud shadows computed per fragment, as before. On an Apple
+M4 Pro at 2560 × 1440 (`__wh.benchmark(60)`, frozen time, `w=clouds`) a frame cost the same at `origin`, 0.2 ms more
+looking low over the lake toward the clouds (2.15 ms against 1.95 ms) and 0.3 ms less looking down from 1.4 km (1.6 ms
+against 1.9 ms), where the texture is cheaper than the computed shadows. The cost of the clouds themselves is in the
+engine's documentation (`docs/environment.md`, "Volumetric clouds").
+
 ### Sphere world (`sphere.html`)
 
 A second page of the same dev server: <http://127.0.0.1:5281/endless/sphere.html>. It is its own entry (`src/sphere-main.ts`),

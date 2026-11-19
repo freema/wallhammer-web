@@ -22,6 +22,9 @@
 // lod=smooth and cells from the workers (or src=main); with strip=1 the strips win and dmg is ignored. The damage
 // state is one `CellStates` store (cap=<n>: its ceiling in units, default 2000), kept in the hash as d=<text>; the
 // cells that draw a changed structure are refreshed in place. R puts every structure back.
+// The clouds are the engine's volumetric clouds (a layer from 1.5 to 4 km) in place of the sky's flat deck, and their
+// shadows come from the engine's cloud shadow texture. vol=0 in the hash switches both off: the sky's flat deck and the
+// shadows computed per fragment, as before.
 
 import { DEFAULT_WEATHER, PerspectiveOrbitRig, definePalette } from 'wallhammer-web';
 import type { WeatherState } from 'wallhammer-web';
@@ -67,6 +70,8 @@ const WEATHER: Record<string, Partial<WeatherState>> = {
   fog: { cloudCover: 0.3, fog: 0.6 },
 };
 let weatherName = q.get('w') ?? 'clear';
+/** The volumetric clouds and the cloud shadow texture (on unless vol=0). */
+const volOn = q.get('vol') !== '0';
 
 // --- Engine ----------------------------------------------------------------------------------------------------------
 // The free camera is an option (cam=free); without it nothing below differs from the orbit camera alone.
@@ -88,6 +93,7 @@ const engine = createEngine({
   orbitControls: !free,
   precipitation: true,
   sky: { hazeDistanceM: 7000, cloudHeightM: 2500 },
+  ...(volOn ? { cloudVolume: true, cloudShadows: true } : {}),
 });
 const { renderer, env } = engine;
 /** The orbit rig. With the free camera it is not the engine's view and only keeps the orbit code below typed. */
@@ -420,7 +426,7 @@ function overlayText(): string {
 /** The URL hash of the current view. */
 function viewHash(): string {
   const v = view.state();
-  return `seed=${seed}&${free ? freeHash(free) : `x=${pos.x.toFixed(1)}&z=${pos.z.toFixed(1)}&yaw=${v.yawDeg.toFixed(1)}&pitch=${v.pitchDeg.toFixed(1)}&dist=${v.distance.toFixed(0)}`}&hour=${env.day.time.toFixed(2)}&w=${weatherName}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${smooth ? `&lod=smooth${q.has('px') ? `&px=${q.get('px')}` : ''}${q.has('cells') ? `&cells=${q.get('cells')}` : ''}` : ''}${precision.hash}${shadowMode ? `&shadows=${shadowMode}` : ''}${stripOn ? '&strip=1' : ''}${dmgOn ? `&dmg=1${q.has('cap') ? `&cap=${dmgCap}` : ''}${store.structures > 0 ? `&d=${store.text()}` : ''}` : ''}`;
+  return `seed=${seed}&${free ? freeHash(free) : `x=${pos.x.toFixed(1)}&z=${pos.z.toFixed(1)}&yaw=${v.yawDeg.toFixed(1)}&pitch=${v.pitchDeg.toFixed(1)}&dist=${v.distance.toFixed(0)}`}&hour=${env.day.time.toFixed(2)}&w=${weatherName}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${smooth ? `&lod=smooth${q.has('px') ? `&px=${q.get('px')}` : ''}${q.has('cells') ? `&cells=${q.get('cells')}` : ''}` : ''}${precision.hash}${shadowMode ? `&shadows=${shadowMode}` : ''}${stripOn ? '&strip=1' : ''}${dmgOn ? `&dmg=1${q.has('cap') ? `&cap=${dmgCap}` : ''}${store.structures > 0 ? `&d=${store.text()}` : ''}` : ''}${volOn ? '' : '&vol=0'}`;
 }
 let lastHash = '';
 setInterval(() => {

@@ -482,6 +482,13 @@ export interface BodyCellHooks {
   extra(origin: readonly [number, number, number]): { material: string; mesh: MeshData; bounds: LocalBounds }[];
   /** Replaces the terrain's own scatter rules; absent: the terrain's. */
   rules?: readonly Rule[];
+  /**
+   * Objects in cells coarser than the object level: for a rule, which of its anchors a cell of `level` keeps (a test
+   * that runs before the anchor is placed, and keeps at each level a subset of what the next finer level keeps, so an
+   * object of a coarse cell is one of its children's at the same place and size), or null for none. Absent: cells
+   * coarser than the object level hold no objects.
+   */
+  thin?(level: number, rule: Rule): ((at: RuleAnchor) => boolean) | null;
 }
 
 /** Generates one cell of the body the seed names. Pure: (seed, cell) → content. */
@@ -517,7 +524,11 @@ export function buildBodyCell(packed: number, cell: CellId, hooks: BodyCellHooks
 
   const instances: CellInstances[] = [];
   const at: RuleAnchor = { face: cell.face, i: 0, j: 0 };
-  for (const rule of cell.level >= w.objectLevel ? (hooks?.rules ?? terrain.rules) : []) {
+  const coarse = cell.level < w.objectLevel;
+  for (const rule of !coarse ? (hooks?.rules ?? terrain.rules) : hooks?.thin ? (hooks.rules ?? terrain.rules) : []) {
+    // Coarser than the object level only what the hook keeps there.
+    const keep = coarse ? hooks!.thin!(cell.level, rule) : null;
+    if (coarse && !keep) continue;
     // Every anchor of the rule's grid that lies inside the cell (the grids are finer than the cells that show them).
     const k = 2 ** (rule.gridLevel - cell.level);
     const n = 2 ** rule.gridLevel;
@@ -525,6 +536,9 @@ export function buildBodyCell(packed: number, cell: CellId, hooks: BodyCellHooks
     const ids: number[] = [];
     for (let j = cell.y * k; j < (cell.y + 1) * k; j++) {
       for (let i = cell.x * k; i < (cell.x + 1) * k; i++) {
+        at.i = i;
+        at.j = j;
+        if (keep && !keep(at)) continue;
         const r = (q: number): number => unit(hashInts(packed, rule.id, cell.face, i, j, q));
         // A point inside the anchor's square of the grid.
         const d = cubeDirection(cell.face, cubeGrid(i + 0.1 + 0.8 * r(1), n), cubeGrid(j + 0.1 + 0.8 * r(2), n));
@@ -532,8 +546,6 @@ export function buildBodyCell(packed: number, cell: CellId, hooks: BodyCellHooks
         const y = d[1] * R;
         const z = d[2] * R;
         const h = hooks ? hooks.ground(x, y, z) : terrain.ground(x, y, z);
-        at.i = i;
-        at.j = j;
         const p = rule.place(x, y, z, h, r, at);
         if (!p) continue;
         if (hooks && !hooks.keepObject(x, y, z, h)) continue;

@@ -280,6 +280,13 @@ export function planStripHit(s: Scope, x: number, y: number, z: number): StripHi
   return hitOf(probe(s, x, y, z));
 }
 
+/** The plan line of the nearest strip at a point (as `planStripHit` finds it), −1 where no line has a share. */
+export function planStripLine(s: Scope, x: number, y: number, z: number): number {
+  const pr = probe(s, x, y, z);
+  const h = hitOf(pr);
+  return h ? netLines(pr.net!)[h.line]! : -1;
+}
+
 /** True where an object may stand: no water and at least 2 m outside every strip. */
 export function planClear(s: Scope, x: number, y: number, z: number): boolean {
   const pr = probe(s, x, y, z);

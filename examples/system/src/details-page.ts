@@ -258,7 +258,8 @@ export function createDetails(o: { engine: Engine; pool: WorkerPool | null; pack
       }
       // Nearest first, ties by group, then as `squaresNear` orders them.
       missing.sort((a, b) => a.dist - b.dist || a.g - b.g);
-      const room = pool ? IN_FLIGHT - inFlight : 1;
+      // The cells of the surface go first: a job starts only on an idle worker with no job waiting for one.
+      const room = pool ? (pool.queued === 0 ? Math.min(IN_FLIGHT - inFlight, pool.size - pool.busy) : 0) : 1;
       for (let n = 0; n < Math.min(room, missing.length); n++) start(missing[n]!.g, missing[n]!.e);
       const speed = HEARTH_WIND.speedMs;
       layer.wind = { dir: windAt(eye), strength: Math.min(1, speed / FULL_WIND_MS), timeS, waves: jump ? 0 : 1 };

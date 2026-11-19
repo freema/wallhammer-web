@@ -9,14 +9,15 @@ import type { CellContent, CellId, LocalBounds, SpherePatchOptions } from 'wallh
 import type { MeshData, VertexLayout } from 'wallhammer-web/base';
 import { detSinCosTurns } from 'wallhammer-web/base';
 import { hashInts, unit } from 'wallhammer-web/gen-core';
-import { planClear, planGround, planOwnGround, planScope, planSiteAt, planStripFade, planStripHit, planSurface, planWater } from './ground.ts';
+import { planClear, planGround, planOwnGround, planScope, planSiteAt, planStripFade, planStripHit, planStripLine, planSurface, planWater } from './ground.ts';
 import { CLASS_FROM_LEVEL, deckNetOfCell, lineLengthM, lineNetOfCell, meshNet, netLines, planStripSurface, riverRunM } from './plan-lines.ts';
 import { LINE_KIND, PLAN_BODY, SITE_KIND, STAGE } from './plan.ts';
+import { mainRoadLines } from './plan-routes.ts';
 import { SITE_STREAM, greenRadiusM } from './settlement.ts';
 import type { WorldPlan } from './plan.ts';
-import { OBJECT_LAYOUT, ROOT_LEVEL, buildBodyCell } from './world.ts';
+import { OBJECT_LAYOUT, ROOT_LEVEL, buildBodyCell, objectLevel } from './world.ts';
 import { SURFACES } from './bodies.ts';
-import { climateRules, frozenColor, frozenShare, landColor, landCover } from './climate.ts';
+import { climateRules, frozenColor, frozenShare, landColor, landCover, plantThinning } from './climate.ts';
 import { shadeCodeAt } from './shade.ts';
 
 /** Stage 5: an object instance, `OBJECT_LAYOUT` followed by `i_extra`, the four skyline codes at its base point. */
@@ -83,6 +84,20 @@ const SAND: RGB = [172, 160, 124];
 const SILT: RGB = [88, 84, 70];
 /** The bank counts from this share of the strip; walls are bare from 6 m of cut, fully from 40 m. */
 const BANK_SHARE = 0.85;
+/** Raw earth of the bank where the shoulder of a way cuts or fills, from this much cut (m), fully from the second. */
+const BANK_EARTH: RGB = [124, 104, 78];
+const WAY_BANK_FROM_M = 0.5;
+const WAY_BANK_FULL_M = 2.5;
+/**
+ * Paving of the ways (0–1; the way shader lays setts where it passes one half, along a ragged line): the town's
+ * streets 1, a road 1 from this far inside the town's radius (m) fading to 0 this far outside (so its setts end about
+ * 100 m outside); a village's lanes and the road through it this much, the road fading out this far outside the
+ * village's radius.
+ */
+const TOWN_PAVING_IN_M = -40;
+const TOWN_PAVING_OUT_M = 240;
+const VILLAGE_PAVING = 0.6;
+const VILLAGE_PAVING_OUT_M = 40;
 const WALL_FROM_M = 6;
 const WALL_FULL_M = 40;
 /** Under water the bed turns to sand within the first metres and to silt toward this depth (m). */
@@ -143,6 +158,9 @@ function liftOf(spacingM: number): number {
   return 0.05 + 0.08 * spacingM;
 }
 
+/** Added to the domain version of the cells with the climate (stage 2 on), whose trees reach the coarser levels. */
+const THINNED_VERSION = 10;
+
 /** Generates one cell of the body `packed` names with its plan. Throws unless the plan is of that body and holds `stage`. */
 export function generateWorldCell(packed: number, cell: CellId, plan: WorldPlan, stage: number): CellContent {
   if (packed !== plan.seed) throw new Error(`generateWorldCell: the plan is of seed ${plan.seed}, the cell of ${packed}`);
@@ -167,9 +185,12 @@ function worldCell(packed: number, cell: CellId, plan: WorldPlan, stage: number,
     shadeCodeAt(plan, x, y, z, code);
     return [code[0]!, code[1]!, code[2]!, code[3]!];
   };
+  const riverEnd = plan.lines.kindStart[LINE_KIND.river + 1]!;
   const content = buildBodyCell(packed, cell, {
-    domainVersion: 1 + (shade ? STAGE.shade : stage),
-    ...(climate ? { rules: climateRules(s, SURFACES[PLAN_BODY]!.leafLevel) } : {}),
+    // From stage 2 the trees also stand, thinned, in the three levels above the object level (climate.ts, `THIN_RANK`):
+    // a version of its own.
+    domainVersion: 1 + (shade ? STAGE.shade : stage) + (climate ? THINNED_VERSION : 0),
+    ...(climate ? { rules: climateRules(s, SURFACES[PLAN_BODY]!.leafLevel), thin: plantThinning(packed, objectLevel(PLAN_BODY)) } : {}),
     patch: (own: SpherePatchOptions): SpherePatchOptions => {
       const terrainColor = own.colorAt!;
       const ownColor: NonNullable<SpherePatchOptions['colorAt']> = climate ? (x, y, z, h) => (h <= 0 ? terrainColor(x, y, z, h) : landColor(s, x, y, z, h)) : terrainColor;
@@ -194,7 +215,16 @@ function worldCell(packed: number, cell: CellId, plan: WorldPlan, stage: number,
           if (at) c = siteColor(packed, c, at, plan.sites!.kind[at.site]!, plan.sites!.radiusM[at.site]!);
         }
         const hit = planStripHit(s, x, y, z);
-        if (hit && hit.share > BANK_SHARE) c = mix(c, GRAVEL, smooth(BANK_SHARE, 1, hit.share));
+        if (hit) {
+          if (planStripLine(s, x, y, z) < riverEnd) {
+            if (hit.share > BANK_SHARE) c = mix(c, GRAVEL, smooth(BANK_SHARE, 1, hit.share));
+          } else if (hit.share < 1) {
+            // Beside a way the ground keeps its own colour (it shows through the worn edges of the way); where the
+            // shoulder cuts into the slope or fills it the bank is raw earth, a cut more than a fill.
+            const bank = smooth(WAY_BANK_FROM_M, WAY_BANK_FULL_M, Math.abs(cut)) * smooth(0, 0.2, hit.share);
+            c = mix(c, BANK_EARTH, (cut > 0 ? 0.65 : 0.35) * bank);
+          }
+        }
         return bytes(c, code);
       };
       return {
@@ -221,7 +251,7 @@ function worldCell(packed: number, cell: CellId, plan: WorldPlan, stage: number,
     keepObject: (x, y, z) => climate || planClear(s, x, y, z),
     extra: (origin) => {
       const net = lineNetOfCell(plan, stage, cell);
-      const out = [...riverMesh(net, origin), ...(sites ? wayMesh(net) : [])];
+      const out = [...riverMesh(net, origin), ...(sites ? wayMesh(net, origin) : [])];
       if (!shade) return out;
       cellOrigin = origin;
       return out.map((m) => ({ ...m, mesh: stripWithShade(plan, m.mesh, origin) }));
@@ -273,26 +303,32 @@ function worldCell(packed: number, cell: CellId, plan: WorldPlan, stage: number,
    * Stage 3: the lanes of the cell as one mesh of material 'way', apart from the rivers. Stage 4: the lanes and roads in
    * one mesh, the decks in a second (from their own net, lifted a little more).
    */
-  function wayMesh(net: ReturnType<typeof lineNetOfCell>): { material: string; mesh: MeshData; bounds: LocalBounds }[] {
+  function wayMesh(net: ReturnType<typeof lineNetOfCell>, origin: readonly [number, number, number]): { material: string; mesh: MeshData; bounds: LocalBounds }[] {
     const routes = stage >= STAGE.routes;
     const out: { material: string; mesh: MeshData; bounds: LocalBounds }[] = [];
     const view = net ? meshNet(net, plan, LINE_KIND.lane, cell.level, routes ? LINE_KIND.road + 1 : LINE_KIND.lane + 1) : null;
-    if (view) out.push(...wayOf(view, 0.5));
+    if (view) out.push(...wayOf(view, 0.5, origin));
     if (routes) {
       const decks = deckNetOfCell(plan, cell);
       const deckView = decks ? meshNet(decks, plan, LINE_KIND.deck, cell.level) : null;
-      if (deckView) out.push(...wayOf(deckView, 0.75));
+      if (deckView) out.push(...wayOf(deckView, 0.75, origin));
     }
     return out;
   }
 
-  /** One way mesh of a view. a_strip: w becomes the class (+4 on the coarsest level that meshes it, +8 per kind past the lane). */
-  function wayOf(view: NonNullable<ReturnType<typeof meshNet>>, lift: number): { material: string; mesh: MeshData; bounds: LocalBounds }[] {
+  /**
+   * One way mesh of a view. a_strip: w becomes the code `class + 4 · coarsest + 8 · kind + 32 · main` (kind 0 lane, 1
+   * road, 2 deck; coarsest: the coarsest level that meshes the line; main: a road or deck of a main road, `mainRoadLines`)
+   * plus 0.9 × the share of paving at the centre of the station (`pavingAt`).
+   */
+  function wayOf(view: NonNullable<ReturnType<typeof meshNet>>, lift: number, origin: readonly [number, number, number]): { material: string; mesh: MeshData; bounds: LocalBounds }[] {
     const strip = planStripSurface(plan, ground);
     const m = stripMesh(view, strip, cell, { coarsestLevel: ROOT_LEVEL, liftM: (level) => lift * liftOf(strip.spacingM(level)) });
     if (!m) return [];
     const lines = netLines(view);
     const ks = plan.lines.kindStart;
+    const main = stage >= STAGE.routes ? mainRoadLines(plan) : null;
+    const R = plan.grid.radiusM;
     const v = m.mesh.vertices;
     const f = new Float32Array(v.buffer, v.byteOffset, v.byteLength / 4);
     const stride = STRIP_LAYOUT.stride / 4;
@@ -300,8 +336,28 @@ function worldCell(packed: number, cell: CellId, plan: WorldPlan, stage: number,
       const line = lines[Math.round(f[i + 10]!)]!;
       const c = Math.min(3, plan.lines.cls[line]!);
       const kind = line >= ks[LINE_KIND.deck]! ? 2 : line >= ks[LINE_KIND.road]! ? 1 : 0;
-      f[i + 10] = c + (cell.level === CLASS_FROM_LEVEL[c] ? 4 : 0) + 8 * kind;
+      const big = kind > 0 && main && main[line] ? 1 : 0;
+      let pave = 0;
+      if (kind === 0) pave = c === 2 ? 1 : VILLAGE_PAVING;
+      else if (kind === 1) {
+        // The centre of the station: back across the section, on the base sphere.
+        const k = Math.abs(f[i + 7]!) * f[i + 9]!;
+        const cx = f[i]! + origin[0] - f[i + 4]! * k;
+        const cy = f[i + 1]! + origin[1] - f[i + 5]! * k;
+        const cz = f[i + 2]! + origin[2] - f[i + 6]! * k;
+        const l = Math.sqrt(cx * cx + cy * cy + cz * cz) || 1;
+        pave = pavingAt((cx / l) * R, (cy / l) * R, (cz / l) * R);
+      }
+      f[i + 10] = c + (cell.level === CLASS_FROM_LEVEL[c] ? 4 : 0) + 8 * kind + 32 * big + 0.9 * pave;
     }
     return [{ material: 'way', mesh: m.mesh, bounds: m.bounds }];
+  }
+
+  /** Share of paving of a road at a point: full from the town's gates, fading out over the road toward it; less by a village. */
+  function pavingAt(x: number, y: number, z: number): number {
+    const at = planSiteAt(s, x, y, z);
+    if (!at) return 0;
+    const r = plan.sites!.radiusM[at.site]!;
+    return plan.sites!.kind[at.site] === SITE_KIND.town ? 1 - smooth(r + TOWN_PAVING_IN_M, r + TOWN_PAVING_OUT_M, at.d) : VILLAGE_PAVING * (1 - smooth(r, r + VILLAGE_PAVING_OUT_M, at.d));
   }
 }

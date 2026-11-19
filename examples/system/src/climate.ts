@@ -41,7 +41,7 @@ const T_BLEND = 0.03;
 const M_BLEND = 0.05;
 const H_BLEND = 100;
 /** No plant above this height, none on the beach below the second. */
-const PLANT_TOP_M = 1700;
+export const PLANT_TOP_M = 1700;
 const PLANT_BOTTOM_M = 3;
 /** Share of an anchor's square each plant hides from a slanted view (as the stage 1 conifer: 0.45). */
 const COVER_TREE = 0.45;
@@ -231,6 +231,34 @@ export function landCover(scope: Scope, x: number, y: number, z: number, h: numb
   return [ch(0), ch(1), ch(2), Math.round(255 * (1 - Math.exp(-sum)))];
 }
 
+/**
+ * The trees from afar. Every anchor of the plants' grid has a rank (0–1, in steps of 1/1024 plus half a step, so it
+ * never lies on a threshold); a tree's height and turn grow with it. A cell `d` levels coarser than the object level
+ * holds the trees ranked from `THIN_RANK[d]` up: the tallest quarter one level up, the tallest sixteenth two levels
+ * up, the tallest 64th three levels up. So the trees of a coarse cell are some of its children's, at the same places
+ * with the same sizes, and the trees of a level leave in the order of their rank toward its far end (`THIN_GLSL` in
+ * shaders.ts, which holds the same thresholds). Shrubs, stones and shards stay at the object level.
+ */
+export const THIN_RANK = [0, 768 / 1024, 960 / 1024, 1008 / 1024] as const;
+const RANK_STEPS = 1024;
+/** Archetypes of the rules whose objects coarser cells hold. */
+export const THINNED = ['tree', 'broadleaf', 'flat-crown'] as const;
+
+/** The rank of the plant of an anchor of the plants' grid. */
+export function plantRank(packed: number, at: RuleAnchor): number {
+  return (Math.floor(unit(hashInts(packed, 0x716, at.face, at.i, at.j)) * RANK_STEPS) + 0.5) / RANK_STEPS;
+}
+
+/** The `thin` hook of the planned cells (world.ts, `BodyCellHooks`): the trees a cell coarser than `objectLevel` holds. */
+export function plantThinning(packed: number, objectLevel: number): (level: number, rule: Rule) => ((at: RuleAnchor) => boolean) | null {
+  return (level, rule) => {
+    const d = objectLevel - level;
+    if (!(THINNED as readonly string[]).includes(rule.name) || d < 1 || d >= THIN_RANK.length) return null;
+    const from = THIN_RANK[d]!;
+    return (at) => plantRank(packed, at) >= from;
+  };
+}
+
 /** The scatter rules of stage 2 for a body whose objects start at `leafLevel` (ids from 11). */
 export function climateRules(scope: Scope, leafLevel: number): Rule[] {
   const packed = scope.plan.seed;
@@ -281,11 +309,12 @@ export function climateRules(scope: Scope, leafLevel: number): Rule[] {
       place: (x, y, z, h, r, at) => {
         const c = tree(x, y, z, h, at);
         if (!c) return null;
-        const height = 9 + 13 * r(4);
+        const rank = plantRank(packed, at);
+        const height = 9 + 13 * rank;
         const cold = 1 - smooth(0.3, 0.5, c.t);
         const col = coniferColor(cold);
         const v = 0.85 + 0.25 * r(5);
-        return [height * 0.35, height, r(6) * 6.2832, height * (0.28 + 0.08 * r(7)), 0, col[0] * v, col[1] * v, col[2] * v, c.t < 0.36 ? 1 : 0];
+        return [height * 0.35, height, rank * 2 * Math.PI, height * (0.28 + 0.08 * r(7)), 0, col[0] * v, col[1] * v, col[2] * v, c.t < 0.36 ? 1 : 0];
       },
     },
     {
@@ -294,10 +323,11 @@ export function climateRules(scope: Scope, leafLevel: number): Rule[] {
       gridLevel: leafLevel + 2,
       place: (x, y, z, h, r, at) => {
         if (!broadleaf(x, y, z, h, at)) return null;
-        const height = 10 + 10 * r(4);
+        const rank = plantRank(packed, at);
+        const height = 10 + 10 * rank;
         const v = 0.82 + 0.3 * r(5);
         const width = height * (0.55 + 0.15 * r(7));
-        return [width * 0.5, height, r(6) * 6.2832, width, width * (0.85 + 0.3 * r(8)), BROADLEAF_COLOR[0] * v, BROADLEAF_COLOR[1] * v, BROADLEAF_COLOR[2] * v, 0];
+        return [width * 0.5, height, rank * 2 * Math.PI, width, width * (0.85 + 0.3 * r(8)), BROADLEAF_COLOR[0] * v, BROADLEAF_COLOR[1] * v, BROADLEAF_COLOR[2] * v, 0];
       },
     },
     {
@@ -320,10 +350,11 @@ export function climateRules(scope: Scope, leafLevel: number): Rule[] {
       gridLevel: leafLevel + 2,
       place: (x, y, z, h, r, at) => {
         if (!flat(x, y, z, h, at)) return null;
-        const height = 6 + 6 * r(4);
+        const rank = plantRank(packed, at);
+        const height = 6 + 6 * rank;
         const width = height * (0.9 + 0.4 * r(7));
         const v = 0.85 + 0.25 * r(5);
-        return [width * 0.5, height, r(6) * 6.2832, width, width * (0.8 + 0.4 * r(8)), FLAT_COLOR[0] * v, FLAT_COLOR[1] * v, FLAT_COLOR[2] * v, 0];
+        return [width * 0.5, height, rank * 2 * Math.PI, width, width * (0.8 + 0.4 * r(8)), FLAT_COLOR[0] * v, FLAT_COLOR[1] * v, FLAT_COLOR[2] * v, 0];
       },
     },
     {

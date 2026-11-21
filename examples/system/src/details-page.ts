@@ -1,6 +1,6 @@
 // Details near the camera on the page (NSO-717): which squares of details.ts are wanted round the eye, their jobs on
 // the pool of workers (or one square per frame on the main thread), and the engine's `NearInstanceLayer` that draws
-// them. Two groups with their own reach: the tufts (60 m) and the stones with the flowers (120 m).
+// them, all through the engine's `NearDetailStream`. Two groups with their own reach: the tufts (60 m) and the stones with the flowers (120 m).
 //
 // - Per frame: the height above the surface; the wanted squares of each group are those its reach + 25 m touches; at
 //   most two jobs in flight, nearest first (the cells keep the rest of the pool); a square is dropped beyond its
@@ -13,15 +13,13 @@
 
 import { RAD_PER_TURN, detCos, detSin } from 'wallhammer-web/base';
 import type { Vec3 } from 'wallhammer-web/base';
-import { NEAR_FLOATS } from 'wallhammer-web/gen-core';
-import { NearInstanceLayer } from 'wallhammer-web/render';
-import type { Layer } from 'wallhammer-web/render';
-import type { WorkerJob, WorkerPool } from 'wallhammer-web/platform';
-import type { Engine } from 'wallhammer-web/runtime';
+import type { Layer, NearInstanceLayer } from 'wallhammer-web/render';
+import type { WorkerPool } from 'wallhammer-web/platform';
+import { NearDetailStream } from 'wallhammer-web/runtime';
+import type { Engine, NearDetailGroup } from 'wallhammer-web/runtime';
 import { SURFACES } from './bodies.ts';
 import { BIOME } from './climate.ts';
-import { DETAIL, DETAIL_KINDS, DETAIL_OFF_M, detailShapes, detailStage, generateDetails, squareDistanceM, squareKey, squaresNear } from './details.ts';
-import type { DetailSquare } from './details.ts';
+import { DETAIL, DETAIL_GRID, DETAIL_KINDS, DETAIL_OFF_M, detailShapes, detailStage, generateDetails } from './details.ts';
 import { planScope, planSurface, planWater } from './ground.ts';
 import type { PlanView } from './inhabited.ts';
 import { LINE_KIND, PLAN_BODY } from './plan.ts';
@@ -30,45 +28,14 @@ import { DETAIL_MATERIAL } from './shaders.ts';
 import { HEARTH_WIND, placeAt } from './weather.ts';
 import { latLonOf } from './world.ts';
 
-/** A group of kinds made by one job per square, with one reach. */
-interface Group {
-  mask: number;
-  kinds: readonly number[];
-  reachM: number;
-}
-
-const GROUPS: readonly Group[] = [
+const GROUPS: readonly NearDetailGroup[] = [
   { mask: 1 << DETAIL.tuft, kinds: [DETAIL.tuft], reachM: DETAIL_KINDS[DETAIL.tuft]!.fade.reachM },
   { mask: (1 << DETAIL.stone) | (1 << DETAIL.flower), kinds: [DETAIL.stone, DETAIL.flower], reachM: DETAIL_KINDS[DETAIL.stone]!.fade.reachM },
 ];
-/** Metres beyond the reach that are wanted, and beyond which a square is dropped. */
-const WANT_M = 25;
-const DROP_M = 60;
-/** Jobs on the pool at once. */
-const IN_FLIGHT = 2;
-/** Rise of a gain per frame at most. */
-const RISE = 0.04;
-/** A square nearer than this counts as at the eye in the gain. */
-const NEAR_M = 10;
 /** Wind speed of full strength, m/s. */
 const FULL_WIND_MS = 12;
 
 const R = SURFACES[PLAN_BODY]!.radiusM;
-
-/** What a job gives back. */
-interface DetailReply {
-  anchor: Vec3;
-  radiusM: number;
-  start: Uint32Array;
-  data: Float32Array;
-}
-
-interface Entry {
-  square: DetailSquare;
-  /** 'ready' also for a square that failed: it is not asked again and does not hold the gain down. */
-  state: 'queued' | 'running' | 'ready';
-  job: WorkerJob<DetailReply> | null;
-}
 
 export interface DetailStats {
   /** Squares there, both groups. */
@@ -106,86 +73,26 @@ const smooth = (a: number, b: number, x: number): number => {
 /** The details of the body `packed` names, drawn before `before`. Only for a plan of stage `STAGE.climate` or more. */
 export function createDetails(o: { engine: Engine; pool: WorkerPool | null; packed: number; plan: WorldPlan; stage: number; before: Layer }): Details {
   const { engine, pool, packed, plan, stage } = o;
-  const renderer = engine.renderer;
   const shapes = detailShapes();
-  const layer = new NearInstanceLayer(engine.device, {
-    material: renderer.material(DETAIL_MATERIAL),
-    kinds: DETAIL_KINDS.map((k, i) => ({ mesh: shapes[i]!, fade: k.fade, maxInstances: k.maxInstances, bendM: k.bendM })),
-    origin: () => renderer.worldOrigin,
-  });
-  renderer.addBefore(layer, o.before);
   const scope = planScope(plan, detailStage(stage), null);
-  const entries: Map<string, Entry>[] = GROUPS.map(() => new Map());
-  const gains = GROUPS.map(() => 0);
-  const targets = GROUPS.map(() => 0);
-  const wanted: DetailSquare[][] = GROUPS.map(() => []);
-  let inFlight = 0;
-  let jobs = 0;
-  let failed = 0;
-  let rebuildMs = 0;
-  let lastTime: number | null = null;
-  let disposed = false;
-  const scratch: DetailSquare[] = [];
-
-  /** Puts the records of one square of group `g` into the layer. */
-  const place = (g: number, s: DetailSquare, r: DetailReply): void => {
-    const key = squareKey(s);
-    for (const k of GROUPS[g]!.kinds) {
-      const from = r.start[k]!;
-      const to = r.start[k + 1]!;
-      layer.put(key, k, to > from ? { anchor: r.anchor, radiusM: r.radiusM, data: r.data.subarray(from * NEAR_FLOATS, to * NEAR_FLOATS) } : null);
-    }
-  };
-
-  const drop = (g: number, key: string): void => {
-    const e = entries[g]!.get(key);
-    if (!e) return;
-    if (e.job) {
-      e.job.cancel();
-      e.job = null;
-      if (e.state === 'running') inFlight--;
-    }
-    entries[g]!.delete(key);
-    for (const k of GROUPS[g]!.kinds) layer.put(key, k, null);
-  };
-
-  const dropAll = (): void => {
-    for (let g = 0; g < GROUPS.length; g++) for (const key of [...entries[g]!.keys()]) drop(g, key);
-  };
-
-  const start = (g: number, e: Entry): void => {
-    const s = e.square;
-    const key = squareKey(s);
-    jobs++;
-    if (!pool) {
-      const d = generateDetails(packed, plan, stage, s, GROUPS[g]!.mask);
-      e.state = 'ready';
-      place(g, s, { anchor: d.anchor, radiusM: d.radiusM, start: d.records.start, data: d.records.data });
-      return;
-    }
-    const job = pool.run<DetailReply>({ kind: 'details', seed: packed, stage, face: s.face, i: s.i, j: s.j, mask: GROUPS[g]!.mask });
-    e.state = 'running';
-    e.job = job;
-    inFlight++;
-    job.promise.then(
-      (r) => {
-        if (disposed || entries[g]!.get(key) !== e) return;
-        inFlight--;
-        e.job = null;
-        e.state = 'ready';
-        place(g, s, r);
-        engine.invalidate();
-      },
-      () => {
-        if (disposed || entries[g]!.get(key) !== e) return;
-        // Not cancelled by `drop`: the job failed.
-        inFlight--;
-        e.job = null;
-        e.state = 'ready';
-        failed++;
-      },
-    );
-  };
+  const stream = new NearDetailStream({
+    renderer: engine.renderer,
+    material: DETAIL_MATERIAL,
+    kinds: DETAIL_KINDS.map((k, i) => ({ mesh: shapes[i]!, fade: k.fade, maxInstances: k.maxInstances, bendM: k.bendM })),
+    before: o.before,
+    grid: DETAIL_GRID,
+    groups: GROUPS,
+    offM: DETAIL_OFF_M,
+    generate: (s, mask) => {
+      const d = generateDetails(packed, plan, stage, s, mask);
+      return { anchor: d.anchor, radiusM: d.radiusM, start: d.records.start, data: d.records.data };
+    },
+    pool,
+    job: (s, mask) => ({ kind: 'details', seed: packed, stage, face: s.face, i: s.i, j: s.j, mask }),
+    // The cells of the surface go first: a job starts only on an idle worker with no job waiting for one.
+    idleWorkersOnly: true,
+    invalidate: () => engine.invalidate(),
+  });
 
   const windAt = (eye: Vec3): Vec3 => {
     // The wind blows from `fromDeg` (0 = from +z, 90 = from +x): toward the opposite way, along the ground at the eye.
@@ -200,91 +107,25 @@ export function createDetails(o: { engine: Engine; pool: WorkerPool | null; pack
     return tl > 1e-6 ? [t[0] / tl, t[1] / tl, t[2] / tl] : [up[1], -up[0], 0];
   };
 
-  const view = (eye: Vec3): void => {
-    const before = layer.stats.rebuilds;
-    const t0 = performance.now();
-    layer.view(eye, DETAIL_KINDS.map((_, k) => gains[GROUPS.findIndex((g) => g.kinds.includes(k))] ?? 0));
-    if (layer.stats.rebuilds !== before) rebuildMs = performance.now() - t0;
-  };
-
   return {
-    layer,
+    layer: stream.layer,
     frame(eye, timeS) {
-      if (disposed) return;
-      const jump = lastTime === null || Math.abs(timeS - lastTime) > 1;
-      lastTime = timeS;
       if (!eye) {
-        dropAll();
-        for (let g = 0; g < GROUPS.length; g++) gains[g] = targets[g] = 0;
-        for (const w of wanted) w.length = 0;
-        view([0, 0, 0]);
+        stream.frame({ eye: null, dir: [0, 0, 1], heightM: 0, timeS, windDir: [1, 0, 0], windStrength: 0 });
         return;
       }
       const l = Math.sqrt(eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]) || 1;
       const dir: Vec3 = [eye[0] / l, eye[1] / l, eye[2] / l];
       const height = l - R - planSurface(scope, dir[0] * R, dir[1] * R, dir[2] * R);
-      if (height >= DETAIL_OFF_M) {
-        dropAll();
-        for (let g = 0; g < GROUPS.length; g++) gains[g] = targets[g] = 0;
-        for (const w of wanted) w.length = 0;
-        view(eye);
-        return;
-      }
       const lift = 1 - smooth(200, DETAIL_OFF_M, height);
-      // Wanted squares, the far ones dropped, the missing ones queued.
-      const missing: { g: number; e: Entry; dist: number }[] = [];
-      for (let g = 0; g < GROUPS.length; g++) {
-        const group = GROUPS[g]!;
-        const map = entries[g]!;
-        for (const [key, e] of map) if (squareDistanceM(dir, e.square) > group.reachM + DROP_M) drop(g, key);
-        const want = squaresNear(dir, group.reachM + WANT_M, scratch);
-        wanted[g] = want.slice();
-        let least = 1;
-        for (const s of want) {
-          const key = squareKey(s);
-          let e = map.get(key);
-          if (!e) {
-            e = { square: s, state: 'queued', job: null };
-            map.set(key, e);
-          }
-          if (e.state === 'ready') continue;
-          const dist = squareDistanceM(dir, s);
-          least = Math.min(least, Math.min(1, Math.max(0, (dist - NEAR_M) / group.reachM)));
-          if (e.state === 'queued') missing.push({ g, e, dist });
-        }
-        const target = lift * least;
-        targets[g] = target;
-        gains[g] = target < gains[g]! ? target : Math.min(target, gains[g]! + RISE);
-      }
-      // Nearest first, ties by group, then as `squaresNear` orders them.
-      missing.sort((a, b) => a.dist - b.dist || a.g - b.g);
-      // The cells of the surface go first: a job starts only on an idle worker with no job waiting for one.
-      const room = pool ? (pool.queued === 0 ? Math.min(IN_FLIGHT - inFlight, pool.size - pool.busy) : 0) : 1;
-      for (let n = 0; n < Math.min(room, missing.length); n++) start(missing[n]!.g, missing[n]!.e);
-      const speed = HEARTH_WIND.speedMs;
-      layer.wind = { dir: windAt(eye), strength: Math.min(1, speed / FULL_WIND_MS), timeS, waves: jump ? 0 : 1 };
-      view(eye);
+      stream.frame({ eye, dir, heightM: height, timeS, lift, windDir: windAt(eye), windStrength: Math.min(1, HEARTH_WIND.speedMs / FULL_WIND_MS) });
     },
-    settled() {
-      if (inFlight > 0) return false;
-      for (let g = 0; g < GROUPS.length; g++) {
-        if (Math.abs(gains[g]! - targets[g]!) > 1e-9) return false;
-        for (const s of wanted[g]!) if (entries[g]!.get(squareKey(s))?.state !== 'ready') return false;
-      }
-      return true;
-    },
+    settled: () => stream.settled(),
     stats() {
-      let squares = 0;
-      for (const map of entries) for (const e of map.values()) if (e.state === 'ready') squares++;
-      const st = layer.stats;
-      return { squares, held: st.held, drawn: st.drawn, clipped: st.clipped, jobs, gain: [gains[0]!, gains[1]!], rebuildMs, failed };
+      const st = stream.stats();
+      return { squares: st.squares, held: st.held, drawn: st.drawn, clipped: st.clipped, jobs: st.jobs, gain: [st.gains[0]!, st.gains[1]!], rebuildMs: st.rebuildMs, failed: st.failed };
     },
-    dispose() {
-      disposed = true;
-      dropAll();
-      renderer.remove(layer);
-      layer.dispose();
-    },
+    dispose: () => stream.dispose(),
   };
 }
 

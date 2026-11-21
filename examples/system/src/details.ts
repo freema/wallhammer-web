@@ -16,8 +16,8 @@
 
 import { RAD_PER_TURN, detCos, detSin } from 'wallhammer-web/base';
 import type { MeshData, Vec3 } from 'wallhammer-web/base';
-import { cellId, cubeDirection, cubeFaceOf, cubeGrid, cubeNeighbour, hashInts, nearScatter, valueNoise3 } from 'wallhammer-web/gen-core';
-import type { NearFade, NearRecords } from 'wallhammer-web/gen-core';
+import { NearSquareGrid, cellId, cubeDirection, cubeGrid, hashInts, nearLatticeValue, nearScatter, valueNoise3 } from 'wallhammer-web/gen-core';
+import type { NearFade, NearRecords, NearSquare } from 'wallhammer-web/gen-core';
 import { SURFACES } from './bodies.ts';
 import { BIOME, climateAt, landColor, landWeights } from './climate.ts';
 import { planScope, planSiteAt, planStripHit, planSurface, planWater } from './ground.ts';
@@ -92,8 +92,6 @@ const LEAF = SURFACES[PLAN_BODY]!.leafLevel;
 const NV = QUADS * 2 ** LEAF;
 const SUB = (QUADS * 2 ** LEAF) / 2 ** DETAIL_LEVEL;
 const LAT = SUB + 1;
-/** Squares across a face. */
-const NS = 2 ** DETAIL_LEVEL;
 /** Half the diagonal of the largest square, metres (with a margin). */
 const HALF_DIAG_M = 14.5;
 
@@ -186,62 +184,11 @@ export function detailShapes(): MeshData[] {
 
 // --- Squares ---------------------------------------------------------------------------------------------------------
 
-export interface DetailSquare {
-  face: number;
-  i: number;
-  j: number;
-}
+/** A square of the details' grid (the engine's `NearSquare`). */
+export type DetailSquare = NearSquare;
 
-export function squareKey(s: DetailSquare): string {
-  return `${s.face}:${s.i}:${s.j}`;
-}
-
-/** Unit direction of the middle of a square. */
-function squareCentre(face: number, i: number, j: number): Vec3 {
-  return cubeDirection(face, cubeGrid(2 * i + 1, 2 * NS), cubeGrid(2 * j + 1, 2 * NS));
-}
-
-/**
- * Metres from the point under the unit direction `dir` (on the base sphere) to the nearest point a square can have:
- * the distance to its middle less half its diagonal, never below 0.
- */
-export function squareDistanceM(dir: Vec3, s: DetailSquare): number {
-  const c = squareCentre(s.face, s.i, s.j);
-  const dx = c[0] - dir[0];
-  const dy = c[1] - dir[1];
-  const dz = c[2] - dir[2];
-  return Math.max(0, Math.sqrt(dx * dx + dy * dy + dz * dz) * R - HALF_DIAG_M);
-}
-
-/** Every square the reach round `dir` touches, nearest first (ties by face, j, i), across the edges of the cube. */
-export function squaresNear(dir: Vec3, reachM: number, out: DetailSquare[]): DetailSquare[] {
-  out.length = 0;
-  const f = cubeFaceOf(dir);
-  const i0 = Math.min(NS - 1, Math.max(0, Math.floor(((f.s + 1) / 2) * NS)));
-  const j0 = Math.min(NS - 1, Math.max(0, Math.floor(((f.t + 1) / 2) * NS)));
-  const seen = new Set<string>();
-  const dist = new Map<string, number>();
-  const todo: DetailSquare[] = [{ face: f.face, i: i0, j: j0 }];
-  seen.add(squareKey(todo[0]!));
-  while (todo.length > 0) {
-    const s = todo.pop()!;
-    const d = squareDistanceM(dir, s);
-    if (d > reachM) continue;
-    out.push(s);
-    dist.set(squareKey(s), d);
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const n = cubeNeighbour(s.face, DETAIL_LEVEL, s.i, s.j, dx, dy);
-      if (!n) continue;
-      const q = { face: n.face, i: n.x, j: n.y };
-      const k = squareKey(q);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      todo.push(q);
-    }
-  }
-  out.sort((a, b) => dist.get(squareKey(a))! - dist.get(squareKey(b))! || a.face - b.face || a.j - b.j || a.i - b.i);
-  return out;
-}
+/** The squares of the details: level `DETAIL_LEVEL` of the cube grid. */
+export const DETAIL_GRID = new NearSquareGrid({ level: DETAIL_LEVEL, radiusM: R, halfDiagM: HALF_DIAG_M });
 
 /** The stage the details read the plan at: at most `routes`; below `climate` there are none. */
 export function detailStage(stage: number): number {
@@ -385,18 +332,7 @@ function lattice(scope: Scope, s: DetailSquare): Lattice {
 }
 
 /** Bilinear value of channel `c` of `field` (stride `w`) at (u, v) of the square. */
-function bilinear(field: Float64Array, w: number, c: number, u: number, v: number): number {
-  const fu = u * SUB;
-  const fv = v * SUB;
-  const qi = Math.min(SUB - 1, Math.floor(fu));
-  const qj = Math.min(SUB - 1, Math.floor(fv));
-  const tu = fu - qi;
-  const tv = fv - qj;
-  const at = (i: number, j: number): number => field[(j * LAT + i) * w + c]!;
-  const a = at(qi, qj) + (at(qi + 1, qj) - at(qi, qj)) * tu;
-  const b = at(qi, qj + 1) + (at(qi + 1, qj + 1) - at(qi, qj + 1)) * tu;
-  return a + (b - a) * tv;
-}
+const bilinear = (field: Float64Array, w: number, c: number, u: number, v: number): number => nearLatticeValue(field, SUB, w, c, u, v);
 
 /** Area of a square on the base sphere, m²: two flat triangles between its corners. */
 function squareArea(s: DetailSquare): number {

@@ -28,7 +28,10 @@
 // light shafts are added along every view ray, and the backdrop (sea.ts) stands where the water hides everything.
 
 import type { MaterialDesc } from 'wallhammer-web/base';
-import { COVER_FADE_GLSL, MEDIUM_GLSL, mediumClearDistance } from 'wallhammer-web/core';
+import { COVER_FADE_GLSL, MEDIUM_GLSL } from 'wallhammer-web/core';
+import { liquidClearDistance, liquidGlsl, liquidRipplesGlsl } from 'wallhammer-web/env';
+import { DEPTH_ONLY_FS, sphereCoverThinGlsl, sphereGroundDepthVs, sphereGroundVs } from 'wallhammer-web/env';
+import type { LiquidLook } from 'wallhammer-web/env';
 import { SPHERE_PATCH_ATTRIBS, SPHERE_PATCH_COVER_ATTRIBS, SPHERE_PATCH_GLSL, WAVES_GLSL } from 'wallhammer-web/gen-core';
 import { STRIP_ATTRIBS, STRIP_GLSL } from 'wallhammer-web/gen-mesh';
 import { PLANT_TOP_M, THIN_RANK } from './world.ts';
@@ -57,8 +60,6 @@ vec3 levelTint(float level) {
 
 /** Extinction of the water per metre (red, green, blue): clear coastal water, red lost first, green and blue last; about 85 m of sight. */
 export const SEA_EXTINCTION = [0.32, 0.055, 0.06] as const;
-/** Distance in metres at which the water hides everything behind it to within 1 %. */
-export const SEA_CLEAR_M = mediumClearDistance(SEA_EXTINCTION, 0.01);
 /** Colour of the open water seen across it from inside, as a multiple of the light at the surface. */
 export const SEA_BODY = [0.03, 0.24, 0.34] as const;
 /** Share of the light from above lost per metre of depth (red, green, blue): it goes deeper than one sees across. */
@@ -66,161 +67,17 @@ export const SEA_LIGHT_LOSS = [0.3, 0.05, 0.03] as const;
 /** The old colours of the sea from high above: over the shelf and over the deep sea (by the floor's depth to 600 m). */
 const SEA_SHELF = [36 / 255, 104 / 255, 124 / 255] as const;
 const SEA_DEEP = [8 / 255, 30 / 255, 70 / 255] as const;
-const vec3 = (v: readonly number[]): string => `vec3(${v.map((x) => x.toFixed(4)).join(', ')})`;
+/** The look of the sea for the engine's liquid (`liquidGlsl` of env, `LiquidSurface` in sea.ts). */
+export const SEA_LOOK: LiquidLook = { extinction: SEA_EXTINCTION, body: SEA_BODY, lightLoss: SEA_LIGHT_LOSS, farShallow: SEA_SHELF, farDeep: SEA_DEEP };
+/** Distance in metres at which the water hides everything behind it to within 1 %. */
+export const SEA_CLEAR_M = liquidClearDistance(SEA_LOOK);
 
 /**
- * GLSL the materials and the layers of the sea share: the sea's colours, its light at a depth, the light of the
- * surface above a point, the plane of the waves (sea.ts), the caustics and the light shafts. Needs `<noise>`,
- * `<lighting>`, `<atmosphere>` and `MEDIUM_GLSL` before it. Uniforms (`seaUniforms`, sea.ts): `u_sea` x the height of
- * the eye above the moving surface (m, negative under it), y its height above the level, z the radius round the
- * eye's foot inside which the near surface (`SeaSurfaceLayer`) draws the water (0: none), w the factor on the waves'
- * heights; `u_seaFoot` xyz the eye's foot on the level in render space, w the radius of the level; `u_seaAxisA`,
- * `u_seaAxisB`, `u_seaAxisN` the axes of the chart of the waves' plane, each with the foot's coordinate along it
- * (from the centre) in w.
+ * GLSL the materials and the layers of the sea share (`liquidGlsl` of env): the sea's colours, its light at a depth,
+ * the light of the surface above a point, the plane of the waves, the caustics. Needs `<noise>`, `<lighting>`,
+ * `<atmosphere>` and `MEDIUM_GLSL` before it; its uniforms come from `seaUniforms` (sea.ts).
  */
-export const SEA_COMMON_GLSL = /* glsl */ `
-uniform vec4 u_sea;
-uniform vec4 u_seaFoot;
-uniform vec4 u_seaAxisA;
-uniform vec4 u_seaAxisB;
-uniform vec4 u_seaAxisN;
-const vec3 SEA_EXTINCTION = ${vec3(SEA_EXTINCTION)};
-const vec3 SEA_BODY = ${vec3(SEA_BODY)};
-const vec3 SEA_LIGHT_LOSS = ${vec3(SEA_LIGHT_LOSS)};
-const vec3 SEA_SHELF = ${vec3(SEA_SHELF)};
-const vec3 SEA_DEEP = ${vec3(SEA_DEEP)};
-// Share of the light from above that is left at a depth (m).
-vec3 seaLightAt(float depth) {
-  return mediumThrough(SEA_LIGHT_LOSS, depth);
-}
-// Direction to the sun and its light as a multiple of a colour, at p.
-vec3 seaSunDir() {
-#ifdef WH_ATMOSPHERE
-  return u_atmSun.xyz;
-#else
-  return u_sunDir.xyz;
-#endif
-}
-vec3 seaSun(vec3 p) {
-#ifdef WH_ATMOSPHERE
-  return atmosphereSun(p) * u_cloudFieldLight.y;
-#else
-  return u_sunColor.rgb;
-#endif
-}
-// The light at the top of the water over p, as a multiple of a colour: the sun (under the clouds) and the sky there.
-vec3 seaSurfaceLight(vec3 p) {
-  vec3 up = localUp(p);
-  vec3 top = p - up * localHeight(p);
-#ifdef WH_ATMOSPHERE
-  return atmosphereLight(top, up, u_cloudFieldLight.y, 1.0);
-#else
-  return u_warmTint.rgb * lightOnAt(top, up, 1.0, 1.0);
-#endif
-}
-// Light on the screen's scale for an eye under the water, which grows used to the dimmer light down there: the light
-// left at the eye's depth is made up for in part (all of it would leave no darkening with depth). 1 at the top.
-vec3 seaDisplay(vec3 light) {
-  vec3 left = seaLightAt(max(-u_sea.x, 0.0));
-  return toDisplay(light * pow(max(dot(left, vec3(0.2, 0.7, 0.1)), 1e-4), -0.8));
-}
-// The light the water itself sends toward the eye where nothing shows through it, for a view ray that ends depth
-// metres down (the eye's depth from u_sea) with the cosine mu between it and up: light comes from above and is
-// scattered mostly forward, so a ray looking down sees the dimmest water, one looking up the brightest. From high
-// above the water takes the old colours of the sea by that depth.
-vec3 seaInscatter(float depth, vec3 light, float mu) {
-  float eyeDepth = max(-u_sea.x, 0.0);
-  float far = smoothstep(5.0, 150.0, u_sea.x);
-  float phase = mix(0.32, 1.0, smoothstep(-1.0, 0.0, mu)) + 0.7 * max(mu, 0.0);
-  vec3 body = mix(SEA_BODY * phase, mix(SEA_SHELF, SEA_DEEP, smoothstep(0.0, 600.0, depth)), far);
-  float d = mix(0.5 * (eyeDepth + min(depth, eyeDepth + 40.0)), 0.0, far);
-  return body * light * seaLightAt(d);
-}
-// Coordinates in metres of a point (render space) in the plane of the waves, relative to the eye's foot: the chart is
-// the face of the cube under the eye seen from the centre, its coordinates the angles along its two axes times the
-// radius. Computed from differences, so it keeps its precision far from the face's centre.
-vec2 seaPlane(vec3 p) {
-  vec3 r = p - u_seaFoot.xyz;
-  float ra = dot(r, u_seaAxisA.xyz);
-  float rb = dot(r, u_seaAxisB.xyz);
-  float rn = dot(r, u_seaAxisN.xyz);
-  float n0 = u_seaAxisN.w;
-  float k = 1.0 / (n0 * max(n0 + rn, 1.0));
-  float du = (ra * n0 - u_seaAxisA.w * rn) * k;
-  float dv = (rb * n0 - u_seaAxisB.w * rn) * k;
-  float u0 = u_seaAxisA.w / n0;
-  float v0 = u_seaAxisB.w / n0;
-  return u_seaFoot.w * vec2(atan(du, 1.0 + u0 * (u0 + du)), atan(dv, 1.0 + v0 * (v0 + dv)));
-}
-// The plane's axes in the horizon of a point with the local up.
-void seaTangents(vec3 up, out vec3 ta, out vec3 tb) {
-  ta = normalize(u_seaAxisA.xyz - up * dot(u_seaAxisA.xyz, up));
-  tb = normalize(u_seaAxisB.xyz - up * dot(u_seaAxisB.xyz, up));
-}
-// Direction the sun's light runs in the water (down), refracted at a calm surface with this up.
-vec3 seaSunIn(vec3 up) {
-  vec3 s = seaSunDir();
-  vec3 t = refract(-s, up, 1.0 / 1.33);
-  return dot(t, t) > 0.5 ? normalize(t) : -up;
-}
-// The point of the surface above p (depth metres down) from which the sun's light reaches p.
-vec3 seaSunTop(vec3 p, vec3 up, float depth) {
-  vec3 sunIn = seaSunIn(up);
-  return p - sunIn * (depth / max(-dot(sunIn, up), 0.25));
-}
-// Caustics: the light the moving surface focuses at a depth, about 0.5 on average and up to 2, as a function of the
-// point of the surface the light came through. Soft, wandering bands that break up into patches; they spread and
-// blur with depth.
-float seaCaustic(vec2 plane, float depth) {
-  float t = u_time.x;
-  float blur = smoothstep(0.2, 7.0, depth);
-  vec2 q = plane * (1.0 / 2.7);
-  vec2 w = vec2(vnoise(q * 0.37 + vec2(0.0, 0.09 * t), 91u), vnoise(q * 0.37 + vec2(7.3, -0.08 * t), 92u)) - 0.5;
-  q += w * 2.2;
-  float a = vnoise(q + vec2(0.23 * t, 0.07 * t), 93u);
-  float b = vnoise(q * vec2(1.21, 0.83) + vec2(-0.11 * t, 0.21 * t) + 3.7, 94u);
-  float width = mix(0.06, 0.22, blur);
-  float ra = 1.0 - smoothstep(0.0, width, abs(a - 0.5));
-  float rb = 1.0 - smoothstep(0.0, width * 1.4, abs(b - 0.5));
-  // Bright patches and dim ones, on a larger scale.
-  float patchy = smoothstep(0.2, 0.8, vnoise(plane * (1.0 / 13.0) + vec2(0.03 * t, -0.02 * t), 95u));
-  float c = 0.55 * ra + 0.35 * rb + 1.1 * ra * rb;
-  return mix(c, 0.45, blur * 0.6) * (0.3 + 0.9 * patchy);
-}
-`;
-
-/** The light shafts, fragment stage only (`gl_FragCoord`): needs `SEA_COMMON_GLSL` before it. */
-export const SEA_SHAFTS_GLSL = /* glsl */ `
-// Light shafts for an eye under the water: the sunlight scattered toward the eye along the view ray (from eye,
-// direction dir, len metres) where the surface above focused it: the caustics' pattern carried down along the
-// refracted sun, drifting with it. Added to what the ray sees; 0 above the water.
-vec3 seaShafts(vec3 eye, vec3 dir, float len, vec3 sun) {
-  if (u_sea.x >= 0.0) return vec3(0.0);
-  vec3 up = localUp(eye);
-  vec3 sunIn = seaSunIn(up);
-  float span = min(len, 30.0);
-  const int N = 6;
-  float stepM = span / float(N);
-  // A fixed pattern per pixel spreads the samples (no time in it: the same frame for the same pose).
-  float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-  float eyeDepth = -u_sea.x;
-  float rise = dot(dir, up);
-  float down = max(-dot(sunIn, up), 0.25);
-  float t = u_time.x;
-  vec3 sum = vec3(0.0);
-  for (int i = 0; i < N; i++) {
-    float s = stepM * (float(i) + j);
-    float depth = max(eyeDepth - rise * s, 0.0);
-    vec2 plane = seaPlane(eye + dir * s - sunIn * (depth / down));
-    vec2 q = plane * (1.0 / 2.6);
-    float c = smoothstep(0.55, 0.85, vnoise(q + vec2(0.21 * t, 0.06 * t), 93u));
-    sum += c * seaLightAt(depth) * mediumThrough(SEA_EXTINCTION, s);
-  }
-  float g = max(dot(dir, -sunIn), 0.0);
-  float phase = 0.1 + 1.8 * pow(g, 8.0) + 0.5 * pow(g, 2.0);
-  return sun * SEA_BODY * (sum * stepM * 0.3 * phase);
-}
-`;
+export const SEA_COMMON_GLSL = liquidGlsl(SEA_LOOK);
 
 /** Fragment side of the sea for the materials: needs `SEA_COMMON_GLSL` and `COMMON_FS` before it. */
 const SEA_FS = /* glsl */ `
@@ -228,7 +85,7 @@ uniform vec4 u_morphEye; // xyz: the eye in render space (set by the streamed wo
 // The light on the floor at a depth: what is left of the sun and the sky there, and the caustics, strong in the top
 // metre or two and fading below.
 vec3 seaFloorLight(vec3 lit, vec3 col, vec3 p, vec3 n, float depth, float sun) {
-  vec3 left = seaLightAt(depth);
+  vec3 left = liquidLightAt(depth);
   vec3 up = localUp(p);
   // The light is the one at the top of the water above (the air's light is not defined under the sea's level).
   vec3 top = p + up * depth;
@@ -236,9 +93,9 @@ vec3 seaFloorLight(vec3 lit, vec3 col, vec3 p, vec3 n, float depth, float sun) {
   lit = col * atmosphereLight(top, n, sun, 1.0);
 #endif
   float fade = detailVisibleAt(1.6, p);
-  float amount = (1.4 * exp(-depth / 2.0) + 0.7 * exp(-depth / 10.0)) * fade * sun * max(dot(n, seaSunDir()), 0.0);
-  float c = amount > 0.002 ? seaCaustic(seaPlane(seaSunTop(p, up, depth)), depth) : 0.0;
-  return (lit + col * seaSun(top) * (amount * c)) * left;
+  float amount = (1.4 * exp(-depth / 2.0) + 0.7 * exp(-depth / 10.0)) * fade * sun * max(dot(n, liquidSunDir()), 0.0);
+  float c = amount > 0.002 ? liquidCaustic(liquidPlane(liquidSunTop(p, up, depth)), depth) : 0.0;
+  return (lit + col * liquidSun(top) * (amount * c)) * left;
 }
 // A point's light (before toDisplay) as the eye sees it: through the water on the way (from above or from below),
 // with the light shafts under the water, then, with the eye above the water, the fog and the air.
@@ -247,9 +104,9 @@ vec3 seaView(vec3 lit, vec3 world, vec3 air, vec3 through) {
   vec3 ray = world - u_morphEye.xyz;
   float len = length(ray);
   // The water's path against the flat level, with the eye on the side of the moving surface it is on.
-  float path = mediumPath(u_sea.x < 0.0 ? min(u_sea.y, -1e-3) : max(u_sea.y, 1e-3), h, len);
-  if (path > 0.0) lit = mediumApply(lit, seaInscatter(max(-h, 0.0), seaSurfaceLight(world), dot(ray, localUp(world)) / max(len, 1e-3)), SEA_EXTINCTION, path);
-  if (u_sea.x < 0.0) return seaDisplay(lit);
+  float path = mediumPath(u_liquid.x < 0.0 ? min(u_liquid.y, -1e-3) : max(u_liquid.y, 1e-3), h, len);
+  if (path > 0.0) lit = mediumApply(lit, liquidInscatter(max(-h, 0.0), liquidSurfaceLight(world), dot(ray, localUp(world)) / max(len, 1e-3)), LIQUID_EXTINCTION, path);
+  if (u_liquid.x < 0.0) return liquidDisplay(lit);
   return atmosphereApply(applyFog(toDisplay(lit), world), world, air, through);
 }
 `;
@@ -278,67 +135,29 @@ const THIN_SHADE = [0.57, 0.85] as const;
 const CANOPY_PATH = [0.45, 0.53] as const;
 
 /** Thinning of the trees by rank. Needs `SPHERE_PATCH_GLSL`, `COVER_FADE_GLSL`, `u_cellLevel` and `u_coverLevel` before it. */
-const THIN_GLSL = /* glsl */ `
-const vec4 THIN_RANK = vec4(${THIN_RANK.map((r) => r.toFixed(6)).join(', ')});
-const vec4 THIN_FROM = vec4(${THIN_FROM.map((f) => f.toFixed(3)).join(', ')});
-float thinRank(float d) {
-  return d < 0.5 ? THIN_RANK.x : d < 1.5 ? THIN_RANK.y : d < 2.5 ? THIN_RANK.z : d < 3.5 ? THIN_RANK.w : 1.0;
-}
-// Where a point lies in the band of its cell's level: 0 at its start, 1 where the cell blends into its parent.
-float thinBand(vec3 p) {
-  if (u_cellMorph.y <= 0.0) return 0.0;
-  vec3 d = p - u_morphEye.xyz;
-#ifdef WH_LOCAL_UP
-  vec3 e = u_morphEye.xyz - u_upCenter.xyz;
-  float along = u_upCenter.w * atan(length(cross(e, d)), dot(e, e + d));
-#else
-  float along = length(d.xz);
-#endif
-  float dist = sqrt(along * along + u_morphEye.w * u_morphEye.w);
-  float endM = u_cellMorph.x + 1.0 / u_cellMorph.y;
-  float up = u_coverLevel - u_cellLevel;
-  float from = up < 0.5 ? THIN_FROM.x : up < 1.5 ? THIN_FROM.y : up < 2.5 ? THIN_FROM.z : THIN_FROM.w;
-  float startM = min(u_cellMorph.x, from * endM);
-  return clamp((dist - startM) / (endM - startM), 0.0, 1.0);
-}
-// The share of the far look at a point of the cell: the trees that have left.
-float coverShareAt(vec3 p) {
-  float d = u_coverLevel - u_cellLevel;
-  if (d < -0.5) return 0.0;
-  if (d > 3.5) return 1.0;
-  return mix(thinRank(d), thinRank(d + 1.0), clamp((thinBand(p) - 0.05) / 0.9, 0.0, 1.0));
-}
-// Size of a tree with this rank standing at p.
-float thinKeep(vec3 p, float rank) {
-  float d = u_coverLevel - u_cellLevel;
-  if (d < -0.5) return 1.0;
-  float lo = thinRank(d);
-  float hi = thinRank(d + 1.0);
-  return rank >= hi ? 1.0 : coverKeep(thinBand(p), (rank - lo) / (hi - lo));
-}
-`;
+const THIN_GLSL = sphereCoverThinGlsl(THIN_RANK, THIN_FROM);
 
 /** Vertex side of the canopy. Needs `localUp`, `localHeight` (the header) and `SPHERE_PATCH_GLSL` before it. */
 const CANOPY_VS = /* glsl */ `
 const float CANOPY_M = ${CANOPY_M.toFixed(1)};
 const float CANOPY_TOP = ${PLANT_TOP_M.toFixed(1)};
 // How much of a wood the cover is: 1 from the baked share 0.26 up, 0 under 0.04 (meadow, tundra).
-float canopyWood(float coverA) {
+float coverLiftShare(float coverA) {
   return clamp((coverA - 0.04) / 0.22, 0.0, 1.0);
 }
 // Metres the canopy of a whole wood lifts the surface: its height times the share of the far look, none on the sea
 // (the colour's alpha), and down to none toward the height above which nothing grows (ground: height of the ground),
 // so the vertices along the tree line do not stand up as teeth; the fragment side draws that line by the height.
-float canopyHeight(float sea, float share, float ground) {
+float coverLift(float sea, float share, float ground) {
   return CANOPY_M * share * (1.0 - step(0.5, sea)) * (1.0 - smoothstep(CANOPY_TOP - 150.0, CANOPY_TOP - 30.0, ground));
 }
 // Sine of the angle at which the eye sees a point above the layer of crowns: halfway between the ground's normal and up.
-float canopyElevation(vec3 p, vec3 n) {
+float coverElevation(vec3 p, vec3 n) {
   vec3 e = u_morphEye.xyz - p;
   return dot(normalize(n + localUp(p)), e) / max(length(e), 1e-3);
 }
 // Brightness of the cover seen at that angle: from above the lit tops of the crowns, from the side their shaded flanks.
-vec3 canopyShade(float sinE) {
+vec3 coverShade(float sinE) {
   return mix(${THIN_SHADE[0].toFixed(3)}, ${THIN_SHADE[1].toFixed(3)}, smoothstep(0.15, 0.85, sinE)) * vec3(0.98, 0.98, 1.07);
 }
 // A point of a mesh drawn on the surface (a strip) moved along the line of sight toward the eye, so it stays in front
@@ -358,14 +177,14 @@ vec3 canopyPull(vec3 p, float share) {
  */
 const CANOPY_FS = /* glsl */ `
 const float CANOPY_TOP = ${PLANT_TOP_M.toFixed(1)};
-in vec4 v_canopy; // x: metres the canopy of a whole wood lifts the surface, y: sine of the view's angle above the
+in vec4 v_lift; // x: metres the canopy of a whole wood lifts the surface, y: sine of the view's angle above the
                   // ground, z: share of the far look (the trees that have left), w: height of the ground (m)
 // The share the crowns of the trees that have left hide seen at that angle: the gap fraction of their layer to the
 // power of the path through it, the sides of the crowns counted (the baked share holds from about 40 degrees up).
 float canopyShare(float coverA, float sinE) {
   float s = max(sinE, 0.01);
   float k = clamp(${CANOPY_PATH[0].toFixed(2)} + ${CANOPY_PATH[1].toFixed(2)} * sqrt(1.0 - s * s) / s, 1.0, 10.0);
-  return 1.0 - pow(1.0 - min(coverA, 0.999), k * v_canopy.z);
+  return 1.0 - pow(1.0 - min(coverA, 0.999), k * v_lift.z);
 }
 // The normal under the canopy: tilted by the slope of its lift across the wood's edge (extent) and of the crowns
 // (grain g, 0–1, over the share of the canopy), no more than about 30 degrees.
@@ -376,7 +195,7 @@ vec3 canopyNormal(vec3 n, vec3 world, float g, float share, float extent) {
   vec3 r1 = cross(dy, n);
   vec3 r2 = cross(n, dx);
   float det = dot(dx, r1);
-  vec3 grad = sign(det) * ((v_canopy.x * dFdx(extent) + dFdx(crowns)) * r1 + (v_canopy.x * dFdy(extent) + dFdy(crowns)) * r2);
+  vec3 grad = sign(det) * ((v_lift.x * dFdx(extent) + dFdx(crowns)) * r1 + (v_lift.x * dFdy(extent) + dFdy(crowns)) * r2);
   float slope = length(grad) / max(abs(det), 1e-12);
   if (abs(det) < 1e-12 || slope < 1e-6) return n;
   return normalize(abs(det) * n - grad * min(1.0, 0.6 / slope));
@@ -386,7 +205,7 @@ vec3 canopyNormal(vec3 n, vec3 world, float g, float share, float extent) {
 // planet (q: patternPos), so it does not follow the triangles of the cells. Close under the height above which
 // nothing grows the line is that height's on the ground. The extent holds also where the trees stand.
 float canopyAt(float a, vec3 q, vec3 world, out float extent) {
-  float wood = clamp((a - 0.04) / 0.22, 0.0, 1.0); // canopyWood
+  float wood = clamp((a - 0.04) / 0.22, 0.0, 1.0); // coverLiftShare
   // How sharply the wood ends here: its change per metre, taken before any branch. A band of thin cover (as where
   // the tundra meets the taiga) changes slowly; a ragged line there would break it into dark islands of wood.
   float perM = max(abs(dFdx(wood)), abs(dFdy(wood))) / max(max(length(dFdx(world)), length(dFdy(world))), 1e-3);
@@ -394,7 +213,7 @@ float canopyAt(float a, vec3 q, vec3 world, out float extent) {
   extent = 0.0;
   if (a <= 0.001) return 0.0;
   float edge = wood > 0.0 && wood < 1.0 ? 1.0 : 0.0;
-  float near = smoothstep(CANOPY_TOP - 150.0, CANOPY_TOP - 80.0, v_canopy.w);
+  float near = smoothstep(CANOPY_TOP - 150.0, CANOPY_TOP - 80.0, v_lift.w);
   extent = wood;
   float below = 1.0;
   if (edge > 0.0 || near > 0.0) {
@@ -406,12 +225,12 @@ float canopyAt(float a, vec3 q, vec3 world, out float extent) {
       float d24 = detailVisibleAt(24.0, world);
       if (d24 > 0.0) r += (vnoise3(q / 24.0, 63u) - 0.5) * 0.3 * d24;
     }
-    float line = 1.0 - smoothstep(-6.0, 6.0, v_canopy.w - CANOPY_TOP + 60.0 * r);
+    float line = 1.0 - smoothstep(-6.0, 6.0, v_lift.w - CANOPY_TOP + 60.0 * r);
     below = mix(1.0, line, near);
     float rag = 2.2 * r * sqrt(4.0 * wood * (1.0 - wood)) * sharp;
     extent = edge > 0.0 ? mix(smoothstep(0.3, 0.7, wood + rag), line, near) : min(wood, below);
   }
-  return mix(canopyShare(min(a, 0.04), v_canopy.y) * below, canopyShare(max(a, 0.26), v_canopy.y), extent);
+  return mix(canopyShare(min(a, 0.04), v_lift.y) * below, canopyShare(max(a, 0.26), v_lift.y), extent);
 }
 // The colour of the cover: the crowns' mean, darker toward the gaps between them.
 vec3 canopyColor(vec3 cover, float g, vec3 world) {
@@ -424,49 +243,7 @@ vec3 forestFloor(vec3 ground, float g) {
 }
 `;
 
-const TERRAIN_VS = /* glsl */ `#include <header>
-#include <atmosphere>
-uniform vec3 u_cellOffset;
-${SPHERE_PATCH_GLSL}
-${COVER_FADE_GLSL}
-uniform float u_cellLevel;
-uniform float u_coverLevel; // coarsest level whose cells hold every object the cover stands for
-${THIN_GLSL}
-${CANOPY_VS}
-in vec3 a_pos;
-in vec4 a_normal; // xyz normal (int16), w: 0 surface, 1 skirt
-in vec4 a_color;  // rgb colour, a: 1 sea
-in float a_coarseShift;  // metres along up to the surface of the coarser level
-in vec4 a_coarseNormal;  // its normal there (int16)
-in vec4 a_coarseColor;   // its colour there
-in vec4 a_cover;         // rgb what the objects on the surface look like from afar, a the share they hide
-in vec4 a_coarseCover;   // the same on the coarser level
-out vec3 v_world;
-out vec3 v_normal;
-out vec4 v_color;
-out vec4 v_cover;  // rgb the cover at this angle, a the share it hides
-out vec4 v_canopy; // x: metres the canopy of a whole wood lifts the surface, y: sine of the view's angle above the
-                   // ground, z: share of the far look, w: height of the ground
-out vec3 v_air;        // light the air between the eye and the vertex scatters toward the eye
-out vec3 v_airThrough; // share of the surface's colour that passes that air
-void main() {
-  vec3 p = a_pos + u_cellOffset;
-  float m = spherePatchMorph(p);
-  p += localUp(p) * (a_coarseShift * m);
-  vec4 cover = mix(a_cover, a_coarseCover, m);
-  v_color = mix(a_color, a_coarseColor, m);
-  float share = coverShareAt(p);
-  float ground = localHeight(p);
-  float whole = canopyHeight(v_color.a, share, ground);
-  p += localUp(p) * (whole * canopyWood(cover.a));
-  v_world = p;
-  v_air = atmosphereAir(p, v_airThrough);
-  v_normal = mix(a_normal.xyz, a_coarseNormal.xyz, m);
-  float sinE = canopyElevation(p, normalize(v_normal));
-  v_cover = vec4(cover.rgb * canopyShade(sinE), cover.a);
-  v_canopy = vec4(whole, sinE, share, ground);
-  gl_Position = u_viewProj * vec4(p, 1.0);
-}`;
+const TERRAIN_VS = sphereGroundVs({ thinRank: THIN_RANK, thinFrom: THIN_FROM, lift: CANOPY_VS });
 
 const TERRAIN_FS = /* glsl */ `#include <header>
 #include <noise>
@@ -519,34 +296,9 @@ void main() {
   o_color = vec4(seaView(lit, v_world, v_air, v_airThrough), 1.0);
 }`;
 
-const TERRAIN_DEPTH_VS = /* glsl */ `#include <header>
-uniform mat4 u_lightRender;
-uniform vec3 u_cellOffset;
-${SPHERE_PATCH_GLSL}
-${COVER_FADE_GLSL}
-uniform float u_cellLevel;
-uniform float u_coverLevel;
-${THIN_GLSL}
-${CANOPY_VS}
-in vec3 a_pos;
-in float a_coarseShift;
-in vec4 a_color;
-in vec4 a_coarseColor;
-in vec4 a_cover;
-in vec4 a_coarseCover;
-void main() {
-  vec3 p = a_pos + u_cellOffset;
-  float m = spherePatchMorph(p);
-  p += localUp(p) * (a_coarseShift * m);
-  // The canopy casts its shadow as the colour pass lifts it.
-  float lift = canopyHeight(mix(a_color.a, a_coarseColor.a, m), coverShareAt(p), localHeight(p)) * canopyWood(mix(a_cover.a, a_coarseCover.a, m));
-  p += localUp(p) * lift;
-  gl_Position = u_lightRender * vec4(p, 1.0);
-}`;
+const TERRAIN_DEPTH_VS = sphereGroundDepthVs({ thinRank: THIN_RANK, thinFrom: THIN_FROM, lift: CANOPY_VS });
 
-const DEPTH_FS = /* glsl */ `#version 300 es
-precision highp float;
-void main() {}`;
+const DEPTH_FS = DEPTH_ONLY_FS;
 
 /**
  * Instance transform shared by the colour and the depth program: the object stands along the local up of its base and
@@ -760,7 +512,7 @@ export const STRIP_MATERIAL: MaterialDesc = {
 // colour is added, what lies behind keeps 1 − alpha):
 // - the water of the cells (world.ts, `waterPatch`): a patch on the base sphere, blended between levels like the
 //   surface, flat, with the depth of the floor under it in its colour (`waterDepthByte`, world.ts); it leaves out the disc round
-//   the eye's foot that the near surface covers (`u_sea.z`);
+//   the eye's foot that the near surface covers (`u_liquid.z`);
 // - the near surface (sea.ts, `SeaSurfaceLayer`): a grid of rings round the eye's foot, moved by the waves in its
 //   vertex shader, each train faded where the rings are too far apart for it, drawn from its outer ring inward; the
 //   floor's depth comes from the depth of the scene drawn so far, and where the land or the sky lies behind a wave
@@ -773,86 +525,8 @@ export const STRIP_MATERIAL: MaterialDesc = {
 // glitter of the facets that bend it toward the eye, the water mirrored beyond, then the water on the way down and
 // its light shafts.
 
-/**
- * The ripples on the waves (`seaRipples`; sea.ts places their lattices): octaves of simplex noise, the first with
- * cells of `largestM` (its ripples about as long), each next one `step` times as large and turned by `turn` radians,
- * each of the same mean square slope (`slope` squared over all of them), the lattice repeating after `period` cells.
- */
-export const SEA_RIPPLES = { octaves: 4, largestM: 0.8, step: 0.45, turn: 2.4, period: 4096, slope: 0.11 } as const;
-/** The skew of the simplex lattice: a point's lattice coordinates are its own plus their sum times this. */
-export const SIMPLEX_SKEW = (Math.sqrt(3) - 1) / 2;
-const SIMPLEX_UNSKEW = (3 - Math.sqrt(3)) / 6;
-/** The mean square of the gradient of `seaSimplex` (per cell). */
-const SIMPLEX_GRADIENT_MEAN_SQUARE = 4.4;
-
-/** The octaves of `seaRipples`, written out: each with its cell, its turn and its share of the slope as constants. */
-function rippleOctavesGlsl(): string {
-  const { octaves, largestM, step, turn, slope } = SEA_RIPPLES;
-  const k = (slope / Math.sqrt(octaves * SIMPLEX_GRADIENT_MEAN_SQUARE)).toFixed(5);
-  const share = ((slope * slope) / octaves).toFixed(6);
-  const lines: string[] = [];
-  for (let o = 0; o < octaves; o++) {
-    const cell = largestM * step ** o;
-    const c = Math.cos(turn * o);
-    const s = Math.sin(turn * o);
-    // The lattice coordinates of the plane's point: turned, scaled to the cell, skewed.
-    const m = [c, -s, s, c].map((v) => v / cell);
-    const sk = (a: number, b: number): string => (a + (a + b) * SIMPLEX_SKEW).toFixed(5);
-    const at = `u_seaRipple${o >> 1}.${o % 2 === 0 ? 'xy' : 'zw'}`;
-    lines.push(
-      `  f = waveFade(${cell.toFixed(5)}, 2.5 * foot);`,
-      '  if (f > 0.0) {',
-      `    n = seaSimplex(vec2(${sk(m[0]!, m[2]!)} * xz.x + ${sk(m[1]!, m[3]!)} * xz.y, ${sk(m[2]!, m[0]!)} * xz.x + ${sk(m[3]!, m[1]!)} * xz.y) + ${at}, ${o}u);`,
-      `    g += (${k} * gust * f) * vec2(${c.toFixed(5)} * n.x + ${s.toFixed(5)} * n.y, ${c.toFixed(5)} * n.y - ${s.toFixed(5)} * n.x);`,
-      ...(o === 0 ? ['    gust = clamp(1.0 + 1.2 * n.z, 0.4, 1.6);'] : []),
-      '  }',
-      `  unresolved += ${share} * (1.0 - f);`,
-    );
-  }
-  return lines.join('\n');
-}
-
-const SEA_SURFACE_GLSL = /* glsl */ `
-${Array.from({ length: Math.ceil(SEA_RIPPLES.octaves / 2) }, (_, i) => `uniform vec4 u_seaRipple${i};`).join('\n')}
-// Simplex noise at the lattice coordinates ps (cells of 1, the lattice repeating after the ripples' period) with its
-// derivatives: xy the gradient along the unskewed axes, z the value (within about ±0.9).
-vec3 seaSimplex(vec2 ps, uint octave) {
-  vec2 s = floor(ps);
-  vec2 f = ps - s;
-  vec2 x0 = f - (f.x + f.y) * ${SIMPLEX_UNSKEW.toFixed(8)};
-  vec2 e = x0.x > x0.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  vec2 x1 = x0 - e + ${SIMPLEX_UNSKEW.toFixed(8)};
-  vec2 x2 = x0 - ${(1 - 2 * SIMPLEX_UNSKEW).toFixed(8)};
-  uvec2 i = uvec2(ivec2(s) & ${SEA_RIPPLES.period - 1});
-  uvec2 ie = (i + uvec2(e)) & ${SEA_RIPPLES.period - 1}u;
-  uvec2 i1 = (i + 1u) & ${SEA_RIPPLES.period - 1}u;
-  uint o = octave << 24;
-  uvec3 h = uvec3(hashU(i.x | i.y << 12 | o), hashU(ie.x | ie.y << 12 | o), hashU(i1.x | i1.y << 12 | o));
-  vec3 gx = vec3(h & 0xffffu) * (2.0 / 65535.0) - 1.0;
-  vec3 gy = vec3(h >> 16) * (2.0 / 65535.0) - 1.0;
-  vec3 px = vec3(x0.x, x1.x, x2.x);
-  vec3 py = vec3(x0.y, x1.y, x2.y);
-  vec3 t = max(0.5 - px * px - py * py, 0.0);
-  vec3 t2 = t * t;
-  vec3 t4 = t2 * t2;
-  vec3 gd = gx * px + gy * py;
-  vec3 w = -8.0 * t2 * t * gd;
-  return vec3(dot(t4, gx) + dot(w, px), dot(t4, gy) + dot(w, py), dot(t4, gd)) * 70.0;
-}
-// The slope of the ripples at xz: the derivatives of their height along the plane's axes. Each octave fades where a
-// pixel covers too much of it (foot: the pixel's larger side on the plane, m); the finer ones are stronger where the
-// largest rises (gusts). unresolved: the mean square slope of what has faded.
-vec2 seaRipples(vec2 xz, float foot, out float unresolved) {
-  vec2 g = vec2(0.0);
-  unresolved = 0.0;
-  float gust = 1.0;
-  float f;
-  vec3 n;
-${rippleOctavesGlsl()}
-  return g;
-}
-// The surface seen from eye at world (moved by the waves), whose undisplaced point is xz in the plane of the waves
-// (dxz: its change across a pixel, as for seaRipples); floorDepth: the floor's depth under the level there (m, below
+const SEA_SURFACE_GLSL = /* glsl */ `${liquidRipplesGlsl()}// The surface seen from eye at world (moved by the waves), whose undisplaced point is xz in the plane of the waves
+// (dxz: its change across a pixel, as for liquidRipples); floorDepth: the floor's depth under the level there (m, below
 // 0 not known); open: 1 where the caller knows that nothing under the water lies behind the surface along the view
 // ray (a wave standing in front of the land or the sky); skyCalm: the sky along the calm surface's reflection (above)
 // or refraction (below), on the screen's scale. Premultiplied colour and alpha.
@@ -860,7 +534,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
   vec3 up = localUp(world);
   vec3 ta;
   vec3 tb;
-  seaTangents(up, ta, tb);
+  liquidTangents(up, ta, tb);
   vec3 toEye = eye - world;
   float len = max(length(toEye), 1e-3);
   vec3 v = toEye / len;
@@ -872,12 +546,12 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
   // The ripples on the waves, down to a few centimetres, each octave faded by the pixel's footprint.
   vec2 wind = normalize(u_waveTrain0.xy + vec2(1e-6, 0.0));
   float rippleRough;
-  vec2 g = seaRipples(xz, max(length(dxz.xy), length(dxz.zw)), rippleRough);
+  vec2 g = liquidRipples(xz, max(length(dxz.xy), length(dxz.zw)), rippleRough);
   vec3 n = normalize(ta * (np.x - g.x) + up * np.y + tb * (np.z - g.y));
   // Slope variance of what is too small to see: the faded trains and the ripples beyond the pixel.
   float rough = waveUnresolved(sampleM) + rippleRough;
-  vec3 s = seaSunDir();
-  vec3 light = seaSurfaceLight(world);
+  vec3 s = liquidSunDir();
+  vec3 light = liquidSurfaceLight(world);
   // Foam: on crests squeezed together, broken by a grain; on the shore a band where the water is shallow, with
   // swashes running up it.
   float crest = smoothstep(0.8, 0.5, jac);
@@ -896,7 +570,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
   }
   foam = clamp(foam, 0.0, 1.0) * 0.9;
   vec3 zenith = toDisplay(light * 0.18);
-  if (u_sea.x >= 0.0) {
+  if (u_liquid.x >= 0.0) {
     float cosV = max(dot(n, v), 0.03);
     float F = mediumFresnel(cosV, 1.0 / 1.33);
     // The sky along the reflection: the calm one, lighter toward the zenith, darker where the ray dips under the
@@ -913,7 +587,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
     float nh2 = nh * nh;
     float D = exp(-(1.0 - nh2) / (nh2 * m2)) / (3.14159 * m2 * nh2 * nh2);
     float glint = min(D * mediumFresnel(max(dot(h, v), 0.0), 1.0 / 1.33) / (4.0 * cosV), 60.0) * smoothstep(-0.02, 0.05, dot(n, s));
-    vec3 shine = glint > 0.001 ? toDisplay(seaSun(world) * glint) : vec3(0.0);
+    vec3 shine = glint > 0.001 ? toDisplay(liquidSun(world) * glint) : vec3(0.0);
     vec3 a0 = atmosphereApply(vec3(0.0), world, air, airThrough);
     vec3 a1 = atmosphereApply(vec3(1.0), world, air, airThrough) - a0;
     vec4 c = vec4((sky * F + shine) * a1 + a0 * F, F);
@@ -922,7 +596,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
     // is the water's own, as along the rest of the sea's view rays.
     float o = max(open, step(0.0, -dot(v, up)));
     if (o > 0.0) {
-      vec3 body = applyFog(seaDisplay(seaInscatter(2.0, light, -dot(v, up))), world);
+      vec3 body = applyFog(liquidDisplay(liquidInscatter(2.0, light, -dot(v, up))), world);
       c = mix(c, vec4(c.rgb + (body * a1 + a0) * (1.0 - F), 1.0), o);
     }
     vec3 foamColor = atmosphereApply(applyFog(toDisplay(light * 0.8), world), world, air, airThrough);
@@ -932,7 +606,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
   // water under the surface; the waves and the ripples bend and break the window's edge. Then the water on the way
   // down, with its shafts. The facets inside a pixel spread the angle of incidence by what is unresolved and by the
   // change of the normal across the pixel; over that spread the window's edge and the glitter are soft.
-  float eyeDepth = -u_sea.x;
+  float eyeDepth = -u_liquid.x;
   vec3 dnx = dFdx(n);
   vec3 dny = dFdy(n);
   float spread = sqrt(rough + 0.25 * (dot(dnx, dnx) + dot(dny, dny))) + 0.01;
@@ -947,7 +621,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
   vec3 m = reflect(-v, -n);
   float mu = min(dot(m, up), 0.0);
   // In shallow water the mirrored ray soon meets the floor: the mirror is lighter than the open water's depth.
-  vec3 deep = seaDisplay(seaInscatter(eyeDepth + min(-mu * ${SEA_CLEAR_M.toFixed(1)}, 10.0), light, mu));
+  vec3 deep = liquidDisplay(liquidInscatter(eyeDepth + min(-mu * ${SEA_CLEAR_M.toFixed(1)}, 10.0), light, mu));
   vec3 c = deep;
   if (F < 1.0) {
     vec3 tr = normalize(kk * n - 1.33 * (v + cosI * n));
@@ -964,15 +638,15 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
     float sh = max(dot(s, ht), 0.0);
     float glitter = D * sh * max(-dot(v, ht), 0.0) * 1.7689 * (1.0 - mediumFresnel(sh, 1.0 / 1.33)) / (max(cosI, 0.05) * dot(sv, sv));
     float sd = max(dot(tr, s), 0.0);
-    vec3 sun = seaDisplay(seaSun(world) * (min(0.05 * glitter, 40.0) * step(0.0, dot(s, up)) + 0.3 * pow(sd, 300.0) + 0.1 * pow(sd, 30.0)));
+    vec3 sun = liquidDisplay(liquidSun(world) * (min(0.05 * glitter, 40.0) * step(0.0, dot(s, up)) + 0.3 * pow(sd, 300.0) + 0.1 * pow(sd, 30.0)));
     // The window's rim is lighter: light from near the horizon, bent toward the eye.
     float rim = smoothstep(0.55, 1.0, F) * (1.0 - F);
     c = mix(deep, sky + sun + rim * 0.8 * sky, 1.0 - F);
   }
   // The underside of the foam: grey, lit through.
-  c = mix(c, seaDisplay(light * 0.35), foam * 0.8);
-  vec3 water = seaDisplay(seaInscatter(eyeDepth, light, -dot(v, up)));
-  return vec4(mediumApply(c, water, SEA_EXTINCTION, len), 1.0);
+  c = mix(c, liquidDisplay(light * 0.35), foam * 0.8);
+  vec3 water = liquidDisplay(liquidInscatter(eyeDepth, light, -dot(v, up)));
+  return vec4(mediumApply(c, water, LIQUID_EXTINCTION, len), 1.0);
 }
 `;
 
@@ -980,7 +654,7 @@ vec4 seaSurface(vec3 world, vec2 xz, vec4 dxz, float floorDepth, float open, vec
 const SEA_SKY_VS = /* glsl */ `
 vec3 seaCalmSky(vec3 p, vec3 up, vec3 eye) {
   vec3 v = normalize(eye - p);
-  vec3 dir = u_sea.x >= 0.0 ? reflect(-v, up) : refract(-v, -up, 1.33);
+  vec3 dir = u_liquid.x >= 0.0 ? reflect(-v, up) : refract(-v, -up, 1.33);
   if (dot(dir, dir) < 0.5) dir = reflect(-v, -up);
   dir = normalize(dir + up * max(0.0, 0.03 - dot(dir, up)));
 #ifdef WH_ATMOSPHERE
@@ -1045,16 +719,16 @@ in vec3 v_air;
 in vec3 v_airThrough;
 out vec4 o_color;
 void main() {
-  vec2 xz = seaPlane(v_world);
+  vec2 xz = liquidPlane(v_world);
   vec4 dxz = vec4(dFdx(xz), dFdy(xz));
   // The skirt hangs under the water: it would add a second surface along the cells' borders. The floor behind a
   // crack between levels is drawn through the water already.
   if (v_skirt > 0.001) discard;
   // The near surface draws the disc round the eye's foot.
-  if (u_sea.z > 0.0) {
-    vec3 upF = localUp(u_seaFoot.xyz);
-    vec3 q = v_world - u_seaFoot.xyz;
-    if (length(q - upF * dot(q, upF)) < u_sea.z) discard;
+  if (u_liquid.z > 0.0) {
+    vec3 upF = localUp(u_liquidFoot.xyz);
+    vec3 q = v_world - u_liquidFoot.xyz;
+    if (length(q - upF * dot(q, upF)) < u_liquid.z) discard;
   }
   o_color = seaSurface(v_world, xz, dxz, v_depth, 0.0, v_sky, v_air, v_airThrough, u_morphEye.xyz);
 }`;
@@ -1072,7 +746,7 @@ const NEAR_WATER_VS = /* glsl */ `#include <header>
 #include <lighting>
 #include <atmosphere>
 uniform vec4 u_morphEye;
-uniform vec4 u_seaNear; // x radius of the first ring, y log of the growth from ring to ring, z angle between spokes
+uniform vec4 u_liquidNear; // x radius of the first ring, y log of the growth from ring to ring, z angle between spokes
 ${MEDIUM_GLSL}
 ${SEA_COMMON_GLSL}
 ${WAVES_GLSL}
@@ -1085,26 +759,26 @@ out vec3 v_sky;
 out vec3 v_air;
 out vec3 v_airThrough;
 void main() {
-  vec3 upF = localUp(u_seaFoot.xyz);
+  vec3 upF = localUp(u_liquidFoot.xyz);
   vec3 ta;
   vec3 tb;
-  seaTangents(upF, ta, tb);
+  liquidTangents(upF, ta, tb);
   tb = normalize(tb - ta * dot(tb, ta));
-  float rho = a_grid.x < 0.5 ? 0.0 : u_seaNear.x * exp(u_seaNear.y * (a_grid.x - 1.0));
-  float th = a_grid.y * u_seaNear.z;
-  float R = u_seaFoot.w;
+  float rho = a_grid.x < 0.5 ? 0.0 : u_liquidNear.x * exp(u_liquidNear.y * (a_grid.x - 1.0));
+  float th = a_grid.y * u_liquidNear.z;
+  float R = u_liquidFoot.w;
   // On the sphere: the drop under the foot's horizon at that distance, without the large numbers.
   float drop = rho * rho / (R + sqrt(max(R * R - rho * rho, 0.0)));
-  vec3 p = u_seaFoot.xyz + (ta * cos(th) + tb * sin(th)) * rho - upF * drop;
+  vec3 p = u_liquidFoot.xyz + (ta * cos(th) + tb * sin(th)) * rho - upF * drop;
   v_flat = p;
-  vec2 xz = seaPlane(p);
+  vec2 xz = liquidPlane(p);
   v_plane = xz;
   vec3 up = localUp(p);
   vec3 a;
   vec3 b;
-  seaTangents(up, a, b);
+  liquidTangents(up, a, b);
   // Each train fades where the rings are too far apart for it.
-  vec3 d = waveDisplace(xz, max(rho * u_seaNear.z, u_seaNear.x)) * u_sea.w;
+  vec3 d = waveDisplace(xz, max(rho * u_liquidNear.z, u_liquidNear.x)) * u_liquid.w;
   p += a * d.x + up * d.y + b * d.z;
   v_world = p;
   v_air = atmosphereAir(p, v_airThrough);
@@ -1122,9 +796,9 @@ ${SEA_COMMON_GLSL}
 ${WAVES_GLSL}
 ${SEA_SURFACE_GLSL}
 uniform vec4 u_morphEye;
-uniform highp sampler2D u_seaScene; // depth of the scene drawn so far
-uniform vec4 u_seaSceneMap;         // its depth to distance along the view (cloudVolumeDepthMap of env); x 0: none
-uniform vec3 u_seaForward;          // the view's forward axis
+uniform highp sampler2D u_liquidScene; // depth of the scene drawn so far
+uniform vec4 u_liquidSceneMap;         // its depth to distance along the view (cloudVolumeDepthMap of env); x 0: none
+uniform vec3 u_liquidForward;          // the view's forward axis
 in vec3 v_world;
 in vec3 v_flat;
 in vec2 v_plane;
@@ -1140,18 +814,18 @@ float sceneDistance(float depth, vec4 map) {
 }
 void main() {
   vec4 dxz = vec4(dFdx(v_plane), dFdy(v_plane));
-  vec3 upF = localUp(u_seaFoot.xyz);
-  vec3 q = v_flat - u_seaFoot.xyz;
-  if (length(q - upF * dot(q, upF)) >= u_sea.z) discard;
+  vec3 upF = localUp(u_liquidFoot.xyz);
+  vec3 q = v_flat - u_liquidFoot.xyz;
+  if (length(q - upF * dot(q, upF)) >= u_liquid.z) discard;
   vec3 eye = u_morphEye.xyz;
   // What the scene drew behind this point of the surface, along the same ray: the floor under the water, or the land
   // or the sky, which a wave in front of them hides (open). The floor's depth stands for the depth under this point
   // (for the foam of the shore) only where the ray meets the floor near it: at a grazing ray it is far off.
   float floorDepth = -1.0;
   float open = 0.0;
-  if (u_sea.x >= 0.0 && u_seaSceneMap.x > 0.5) {
-    float z = sceneDistance(texelFetch(u_seaScene, ivec2(gl_FragCoord.xy), 0).r, u_seaSceneMap);
-    float here = dot(v_world - eye, u_seaForward);
+  if (u_liquid.x >= 0.0 && u_liquidSceneMap.x > 0.5) {
+    float z = sceneDistance(texelFetch(u_liquidScene, ivec2(gl_FragCoord.xy), 0).r, u_liquidSceneMap);
+    float here = dot(v_world - eye, u_liquidForward);
     if (here > 0.0) {
       vec3 at = eye + (v_world - eye) * (min(z, 1e9) / here);
       float behind = z < 1e29 ? localHeight(at) : 1e9;

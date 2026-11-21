@@ -98,8 +98,8 @@ URL hash (kept up to date while flying by hand):
 | `src/plan-climate.ts` | Stage 2 of the plan: the moisture per node (`planMoisture`), wet by rivers, lakes and the sea, spread along the grid. Pure. |
 | `src/climate.ts` | The climate of a point (`climateAt`, `biomeAt`), the colours and cover of the biomes, frozen water, and the rules of the plants and rocks (`climateRules`). Pure. |
 | `src/weather.ts` | Hearth's cloud cover by place (`hearthCloudField`), the weather at a place and time (`weatherAt`), and the views `world-climate-…`. Pure. |
-| `src/details.ts` | Details near the camera: the kinds, the rules by biome, the unit shapes, the squares round a point (`squaresNear`) and the records of one square (`generateDetails`). Pure. |
-| `src/details-page.ts` | The details on the page: the wanted squares, their jobs, the gain, the wind and the `NearInstanceLayer`; the views `world-detail-…`. |
+| `src/details.ts` | Details near the camera: the kinds, the rules by biome, the unit shapes, the squares round a point (`DETAIL_GRID`, the engine's `NearSquareGrid`) and the records of one square (`generateDetails`). Pure. |
+| `src/details-page.ts` | The details on the page through the engine's `NearDetailStream` (the wanted squares, their jobs, the gain and the `NearInstanceLayer`), the wind; the views `world-detail-…`. |
 | `src/plan-sites.ts` | Stage 3 of the plan: the score per node, the fit of a pad, the pick of the town and the villages (`pickSites`), their lanes as lines of the plan (`planSites`). Pure. |
 | `src/settlement.ts` | A settlement from the plan's bytes on any thread: its frame and pad (`siteFrame`, `sitePoint`, `siteLocal`), its lots along the lanes (`plotsAlong`) and what stands on each (`settlementOf`). Pure. |
 | `src/plan-routes.ts` | Stage 4 of the plan: least-cost roads between the settlements over the grid, smoothed, decks over rivers, heights under the grade limit (`planRoutes`, `ROAD`); points along a route or line (`routePoint`, `lanePoint`) and `routeStats`. Pure. |

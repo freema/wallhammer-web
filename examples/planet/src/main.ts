@@ -275,7 +275,7 @@ const seaLens = new SeaLensLayer(renderer);
 function syncSea(eye: Vec3): void {
   const o = world.origin;
   const c = SHAPE.centerM;
-  const { common, water: w } = seaUniforms(seed, [eye[0] - c[0], eye[1] - c[1], eye[2] - c[2]], [o[0] - c[0], o[1] - c[1], o[2] - c[2]], RADIUS_M, env.time.time);
+  const { common, water: w } = seaUniforms(seed, [eye[0] - c[0], eye[1] - c[1], eye[2] - c[2]], [o[0] - c[0], o[1] - c[1], o[2] - c[2]], env.time.time);
   seaBackdrop.uniforms = common;
   seaNear.uniforms = w;
   seaShafts.uniforms = common;
@@ -297,7 +297,7 @@ function rideSea(): void {
   const c = SHAPE.centerM;
   const r = Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]);
   const d: Vec3 = [(p[0] - c[0]) / r, (p[1] - c[1]) / r, (p[2] - c[2]) / r];
-  const h = RADIUS_M + seaSurfaceHeight(seed, [d[0] * RADIUS_M, d[1] * RADIUS_M, d[2] * RADIUS_M], RADIUS_M, env.time.time) + seaRide.aboveM;
+  const h = RADIUS_M + seaSurfaceHeight(seed, [d[0] * RADIUS_M, d[1] * RADIUS_M, d[2] * RADIUS_M], env.time.time) + seaRide.aboveM;
   const q: Vec3 = [c[0] + d[0] * h, c[1] + d[1] * h, c[2] + d[2] * h];
   rig.setState({ position: q });
   const n = rig.position;

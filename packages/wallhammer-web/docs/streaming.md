@@ -81,6 +81,8 @@ A `Ticket` is a point of interest: `{ id, kind, center, altitude?, base, dir?, p
 
 `DEFAULT_STREAMING` (without `shape` and `face`): `rootLevel` 4, `leafLevel` 8, `rootRange` 2, `splitLevel` 1, `prefetch` 0.5, `hysteresis` 0.75, `maxInFlight` 8, `memoryBudgetBytes` 128 MB. `screenError` is not set.
 
+The memory budget (`memoryBudgetBytes`) counts the CPU and GPU bytes of the cells together; a cell on the GPU keeps its CPU data, so it counts twice. Over the budget the manager forgets cells nobody wants first, then cells kept only by hysteresis, then cells fetched ahead of need; wanted cells are never forgotten. A cell fetched only ahead of need (`prefetch`, or a preload ticket) is requested only while it fits the budget beside what wanted and prefetched cells hold and what the jobs in flight will bring (estimated as the mean CPU bytes of loaded cells of its level). Cells left out for want of room do not count as `queued` and keep `prefetched` false. Without this rule a plan whose wanted cells fill the budget had its prefetched cells forgotten in the step they arrived and asked for again in the next, for as long as the view stood, and the streaming never came to rest.
+
 ## Selection by screen-space error
 
 Off by default. Without it a cell is split while a ticket is within `splitLevel` cell edges. With `screenError` in the config the split distance follows from the screen instead:
@@ -97,7 +99,7 @@ A cell is split while a ticket is within `errorPerEdge × pixelsPerRadian ÷ max
 
 - **Loaded parents only.** The manager never asks for a cell whose parent is not loaded. Until a cell is loaded nothing could stand in for its children, and its error is not known. After `complete` the manager reports `stale`: run another `update` (`StreamedWorld` does).
 - **Measured error.** A cell that reports `CellContent.error` smaller than `errorPerEdge × edge` is split later; with error 0 and no `minErrorPerEdge`, never. A generator whose cells carry content the error does not measure (instances that appear at finer levels) should report the full error for those cells. With blending between levels the same holds for every cell whose shape differs from its children's: the blend ends where a cell with the full error is split, so a cell split later is replaced by children already in their own shape, a step of up to `maxErrorPx` on the screen.
-- **Budget of cells.** When the plan wants more than `maxCells`, the split distance shrinks in steps of 2^¼ until the plan fits, and grows back when the finer plan would use at most 85 % of the budget. `counters().detail` is the share in use.
+- **Budget of cells.** When the plan wants more than `maxCells`, the split distance shrinks in steps of 2^¼ until the plan fits, and grows back when the finer plan would use at most 85 % of the budget. `counters().detail` is the share in use. A GPU ceiling holds the plan the same way ([A ceiling of GPU memory](#a-ceiling-of-gpu-memory)), and so does the memory budget: the wanted cells (their CPU data and as much again on the GPU) with the cells fetched ahead of them (their CPU data) must fit `memoryBudgetBytes`. A loaded cell counts its own bytes, a cell not yet loaded the mean of loaded cells of its level.
 - **Ahead first.** Jobs for cells in front of a ticket's direction start before the others, then the nearest. `maxInFlight` is the budget of jobs.
 - **Preloading tickets.** A ticket with `preload: true` fetches the cells it would split and keeps them ready on the CPU, but does not change what is drawn; the cells go to the screen once another ticket wants them. Default off. Use it for the predicted point ahead of the viewer when levels blend: `tickets.map((t) => (t.kind === 'predict' ? { ...t, preload: true } : t))`.
 
@@ -246,6 +248,40 @@ rig.origin = [world.origin[0], world.origin[1], world.origin[2]];
 Cell origins and the eye stay doubles on the CPU; only their difference to the origin reaches the GPU. With `'all'`, `world.origin[1]` is no longer 0: heights handed to anything that works in render space (a view target, the fog layer, the cloud height of the sky) need it subtracted. Layers of your own do the same as the streamed world: keep the position in doubles and hand the GPU `toRenderSpace(position, world.origin)` (module `base`); `snapRenderOrigin` is the grid rule itself, for a renderer without a streamed world (set `renderer.worldOrigin` to the same origin, so shadow texels stay fixed to the world).
 
 Budgets: `uploadMsPerFrame` (default 3), `blockingMsPerFrame` for blocking providers (default 6). `stats()` reports counts and timings.
+
+Archetypes: the meshes of an archetype's levels of detail are uploaded once, the first time a cell uses it, and shared by every cell; a cell uploads only its instance data (and a vertex array per level). They stay until `dispose`. A cell's GPU bytes (`counters().gpuBytes`, `resident`) are therefore its meshes and its instance data; the archetype meshes are counted by `Device.memory()`, so with a GPU ceiling they are part of what everything but the cells holds.
+
+### Preloading along a coming path
+
+When the viewer's path is known ahead (a scripted camera, a flight on rails), the cells it will need can be loaded before it gets there. `preloadTickets(poses, prefix?)` turns coming poses (`PreloadPose`: `eye`, `altitude`, optional `forward` and `pixelsPerRadian`) into one `preload` ticket per pose, kind `'travel'`, base 0 (the rings of the viewer itself), with stable ids `preload-000`, `preload-001`, …. Hand them to `setTickets` together with the viewer's own tickets.
+
+- **What is drawn does not change.** With selection by screen-space error a preload ticket fetches the cells it would split and keeps them on the CPU (MESHED); they are uploaded, within `uploadMsPerFrame`, once a ticket without `preload` (the viewer, arrived) wants them on the screen. The coarsest cells near a preload ticket are wanted as for any ticket, so they are drawn where they come into view. With `splitLevel` selection a preload ticket counts as any ticket: its cells are drawn and `settled` waits for them.
+- **Asking whether everything is there.** `settled` covers only what is drawn. `world.preloaded` (`settled` and `StreamingManager.prefetched`) is true when, besides, every cell fetched ahead of need is loaded: the cells the preload tickets alone ask for and the children the viewer will split next. It is false while a loaded cell may still make the plan want more (`stale`), so wait for it over several frames. A cell the memory budget forgot keeps it false: give `memoryBudgetBytes` room for the poses you preload.
+- **A cut to a preloaded place.** Two options make a jump of the viewer to a preloaded place (a cut of a film, a teleport) show it complete in its first frame, without a change to the place in view meanwhile. Both are off by default.
+  - `StreamedWorld` option `uploadAhead: true` uploads the cells fetched ahead of need too (the cells of preload tickets and the children the viewer will split next), in what the wanted uploads leave of `uploadMsPerFrame`. They wait on the GPU without being drawn; in the step a ticket wants them the manager is told they are there (`StreamingManager.residentAll`) and they are drawn. Until then their GPU bytes are outside `memoryBudgetBytes` and a GPU ceiling; a cell nothing asks for any more is taken off again. `world.preloaded` then waits for these uploads as well. `StreamingManager.ahead()` lists the cells that wait.
+  - `StreamingConfig.preloadBudgetBytes` gives the cells that only preload tickets ask for room of their own (bytes of CPU data). Without it they share `memoryBudgetBytes` with the plan: they count in the fit that lowers the detail, and they are fetched only while room is left. With it the place in view keeps its detail whatever is preloaded, and a second place of up to that size is held ready beside it. After the jump the old place is no longer wanted and gives way first.
+- **How many poses.** Each pose costs a walk of the quadtree per step; a handful (one every second or two of the path, a few seconds ahead, and the first pose after a cut) is enough. The poses come from your path, for example `FreePath.ahead` in `wallhammer-web/camera`.
+
+<!-- check: wrap -->
+```ts
+import { newFreePose } from 'wallhammer-web/camera';
+import type { FreePath } from 'wallhammer-web/camera';
+import type { StreamedWorld } from 'wallhammer-web/runtime';
+import { preloadTickets, viewerTickets } from 'wallhammer-web/runtime';
+import { pixelsPerRadian } from 'wallhammer-web/world';
+declare const world: StreamedWorld;
+declare const path: FreePath;
+declare const heightAbove: (p: readonly [number, number, number]) => number;
+declare const seconds: number;
+
+const px = pixelsPerRadian(1080, (50 * Math.PI) / 180);
+const now = path.sample(seconds, newFreePose()); // reuse one pose every frame
+const ahead = path.ahead(seconds + 1, 6, 1.5).map((p) => ({ eye: p.eye, altitude: heightAbove(p.eye), forward: p.forward, pixelsPerRadian: px }));
+world.setTickets([...viewerTickets({ eye: now.eye, altitude: heightAbove(now.eye), forward: now.forward, pixelsPerRadian: px }), ...preloadTickets(ahead)]);
+
+// Before a recording starts (or a shot is played): wait until the frames have loaded everything.
+const ready = (): boolean => world.preloaded;
+```
 
 ## A sphere world
 
@@ -553,6 +589,8 @@ const { pending, total } = world.manager.refreshes();
 - Cells kept only by hysteresis also leave when the waiting uploads would not fit beside them, so a cell nobody wants never holds a wanted one back.
 - An upload that would not fit waits, and its parent stays drawn in its place.
 - Cells of the coarsest level are exempt both ways: the cover of last resort is never dropped, so the ceiling cannot make a hole. Their size is the floor of what the ceiling can reach.
+- With selection by screen-space error the plan itself is kept within the room: while the cells it wants would hold more than the ceiling leaves them, the detail is lowered in every direction, by the same steps as for `maxCells` (`counters().detail`), and it comes back once the finer plan fits within 85 %. A loaded cell counts its own bytes, a cell not yet loaded the mean of its level. So wanted cells leave the GPU only in a sudden squeeze, and a turn of the view finds the same detail on every side. Without this the plan would keep wanting cells the ceiling cannot hold, and those least urgent (behind the viewer) would stay drawn by coarse ancestors.
+- The ceiling counts everything on the GPU, so targets that grow with the screen (a device pixel ratio of 2 holds about four times the pixels) take room from the cells: set it for the largest screen you expect, or the detail drops there.
 
 <!-- check: wrap -->
 ```ts
@@ -586,5 +624,6 @@ From the project's status notes:
 - Without `morph`, level-of-detail changes are visible as jumps. With it, the surface and instances that carry a shift blend; instances still appear at once at the level that first holds them unless their material scales them by the blend (see [Blending between levels](#blending-between-levels)).
 - When the budget of cells changes the detail, all blend ranges change by one step (16 %) in the same frame.
 - The blend is measured from one viewer. Cells split only because of another ticket (a predicted point far ahead) meet their coarser neighbours with a small step that the skirt covers.
+- Cells a preload ticket fetched wait on the CPU until the viewer arrives; then they are uploaded within `uploadMsPerFrame` and, until they are, their parent stands in for them for a frame or a few. There is no way to upload a cell ahead without drawing it.
 - The render origin of `StreamedWorld` follows the focus in x and z only, unless it is created with `originAxes: 'all'`.
 - Two world shapes exist: the flat one and `SphereWorld` (see [A sphere world](#a-sphere-world) for its limits).

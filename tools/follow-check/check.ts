@@ -3,11 +3,13 @@
 //   node tools/follow-check/check.ts      (from the workspace root: pnpm check:follow)
 //
 // Prints one line per case and exits with 1 when a case fails. `runFollowChecks()` is exported, so another check
-// script (check:walk) can run the same cases and print them with its own.
+// script (check:walk) can run the same cases and print them with its own. The cases of the free camera path
+// (`path-cases.ts`) run here too, after those of the following view.
 
 import { FollowRig } from '../../packages/wallhammer-web/src/camera/follow.ts';
 import type { BoomClearance } from '../../packages/wallhammer-web/src/camera/follow.ts';
 import { newCornerRays } from '../../packages/wallhammer-web/src/base/view.ts';
+import { runPathChecks } from './path-cases.ts';
 
 export interface FollowCase {
   name: string;
@@ -155,7 +157,7 @@ export function runFollowChecks(): FollowCase[] {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const t0 = performance.now();
-  const cases = runFollowChecks();
+  const cases = [...runFollowChecks(), ...runPathChecks()];
   for (const c of cases) console.log(`${c.ok ? 'ok  ' : 'FAIL'} follow: ${c.name} — ${c.detail}`);
   const failed = cases.filter((c) => !c.ok).length;
   console.log(`${cases.length - failed}/${cases.length} follow cases passed in ${(performance.now() - t0).toFixed(0)} ms`);

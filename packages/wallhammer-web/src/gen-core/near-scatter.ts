@@ -41,6 +41,12 @@ export interface NearScatterOptions {
   /** Share of the candidates kept at (u, v) ∈ [0, 1)² of the square, 0–1. */
   densityAt(kind: number, u: number, v: number): number;
   /**
+   * A largest slope of the ground (default none): a candidate kept by its density is left out where
+   * `slopeDegAt(kind, u, v)` (degrees between the ground's normal and up, see `nearSlopeDeg`) is above `maxDeg`. The
+   * other records are the same bytes as without it.
+   */
+  slope?: { maxDeg: number; slopeDegAt(kind: number, u: number, v: number): number };
+  /**
    * Only for a kept candidate: writes its record at `out[at …]` except the order slot (`at + 3`), which the tool owns.
    * `roll(q)` is the candidate's own hash number 0–1 for any integer `q`.
    */
@@ -62,6 +68,7 @@ export interface NearRecords {
 export function nearScatter(o: NearScatterOptions): NearRecords {
   const kinds = o.candidates.length;
   const mask = o.mask ?? -1;
+  const slope = o.slope;
   const keyed = hashInts(o.seed, ...o.key);
   const parts: { data: Float32Array; count: number }[] = [];
   let total = 0;
@@ -84,6 +91,7 @@ export function nearScatter(o: NearScatterOptions): NearRecords {
       const u = ((c % g) + unit(hashInt(hc, 1))) / g;
       const v = (Math.floor(c / g) + unit(hashInt(hc, 2))) / g;
       if (!(unit(hashInt(hc, 3)) < o.densityAt(k, u, v))) continue;
+      if (slope && slope.slopeDegAt(k, u, v) > slope.maxDeg) continue;
       h = hc;
       const at = count * NEAR_FLOATS;
       o.fill(k, u, v, roll, tmp, at);

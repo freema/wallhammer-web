@@ -19,11 +19,22 @@ import type { VertexLayout } from './data.ts';
  * - `bend`: a link of a chain; the links of one chain share their `pivot` (the root). Every vertex turns about the
  *   root, about the part's `axis`, by `amount` (radians per metre) × its rest distance from the root × a wave that
  *   travels along the chain with the gait (`phase`: lag in cycles per metre), and slowly while standing
+ *
+ * `spin`, `swing` and `bend` may run on a clock instead of the distance travelled (`RigPart.rate`).
  */
 export type RigMotion = 'fixed' | 'spin' | 'spin-steer' | 'limb' | 'swing' | 'look' | 'wobble' | 'bend';
 export const RIG_MOTION: Readonly<Record<RigMotion, number>> = { fixed: 0, spin: 1, 'spin-steer': 2, limb: 3, swing: 4, look: 5, wobble: 6, bend: 7 };
 /** Index of a `bend` axis; the mesh writes the motion kind `RIG_MOTION.bend + RIG_BEND_AXIS[axis]`. */
 export const RIG_BEND_AXIS: Readonly<Record<'x' | 'y' | 'z', number>> = { x: 0, y: 1, z: 2 };
+/** Motion kind of a `swing` about each axis: about x it is `RIG_MOTION.swing` as before, about y and z new kinds. */
+export const RIG_SWING_KIND: Readonly<Record<'x' | 'y' | 'z', number>> = { x: 4, y: 10, z: 11 };
+/**
+ * A part on a clock writes the motion kind `kind + RIG_CLOCK_STEP × (clock + 1)`, `clock` its index in
+ * `rigClockRates(desc)`; a part without a clock writes `kind` alone, as before clocks existed.
+ */
+export const RIG_CLOCK_STEP = 16;
+/** Most different rates of one rig kind. */
+export const RIG_MAX_CLOCKS = 4;
 
 /**
  * How a part's surface reads in the image. Lamps light up with `RigLayer.lamps`; `glow` is glass with a lit interior
@@ -63,8 +74,16 @@ export interface RigPart {
   variant?: number;
   /** Left out of the far level of detail. */
   nearOnly?: boolean;
-  /** `bend` only: the axis the link turns about (local axes of the rig). Default 'y'. */
+  /** `bend`: the axis the link turns about (default 'y'). `swing`: the axis it swings about (default 'x'). */
   axis?: 'x' | 'y' | 'z';
+  /**
+   * `spin`, `swing` and `bend` only: the motion runs on the layer's clock (`RigLayer.time`) at this many cycles per
+   * second instead of on the distance travelled, at full size whatever the speed. Its phase in cycles is
+   * `rigClockPhase(time, rate, seed, phase)`: `spin` turns once per cycle about x, `swing` swings by
+   * `amount · sin(2π · phase)`, a `bend` link's wave is `sin(2π · (cycles − phase · d))`. Negative runs backward.
+   * At most `RIG_MAX_CLOCKS` different rates per kind.
+   */
+  rate?: number;
 }
 
 export interface RigSegment {
@@ -103,6 +122,13 @@ export interface RigDesc {
   dip?: number;
   /** 'free' only: the speeds between which the gait fades in, m/s at scale 1. Default [0.15, 0.9]. */
   walkSpeed?: readonly [number, number];
+  /**
+   * How an instance is turned. 'heading' (default): about up by its heading (`dirX`, `dirZ`), with the slope as a
+   * shear and the body roll of curves. 'frame': by a full frame, a forward and an up direction in world space written
+   * with `writeRigFrame` into the floats of the trailing segment (one segment only), for bank and pitch of any size
+   * (a flyer, a body on a wall). The heading fields still place the contact shadow.
+   */
+  orient?: 'heading' | 'frame';
 }
 
 /**
@@ -110,7 +136,46 @@ export interface RigDesc {
  * second program, every other kind by the same program as before these options existed.
  */
 export function rigExtended(desc: RigDesc): boolean {
-  return desc.gait === 'free' || desc.parts.some((p) => p.motion === 'bend');
+  return desc.gait === 'free' || desc.orient === 'frame' || desc.parts.some((p) => p.motion === 'bend' || p.rate !== undefined || (p.motion === 'swing' && (p.axis ?? 'x') !== 'x'));
+}
+
+/** The different clock rates of a description's parts, in the order they first appear; a part's clock is its index. */
+export function rigClockRates(desc: RigDesc): number[] {
+  const rates: number[] = [];
+  for (const p of desc.parts) {
+    if (p.rate === undefined) continue;
+    if (!Number.isFinite(p.rate)) throw new Error(`rig ${desc.name}: a rate must be a finite number`);
+    if (p.motion !== 'spin' && p.motion !== 'swing' && p.motion !== 'bend') throw new Error(`rig ${desc.name}: only spin, swing and bend run on a clock, not ${p.motion ?? 'fixed'}`);
+    if (!rates.includes(p.rate)) rates.push(p.rate);
+  }
+  if (rates.length > RIG_MAX_CLOCKS) throw new Error(`rig ${desc.name}: ${rates.length} different rates, at most ${RIG_MAX_CLOCKS}`);
+  return rates;
+}
+
+/**
+ * Phase in cycles (0–1) of a clocked motion at `time` seconds: `fract(fract(time · rate) + seed + phase)`, as the
+ * shader computes it (the layer hands it `fract(time · rate)` worked out in double precision). A cycle starts where it
+ * is 0; for a `swing` that is the middle of its sweep, moving toward positive angles.
+ */
+export function rigClockPhase(time: number, rate: number, seed: number, phase = 0): number {
+  const c = time * rate;
+  const x = c - Math.floor(c) + seed + phase;
+  return x - Math.floor(x);
+}
+
+/**
+ * Writes the full frame of instance `index` (kinds with `orient: 'frame'`): the forward and up directions in world
+ * space into floats 6–11 of the record (where a second segment would keep its heading and anchor). They need not be
+ * of unit length or at right angles; the shader takes forward as it is and up from the plane of the two.
+ */
+export function writeRigFrame(out: Float32Array, index: number, forward: readonly [number, number, number], up: readonly [number, number, number]): void {
+  const o = index * RIG_INSTANCE_FLOATS;
+  out[o + 6] = forward[0];
+  out[o + 7] = forward[1];
+  out[o + 8] = forward[2];
+  out[o + 9] = up[0];
+  out[o + 10] = up[1];
+  out[o + 11] = up[2];
 }
 
 /** Vertex of a rig mesh: position, normal, pivot, motion (kind, amount, segment, colour slot), colour, extra (phase, variant, near only). */
@@ -132,6 +197,7 @@ export const RIG_VERTEX_FLOATS = 19;
  * - 0–3: leading segment anchor x, y, z, slope (rise per metre forward)
  * - 4–7: leading direction x, z, trailing direction x, z
  * - 8–11: trailing segment anchor x, y, z, slope
+ *   (kinds with `orient: 'frame'`: 6–8 forward x, y, z and 9–11 up x, y, z in world space, see `writeRigFrame`)
  * - 12–15: distance travelled (m), speed (m/s), turn rate (rad/s, positive right), seed 0–1
  * - 16–19: state (0 moving, 1 standing, 2 parked; kept for the owner, no shader of the engine reads it), height scale,
  *   width scale, variant bits

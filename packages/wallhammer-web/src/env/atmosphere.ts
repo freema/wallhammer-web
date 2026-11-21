@@ -49,6 +49,61 @@ export interface AtmosphereMedium {
   groundAlbedo: number;
 }
 
+/**
+ * A painted sky over the computed one: a gradient from the horizon to the zenith, a glow round the sun, a plain sun
+ * disc, and air in front of the scene in the horizon's colour with a haze that thins with height. All colours are
+ * screen-space colours. Every value may change in any frame; `amount` 0 is the computed air alone.
+ */
+export interface AtmospherePaint {
+  /** Share of the painted colours in the sky and in the air in front of the scene, 0–1. */
+  amount: number;
+  /** Colour of the sky straight up. */
+  zenith: RGB;
+  /** Colour of the sky at the horizon of the ground sphere (and below it), and of the air in front of far things. */
+  horizon: RGB;
+  /**
+   * Exponent of the way from the horizon (0) to the zenith (1), measured by the sine of the elevation above the
+   * horizon the eye sees from its height. Below 1 the horizon's colour stays in a narrow band.
+   */
+  curve: number;
+  /** Colour of the glow round the sun, its share at the sun (0–1) and how tight it is (larger: narrower). */
+  glow: RGB;
+  glowAmount: number;
+  glowTightness: number;
+  /** Colour of the sun's disc. */
+  sun: RGB;
+  /** Colour of the haze. */
+  haze: RGB;
+  /** Extinction of the haze per metre at and below `hazeBaseM`; 0: no haze. */
+  hazePerM: number;
+  /** Height above `hazeBaseM` over which the haze thins to 1/e. */
+  hazeScaleM: number;
+  /** Height above the ground sphere below which the haze is at its full density. */
+  hazeBaseM: number;
+  /**
+   * Metres from the eye over which there is no haze: only the way beyond them counts, so what is near keeps its own
+   * colours while the distance fades. Omitted or 0: the haze starts at the eye.
+   */
+  hazeStartM?: number;
+}
+
+/** A painted sky that changes nothing (`amount` 0), to start from. */
+export const DEFAULT_ATMOSPHERE_PAINT: AtmospherePaint = {
+  amount: 0,
+  zenith: [0.11, 0.37, 0.82],
+  horizon: [0.65, 0.85, 0.95],
+  curve: 0.5,
+  glow: [1, 0.95, 0.85],
+  glowAmount: 0,
+  glowTightness: 8,
+  sun: [1, 1, 1],
+  haze: [0.65, 0.85, 0.95],
+  hazePerM: 0,
+  hazeScaleM: 1000,
+  hazeBaseM: 0,
+  hazeStartM: 0,
+};
+
 export interface AtmosphereParams extends AtmosphereMedium {
   /**
    * Brightness of the scattered light on screen: its colour is `1 − exp(−radiance × exposure)`, where the radiance is
@@ -81,6 +136,11 @@ export interface AtmosphereParams extends AtmosphereMedium {
    * instead of read from the sky table and carried from the vertices. Many times slower; for comparing the two.
    */
   reference: boolean;
+  /**
+   * A painted sky over the computed one (`AtmospherePaint`). Whether there is one is fixed at creation: a slot
+   * made without it has neither its shader code nor its members of the Frame block. Its values are read every frame.
+   */
+  paint?: AtmospherePaint | null;
   /** Eye of the current view in render space, or null for a view without one. The atmosphere layer sets it every frame. */
   eye: Vec3 | null;
   /** Height of that eye above the ground sphere in metres. The atmosphere layer sets it every frame. */
@@ -493,6 +553,8 @@ export interface AtmosphereValues {
   reference: number;
   /** How overcast the sky over the eye is, 0–1 (`atmosphereOvercast`). */
   overcast: number;
+  /** The painted sky of a slot made with one (`AtmosphereParams.paint`). */
+  paint?: AtmospherePaint;
 }
 
 /** Cloud cover over the eye from which the sky counts as overcast, and where it is fully so. */
@@ -544,8 +606,53 @@ export function computeAtmosphere(E: FrameEnvironment, p: AtmosphereParams, m: A
     nightLight: p.nightLight,
     reference: p.reference ? 1 : 0,
     overcast: p.eye ? atmosphereOvercast(E.cloudCover, p.eyeHeightM, p.cloudTopM) : 0,
+    ...(p.paint ? { paint: p.paint } : {}),
   };
 }
+
+/** GLSL of the painted sky (`AtmospherePaint`); part of the slot's GLSL when the slot has one. */
+const ATMOSPHERE_PAINT_GLSL = /* glsl */ `
+#define WH_ATM_PAINT 1
+// The painted horizon toward a direction: the horizon's colour with the glow round the sun.
+vec3 atmPaintGlow(vec3 base, vec3 dir) {
+  float g = u_atmPaintSun.w * exp(-u_atmPaintGlow.w * (1.0 - dot(dir, u_atmSun.xyz)));
+  return mix(base, u_atmPaintGlow.rgb, clamp(g, 0.0, 1.0));
+}
+
+// The painted sky over the computed one: screen-space colour of the sky along a view ray in, the same with the
+// painted gradient and glow out.
+vec3 atmospherePaintSky(vec3 dir, vec3 display) {
+  float amount = u_atmPaintZenith.w;
+  if (amount <= 0.0 || u_atmSun.w <= 0.0) return display;
+  float h;
+  vec3 ro = atmEye(h);
+  float r0 = u_atmShell.x + h;
+  float mu = dot(ro, dir) / r0;
+  float muH = -sqrt(h * (2.0 * u_atmShell.x + h)) / r0;
+  float e = clamp((mu - muH) / (1.0 - muH), 0.0, 1.0);
+  vec3 c = mix(u_atmPaintHorizon.rgb, u_atmPaintZenith.rgb, pow(e, max(u_atmPaintHorizon.w, 0.01)));
+  return mix(display, atmPaintGlow(c, dir), amount);
+}
+
+// The painted air in front of a point of the scene: through and air (a screen-space colour) of the computed air in,
+// the same with the painted horizon's colour in the place of the computed light, and the haze, out.
+void atmospherePaintAir(vec3 worldPos, inout vec3 through, inout vec3 air) {
+  float amount = u_atmPaintZenith.w;
+  if (amount <= 0.0) return;
+  vec3 d = worldPos - u_atmEye.xyz;
+  float len = max(length(d), 1e-3);
+  float t = dot(through, vec3(0.3, 0.59, 0.11));
+  air = mix(air, atmPaintGlow(u_atmPaintHorizon.rgb, d / len) * (1.0 - t), amount);
+  through = mix(through, vec3(t), amount);
+  float k = u_atmPaintHaze.w * amount;
+  if (k <= 0.0) return;
+  float h0 = max(u_atmEye.w - u_atmPaintTune.y, 0.0) * u_atmPaintTune.x;
+  float h1 = max(length(worldPos - atmCenter()) - u_atmShell.x - u_atmPaintTune.y, 0.0) * u_atmPaintTune.x;
+  float a = 1.0 - exp(-k * max(len - u_atmPaintTune.z, 0.0) * atmMean(exp(-min(h0, ${MAX_EXPONENT.toFixed(1)})), exp(-min(h1, ${MAX_EXPONENT.toFixed(1)}))));
+  through *= 1.0 - a;
+  air = mix(air, u_atmPaintHaze.rgb, a);
+}
+`;
 
 /** Largest number of steps the GLSL integrates along one ray. */
 const MAX_STEPS = 48;
@@ -553,7 +660,13 @@ const steps = (n: number): number => Math.min(MAX_STEPS, Math.max(2, Math.round(
 const f = (n: number): string => n.toFixed(1);
 
 /** GLSL of the slot for the given step counts. Needs `<header>` before it. */
-export function atmosphereGlsl(skySteps: number, airSteps: number): string {
+export function atmosphereGlsl(skySteps: number, airSteps: number, paint = false): string {
+  // The painted air, where there is one; without it the text is the same as it always was.
+  const apply = paint
+    ? `vec3 shown = atmDisplay(atmUnderCloud(air));
+  atmospherePaintAir(worldPos, through, shown);
+  return display * through + shown;`
+    : 'return display * through + atmDisplay(atmUnderCloud(air));';
   const L = ATMOSPHERE_TABLE_LAYOUT;
   const region = (r: readonly [number, number, number, number]): string => `vec2(${f(r[0])}, ${f(r[1])}), vec2(${f(r[2])}, ${f(r[3])})`;
   return /* glsl */ `
@@ -751,14 +864,14 @@ vec3 atmAirTo(vec3 worldPos, out vec3 through) {
   return atmSegment(ro + dir * t0, dir, t1 - t0, ATM_AIR_STEPS, through);
 }
 
-// The air between the eye and a point of the scene, integrated here and now: screen-space colour in, screen-space
+${paint ? ATMOSPHERE_PAINT_GLSL : ''}// The air between the eye and a point of the scene, integrated here and now: screen-space colour in, screen-space
 // colour out. Identity in a view without an eye. In a fragment shader this is the integral per pixel; a material
 // with vertices close enough together takes it there instead (atmosphereAir) and applies the result below.
 vec3 atmosphereApply(vec3 display, vec3 worldPos) {
   if (u_atmSun.w <= 0.0) return display;
   vec3 through;
   vec3 air = atmAirTo(worldPos, through);
-  return display * through + atmDisplay(atmUnderCloud(air));
+  ${apply}
 }
 
 // For a vertex shader: the air between the eye and the vertex, as the two values the fragment shader hands to
@@ -776,7 +889,7 @@ vec3 atmosphereAir(vec3 worldPos, out vec3 through) {
 vec3 atmosphereApply(vec3 display, vec3 worldPos, vec3 air, vec3 through) {
   if (u_atmSun.w <= 0.0) return display;
   if (u_atmNight.w > 0.5) return atmosphereApply(display, worldPos);
-  return display * through + atmDisplay(atmUnderCloud(air));
+  ${apply}
 }
 
 // Colour of the direct sun at a point, as a multiple of the surface colour: white above the air, red through a long
@@ -840,6 +953,23 @@ export function atmosphereSlot(params: Partial<AtmosphereParams> = {}): Atmosphe
     groundAlbedo: p.groundAlbedo,
   };
   const tables = atmosphereTables(medium);
+  const painted = !!p.paint;
+  const paintLanes = (q: AtmospherePaint): number[] => [
+    ...q.zenith,
+    Math.min(1, Math.max(0, q.amount)),
+    ...q.horizon,
+    q.curve,
+    ...q.glow,
+    q.glowTightness,
+    ...q.sun,
+    q.glowAmount,
+    ...q.haze,
+    Math.max(0, q.hazePerM),
+    1 / Math.max(q.hazeScaleM, 1e-3),
+    q.hazeBaseM,
+    Math.max(0, q.hazeStartM ?? 0),
+    0,
+  ];
   return {
     name: 'atmosphere',
     params: p,
@@ -856,6 +986,16 @@ export function atmosphereSlot(params: Partial<AtmosphereParams> = {}): Atmosphe
       { member: 'u_atmLight', order: 1170, lanes: 'xyzw', doc: 'rgb the sun above the air as light on surfaces, w gain of the sky light on surfaces' },
       { member: 'u_atmNight', order: 1180, lanes: 'xyzw', doc: 'rgb light on surfaces without the sun, w 1: the reference quality, every pixel integrates its own view ray' },
       { member: 'u_atmCloud', order: 1190, lanes: 'xyzw', doc: 'x how overcast the sky over the eye is (atmosphereOvercast), yzw 0' },
+      ...(painted
+        ? [
+            { member: 'u_atmPaintZenith', order: 1191, lanes: 'xyzw', doc: 'rgb painted colour of the zenith, w share of the painted sky' },
+            { member: 'u_atmPaintHorizon', order: 1192, lanes: 'xyzw', doc: 'rgb painted colour of the horizon, w exponent of the way from the horizon to the zenith' },
+            { member: 'u_atmPaintGlow', order: 1193, lanes: 'xyzw', doc: 'rgb colour of the glow round the sun, w its tightness' },
+            { member: 'u_atmPaintSun', order: 1194, lanes: 'xyzw', doc: 'rgb colour of the sun disc, w share of the glow at the sun' },
+            { member: 'u_atmPaintHaze', order: 1195, lanes: 'xyzw', doc: 'rgb colour of the haze, w its extinction per metre at its base' },
+            { member: 'u_atmPaintTune', order: 1196, lanes: 'xyzw', doc: 'x 1 / scale height of the haze, y height of its base, z metres from the eye without haze, w 0' },
+          ]
+        : []),
     ],
     compute: (E, q) => computeAtmosphere(E, q, medium, tables),
     lanes: (v) => [
@@ -887,7 +1027,8 @@ export function atmosphereSlot(params: Partial<AtmosphereParams> = {}): Atmosphe
       0,
       0,
       0,
+      ...(painted ? paintLanes(v.paint ?? DEFAULT_ATMOSPHERE_PAINT) : []),
     ],
-    glsl: atmosphereGlsl(p.skySteps, p.airSteps),
+    glsl: atmosphereGlsl(p.skySteps, p.airSteps, painted),
   };
 }

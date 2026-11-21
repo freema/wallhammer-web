@@ -124,6 +124,13 @@ export interface StreamingConfig {
   maxInFlight: number;
   /** CPU and GPU bytes the streamed cells may hold together. */
   memoryBudgetBytes: number;
+  /**
+   * Room of their own for the cells that only `preload` tickets ask for (selection by screen-space error), in bytes
+   * of CPU data; default off. Without it such cells share `memoryBudgetBytes` with the plan: they count in the fit
+   * that lowers the detail, and they are fetched only while room is left beside the wanted cells. With it they are
+   * counted apart, up to this many bytes, so a second place can be held ready without a change to the place in view.
+   */
+  preloadBudgetBytes?: number;
   /** Selection by screen-space error with a budget of cells. Default off: levels follow `splitLevel`. */
   screenError?: ScreenErrorConfig;
   /**
@@ -131,7 +138,9 @@ export interface StreamingConfig {
    * (what everything else holds). Over the ceiling, cells leave the GPU: first those kept only by hysteresis, the
    * ones wanted longest ago first, then wanted cells from the least urgent (the finest and farthest), so the coarse
    * cover stays. Cells kept only by hysteresis also leave when the waiting uploads would not fit beside them. An
-   * upload that still does not fit waits, and its parent stays drawn in its place.
+   * upload that still does not fit waits, and its parent stays drawn in its place. With selection by screen-space
+   * error the plan itself is kept within the room as well: the detail is lowered in every direction, as for
+   * `maxCells`, so wanted cells rarely have to leave and a turn of the view finds its cells on the GPU.
    */
   gpuBudgetBytes?: number;
 }
@@ -211,7 +220,7 @@ export interface StreamingCounters {
   failed: number;
   evicted: number;
   settled: boolean;
-  /** Share of the full split distance in use: 1, or less while the budget of cells holds the detail down. */
+  /** Share of the full split distance in use: 1, or less while the budget of cells or the GPU ceiling holds the detail down. */
   detail: number;
 }
 
@@ -226,6 +235,8 @@ const MORPH_MIN_SHARE = 0.15;
 interface Plan {
   wanted: Map<string, CellId>;
   prefetch: Map<string, CellId>;
+  /** The cells of `prefetch` that only `preload` tickets ask for (filled with `preloadBudgetBytes` alone). */
+  preload: Set<string>;
   split: Set<string>;
   roots: CellId[];
   levels: Map<string, number>;
@@ -235,7 +246,7 @@ export class StreamingManager {
   readonly config: StreamingConfig;
   private readonly cells = new Map<string, CellRecord>();
   private tickets: Ticket[] = [];
-  private plan: Plan = { wanted: new Map(), prefetch: new Map(), split: new Set(), roots: [], levels: new Map() };
+  private plan: Plan = { wanted: new Map(), prefetch: new Map(), preload: new Set(), split: new Set(), roots: [], levels: new Map() };
   private drawnList: CellId[] = [];
   private holes = 0;
   private stepNo = 0;
@@ -252,6 +263,8 @@ export class StreamingManager {
   private pendingCancels: CellRequest[] = [];
   private pendingEvictions: CellId[] = [];
   private refreshTotal = 0;
+  /** Cells fetched only ahead of need that the last step did not request for want of room in the memory budget. */
+  private readonly noRoom = new Set<string>();
 
   constructor(config: StreamingConfig) {
     if (config.leafLevel < config.rootLevel) throw new Error('leafLevel must not be coarser than rootLevel');
@@ -326,6 +339,7 @@ export class StreamingManager {
   update(tickets: readonly Ticket[]): StreamingActions {
     this.stepNo++;
     this.tickets = [...tickets].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    this.distances.clear();
     const plan = this.config.screenError ? this.planByScreenError(this.config.screenError) : this.planCells();
     this.plan = plan;
     this.planStale = false;
@@ -348,9 +362,11 @@ export class StreamingManager {
     }
 
     // What each tracked cell is wanted for now.
+    this.keepBand.clear();
     const records = this.sortedRecords();
     for (const r of records) {
-      r.level = plan.levels.get(r.key) ?? this.planLevel(r.cell);
+      // A cell outside the plan gets its level when something asks for it (`levelOf`): most are never asked.
+      r.level = plan.levels.get(r.key) ?? NaN;
       if (plan.wanted.has(r.key)) r.want = 'resident';
       else if (plan.prefetch.has(r.key)) r.want = 'meshed';
       else r.want = this.withinKeepBand(r.cell) ? 'keep' : 'none';
@@ -381,8 +397,32 @@ export class StreamingManager {
     // Cells drawn with out-of-date content go ahead of every other candidate, in cell order.
     const refreshing = records.filter((r) => r.refresh && r.state === 'RESIDENT' && !r.inFlight && r.retryAt <= this.stepNo);
     const order = refreshing.length > 0 ? [...refreshing, ...keyed.map((x) => x.r)] : keyed.map((x) => x.r);
-    const free = Math.max(0, cfg.maxInFlight - inFlight);
-    for (const r of order.slice(0, free)) {
+    let free = Math.max(0, cfg.maxInFlight - inFlight);
+    // A cell fetched only ahead of need is requested only while it fits the memory budget beside what wanted and
+    // prefetched cells hold and what the jobs in flight will bring. Otherwise the budget would forget it again in this
+    // very step and the next step would ask for it again, for as long as the view stands.
+    this.noRoom.clear();
+    const room = this.memoryRoom(records);
+    const apart = this.preloadRoom(records, room.estimate);
+    for (const r of order) {
+      if (free <= 0) break;
+      if (apart && r.want === 'meshed' && !r.refresh && plan.preload.has(r.key)) {
+        // A cell of a preload ticket alone, with room of its own (`preloadBudgetBytes`).
+        const need = room.estimate(r.cell);
+        if (apart.used + need > apart.budget) {
+          this.noRoom.add(r.key);
+          continue;
+        }
+        apart.used += need;
+      } else if (r.want === 'meshed' && !r.refresh) {
+        const need = room.estimate(r.cell);
+        if (room.used + need > cfg.memoryBudgetBytes) {
+          this.noRoom.add(r.key);
+          continue;
+        }
+        room.used += need;
+      } else room.used += room.estimate(r.cell);
+      free--;
       r.inFlight = true;
       r.epoch = ++this.epochSeq;
       actions.requests.push({ cell: r.cell, key: r.key, epoch: r.epoch });
@@ -443,6 +483,19 @@ export class StreamingManager {
     r.state = 'RESIDENT';
     r.gpuBytes = gpuBytes;
     this.computeCover();
+  }
+
+  /** `resident` for several cells at once (cells that were uploaded ahead of need): the cover is worked out once. */
+  residentAll(cells: readonly { cell: CellId; gpuBytes: number }[]): void {
+    let any = false;
+    for (const c of cells) {
+      const r = this.cells.get(cellKey(c.cell));
+      if (!r || r.state !== 'MESHED') continue;
+      r.state = 'RESIDENT';
+      r.gpuBytes = c.gpuBytes;
+      any = true;
+    }
+    if (any) this.computeCover();
   }
 
   /**
@@ -525,6 +578,36 @@ export class StreamingManager {
   }
 
   /**
+   * The loaded cells that are fetched ahead of need and wait on the CPU (MESHED): the children a ticket will split
+   * next and the cells of `preload` tickets, in cell order. For an execution part that uploads them ahead.
+   */
+  ahead(): CellId[] {
+    const out: CellId[] = [];
+    for (const key of this.plan.prefetch.keys()) {
+      const r = this.cells.get(key);
+      if (r && r.state === 'MESHED' && !r.refresh) out.push(r.cell);
+    }
+    return out.sort(compareCells);
+  }
+
+  /**
+   * True when the image is settled (`settled`) and every cell fetched ahead of need is loaded too: the children a
+   * ticket will split next (`prefetch`) and, with selection by screen-space error, the cells that `preload` tickets
+   * alone ask for. Those are kept on the CPU (MESHED) and uploaded once a ticket without `preload` wants them on the
+   * screen; this answers whether nothing is left to generate or load for the tickets of the last `update`. False
+   * while a loaded cell may still make the plan want more (`stale`). Cells the memory budget forgot or has no room
+   * for keep it false.
+   */
+  get prefetched(): boolean {
+    if (!this.settled || this.noRoom.size > 0) return false;
+    for (const key of this.plan.prefetch.keys()) {
+      const r = this.cells.get(key);
+      if (!r || RANK[r.state] < RANK.MESHED || r.inFlight) return false;
+    }
+    return true;
+  }
+
+  /**
    * True when a cell was loaded since the last `update` and the next one may therefore want more (selection by
    * screen-space error descends only below loaded cells). The caller should run another step.
    */
@@ -548,7 +631,7 @@ export class StreamingManager {
       cpu += r.cpuBytes;
       gpu += r.gpuBytes;
       if (r.inFlight) inFlight++;
-      else if ((r.want === 'resident' || r.want === 'meshed') && RANK[r.state] < RANK.MESHED) queued++;
+      else if ((r.want === 'resident' || r.want === 'meshed') && RANK[r.state] < RANK.MESHED && !this.noRoom.has(r.key)) queued++;
     }
     return {
       step: this.stepNo,
@@ -580,7 +663,7 @@ export class StreamingManager {
   private planCells(): Plan {
     const cfg = this.config;
     const shape = cfg.shape;
-    const plan: Plan = { wanted: new Map(), prefetch: new Map(), split: new Set(), roots: [], levels: new Map() };
+    const plan: Plan = { wanted: new Map(), prefetch: new Map(), preload: new Set(), split: new Set(), roots: [], levels: new Map() };
     plan.roots = this.planRoots();
     const visit = (c: CellId, prefetchOnly: boolean): void => {
       const key = cellKey(c);
@@ -621,6 +704,9 @@ export class StreamingManager {
     return 2 ** (-step / 4);
   }
 
+  /** Distance of a cell to each ticket of the step in progress, by the cell's key (`relativeLevel`). */
+  private readonly distances = new Map<string, number[]>();
+
   /**
    * Ticket level of a cell divided by the ticket's split distance, the minimum over tickets: at most 1 where the cell
    * is close enough to be split. `scale` is the share of the full split distance in use. `preload` picks the tickets:
@@ -630,11 +716,17 @@ export class StreamingManager {
     const shape = this.config.shape;
     const edge = shape.edgeM(cell.level);
     let best = Infinity;
-    for (const t of this.tickets) {
+    // A step asks for the same cell several times (the plan at two details, the keep band, the levels): the distance
+    // to each ticket is measured once.
+    const key = cellKey(cell);
+    let known = this.distances.get(key);
+    if (!known) this.distances.set(key, (known = []));
+    for (let i = 0; i < this.tickets.length; i++) {
+      const t = this.tickets[i]!;
       if (preload !== undefined && (t.preload ?? false) !== preload) continue;
       const split = ((se.errorPerEdge * (t.pixelsPerRadian ?? se.pixelsPerRadian)) / se.maxErrorPx) * scale;
       if (!(split > 0)) continue;
-      const d = shape.distanceM(cell, t.center);
+      const d = (known[i] ??= shape.distanceM(cell, t.center));
       const a = t.altitude ?? 0;
       const l = (t.base + Math.sqrt(d * d + a * a) / edge) / split;
       if (l < best) best = l;
@@ -654,6 +746,12 @@ export class StreamingManager {
   }
 
   /** The level a record is ordered by when the plan does not list it. */
+  /** The record's level in this step's plan; computed on the first call for a cell the plan does not hold. */
+  private levelOf(r: CellRecord): number {
+    if (Number.isNaN(r.level)) r.level = this.planLevel(r.cell);
+    return r.level;
+  }
+
   private planLevel(cell: CellId): number {
     const se = this.config.screenError;
     return se ? this.relativeLevel(cell, se, this.detailScale(this.detailStep)) : this.ticketLevel(cell);
@@ -665,29 +763,153 @@ export class StreamingManager {
    */
   private planByScreenError(se: ScreenErrorConfig): Plan {
     const budget = se.maxCells ?? Infinity;
+    // With a GPU ceiling the plan must fit the room the ceiling leaves the cells as well. A plan over it would have
+    // wanted cells taken off the GPU by urgency, which puts the cells behind the viewer last: a turn would show their
+    // coarse ancestors until they are back. A coarser plan holds the same detail in every direction instead.
+    const room = this.config.gpuBudgetBytes === undefined ? Infinity : Math.max(0, this.config.gpuBudgetBytes - this.gpuReserveBytes);
+    const bytes = room === Infinity ? null : this.planBytesEstimator();
+    // The plan with the cells it fetches ahead must fit the memory budget too: wanted cells are never forgotten, so a
+    // plan over it would leave the budget only the prefetched cells to forget, again in every step.
+    const memory = this.config.memoryBudgetBytes;
+    const held = memory === Infinity ? null : this.planMemoryEstimator();
+    const fits = (p: Plan, share: number): boolean => p.wanted.size <= budget * share && (bytes === null || bytes(p) <= room * share) && (held === null || held(p) <= memory * share);
     let step = this.detailStep;
     let plan: Plan | null = null;
     if (step > 0) {
       const finer = this.planAtDetail(se, step - 1);
-      if (finer.wanted.size <= budget * DETAIL_BACK_SHARE) {
+      if (fits(finer, DETAIL_BACK_SHARE)) {
         step--;
         plan = finer;
       }
     }
     plan ??= this.planAtDetail(se, step);
-    while (plan.wanted.size > budget && step < MAX_DETAIL_STEPS) plan = this.planAtDetail(se, ++step);
+    while (!fits(plan, 1) && step < MAX_DETAIL_STEPS) plan = this.planAtDetail(se, ++step);
     this.detailStep = step;
     return plan;
+  }
+
+  /**
+   * GPU bytes a plan would hold: a loaded cell counts its own bytes (its GPU bytes on the GPU, else its CPU bytes), a
+   * cell not yet loaded the mean of the loaded cells of its level, or of all loaded cells when none of its level is.
+   */
+  private planBytesEstimator(): (p: Plan) => number {
+    const sum = new Map<number, { n: number; bytes: number }>();
+    let n = 0;
+    let all = 0;
+    const own = (r: CellRecord): number => (RANK[r.state] < RANK.MESHED ? 0 : r.gpuBytes > 0 ? r.gpuBytes : r.cpuBytes);
+    for (const r of this.cells.values()) {
+      const b = own(r);
+      if (b <= 0) continue;
+      const s = sum.get(r.cell.level) ?? { n: 0, bytes: 0 };
+      s.n++;
+      s.bytes += b;
+      sum.set(r.cell.level, s);
+      n++;
+      all += b;
+    }
+    const mean = n > 0 ? all / n : 0;
+    return (p) => {
+      let total = 0;
+      for (const [key, cell] of p.wanted) {
+        const r = this.cells.get(key);
+        const b = r ? own(r) : 0;
+        if (b > 0) total += b;
+        else {
+          const s = sum.get(cell.level);
+          total += s ? s.bytes / s.n : mean;
+        }
+      }
+      return total;
+    };
+  }
+
+  /**
+   * Means of the CPU bytes of loaded cells, by level and over all of them, for cells whose bytes are not known yet.
+   * A cell on the GPU holds its CPU data too, and its GPU bytes are about its CPU bytes before it is uploaded.
+   */
+  private cpuMeans(): (cell: CellId) => number {
+    const sum = new Map<number, { n: number; bytes: number }>();
+    let n = 0;
+    let all = 0;
+    for (const r of this.cells.values()) {
+      if (RANK[r.state] < RANK.MESHED || r.cpuBytes <= 0) continue;
+      const s = sum.get(r.cell.level) ?? { n: 0, bytes: 0 };
+      s.n++;
+      s.bytes += r.cpuBytes;
+      sum.set(r.cell.level, s);
+      n++;
+      all += r.cpuBytes;
+    }
+    const mean = n > 0 ? all / n : 0;
+    return (cell) => {
+      const s = sum.get(cell.level);
+      return s ? s.bytes / s.n : mean;
+    };
+  }
+
+  /**
+   * Bytes of the memory budget already spoken for: what wanted and prefetched cells hold (cells kept only by
+   * hysteresis, or not wanted, give way when room is needed) and what the jobs in flight will bring (estimated as
+   * the CPU bytes of loaded cells of their level).
+   */
+  private memoryRoom(records: readonly CellRecord[]): { used: number; estimate: (cell: CellId) => number } {
+    const estimate = this.cpuMeans();
+    let used = 0;
+    const apart = this.config.preloadBudgetBytes !== undefined;
+    for (const r of records) {
+      if (apart && r.want === 'meshed' && this.plan.preload.has(r.key)) continue;
+      if (r.want === 'resident' || r.want === 'meshed') used += r.cpuBytes + r.gpuBytes;
+      if (r.inFlight) used += estimate(r.cell);
+    }
+    return { used, estimate };
+  }
+
+  /** With `preloadBudgetBytes`: the bytes the cells of preload tickets alone hold and will hold, and their room. */
+  private preloadRoom(records: readonly CellRecord[], estimate: (cell: CellId) => number): { used: number; budget: number } | null {
+    const budget = this.config.preloadBudgetBytes;
+    if (budget === undefined) return null;
+    let used = 0;
+    for (const r of records) {
+      if (r.want !== 'meshed' || !this.plan.preload.has(r.key)) continue;
+      used += r.cpuBytes + r.gpuBytes;
+      if (r.inFlight) used += estimate(r.cell);
+    }
+    return { used, budget };
+  }
+
+  /**
+   * CPU and GPU bytes a plan would hold, for the memory budget: a wanted cell its CPU data and as much again on the
+   * GPU (its own GPU bytes once there), a cell fetched ahead of need its CPU data. Bytes not known yet are the means of
+   * `cpuMeans`.
+   */
+  private planMemoryEstimator(): (p: Plan) => number {
+    const estimate = this.cpuMeans();
+    return (p) => {
+      let total = 0;
+      for (const [key, cell] of p.wanted) {
+        const r = this.cells.get(key);
+        if (r && RANK[r.state] >= RANK.MESHED && r.cpuBytes > 0) total += r.cpuBytes + (r.gpuBytes > 0 ? r.gpuBytes : r.cpuBytes);
+        else total += 2 * estimate(cell);
+      }
+      for (const [key, cell] of p.prefetch) {
+        // Cells of preload tickets alone have room of their own (`preloadBudgetBytes`).
+        if (p.preload.has(key)) continue;
+        const r = this.cells.get(key);
+        total += r && RANK[r.state] >= RANK.MESHED && r.cpuBytes > 0 ? r.cpuBytes : estimate(cell);
+      }
+      return total;
+    };
   }
 
   private planAtDetail(se: ScreenErrorConfig, step: number): Plan {
     const cfg = this.config;
     const shape = cfg.shape;
     const scale = this.detailScale(step);
-    const plan: Plan = { wanted: new Map(), prefetch: new Map(), split: new Set(), roots: this.planRoots(), levels: new Map() };
+    const plan: Plan = { wanted: new Map(), prefetch: new Map(), preload: new Set(), split: new Set(), roots: this.planRoots(), levels: new Map() };
     const ahead = 1 + cfg.prefetch / cfg.splitLevel;
     const preloading = this.tickets.some((t) => t.preload);
-    const visit = (c: CellId, prefetchOnly: boolean): void => {
+    const apart = cfg.preloadBudgetBytes !== undefined;
+    const visit = (c: CellId, prefetchOnly: boolean, preloadOnly = false): void => {
       const key = cellKey(c);
       // What is drawn follows the tickets that are not preloading; a preloading ticket fetches the cells it would split.
       const level = this.relativeLevel(c, se, scale, false);
@@ -695,6 +917,7 @@ export class StreamingManager {
       plan.levels.set(key, Math.min(level, fetch));
       if (prefetchOnly) plan.prefetch.set(key, c);
       else plan.wanted.set(key, c);
+      if (apart && prefetchOnly && preloadOnly) plan.preload.add(key);
       if (c.level >= cfg.leafLevel) return;
       // Never descend below a cell that is not loaded: until it is, nothing could stand in for its children on the
       // screen, and its measured error is not known.
@@ -703,12 +926,17 @@ export class StreamingManager {
       const share = this.errorShare(c, se);
       const split = !prefetchOnly && level <= share;
       if (split) plan.split.add(key);
-      if (split || level <= share * ahead || fetch <= share) for (const ch of shape.children(c)) visit(ch, !split);
+      // Children that only a preloading ticket asks for (and everything under them) are marked as such.
+      const own = split || level <= share * ahead;
+      if (own || fetch <= share) for (const ch of shape.children(c)) visit(ch, !split, preloadOnly || !own);
     };
     for (const r of plan.roots) visit(r, false);
     for (const k of plan.wanted.keys()) plan.prefetch.delete(k);
     return plan;
   }
+
+  /** `withinKeepBand` by the parent's key, for the step in progress (cleared when the step starts its pass over the records). */
+  private readonly keepBand = new Map<string, boolean>();
 
   /** Is the cell still close enough to keep its GPU data (hysteresis)? */
   private withinKeepBand(cell: CellId): boolean {
@@ -716,9 +944,16 @@ export class StreamingManager {
     if (cell.level <= cfg.rootLevel) return this.ticketLevel(cell) <= cfg.rootRange + cfg.hysteresis;
     const p = cfg.shape.parent(cell);
     if (p === null) return false;
+    // The answer is the parent's, so the children of one parent ask once in a step.
+    const key = cellKey(p);
+    const known = this.keepBand.get(key);
+    if (known !== undefined) return known;
     const se = cfg.screenError;
-    if (se) return this.relativeLevel(p, se, this.detailScale(this.detailStep)) <= this.errorShare(p, se) * (1 + cfg.hysteresis / cfg.splitLevel);
-    return this.ticketLevel(p) <= cfg.splitLevel + cfg.hysteresis;
+    const keep = se
+      ? this.relativeLevel(p, se, this.detailScale(this.detailStep)) <= this.errorShare(p, se) * (1 + cfg.hysteresis / cfg.splitLevel)
+      : this.ticketLevel(p) <= cfg.splitLevel + cfg.hysteresis;
+    this.keepBand.set(key, keep);
+    return keep;
   }
 
   /** Lexicographic priority, smaller first (see the design's job order). */
@@ -740,9 +975,10 @@ export class StreamingManager {
     // 3. Ticket level band, 4. direction of view or travel, 5. exact level.
     const facing = this.facingBucket(r.cell);
     // Selection by screen-space error: what lies in front of a ticket's direction goes first, then the nearest.
-    if (cfg.screenError) return [covered, deficit, facing, r.level];
-    const band = Math.floor(r.level);
-    return [covered, deficit, band, facing, r.level];
+    const level = this.levelOf(r);
+    if (cfg.screenError) return [covered, deficit, facing, level];
+    const band = Math.floor(level);
+    return [covered, deficit, band, facing, level];
   }
 
   /**
@@ -785,7 +1021,14 @@ export class StreamingManager {
 
   private enforceBudget(actions: StreamingActions): void {
     let total = 0;
-    for (const r of this.cells.values()) total += r.cpuBytes + r.gpuBytes;
+    let apart = 0;
+    for (const r of this.cells.values()) {
+      if (r.want === 'meshed' && this.plan.preload.has(r.key)) apart += r.cpuBytes + r.gpuBytes;
+      else total += r.cpuBytes + r.gpuBytes;
+    }
+    // Cells of preload tickets alone count only with what they hold over their own room (`preloadBudgetBytes`).
+    total += Math.max(0, apart - (this.config.preloadBudgetBytes ?? 0));
+    const within = apart > 0 && apart <= (this.config.preloadBudgetBytes ?? 0);
     const budget = this.config.memoryBudgetBytes;
     // Untouched cells with no data and no job are dropped from bookkeeping at once.
     for (const r of this.sortedRecords()) {
@@ -794,8 +1037,8 @@ export class StreamingManager {
     if (total <= budget) return;
     const order: Record<Want, number> = { none: 0, keep: 1, meshed: 2, resident: 3 };
     const victims = [...this.cells.values()]
-      .filter((r) => r.want !== 'resident' && r.state !== 'NONE' && !r.inFlight)
-      .sort((a, b) => order[a.want] - order[b.want] || a.lastWanted - b.lastWanted || b.level - a.level || compareCells(a.cell, b.cell));
+      .filter((r) => r.want !== 'resident' && r.state !== 'NONE' && !r.inFlight && !(within && r.want === 'meshed' && this.plan.preload.has(r.key)))
+      .sort((a, b) => order[a.want] - order[b.want] || a.lastWanted - b.lastWanted || this.levelOf(b) - this.levelOf(a) || compareCells(a.cell, b.cell));
     for (const r of victims) {
       if (total <= budget) break;
       total -= r.cpuBytes + r.gpuBytes;

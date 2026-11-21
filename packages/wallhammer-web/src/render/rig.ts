@@ -5,7 +5,9 @@
 // their size on screen: near (all parts, animated), far (fewer parts, still) and hidden. Per kind and level of
 // detail that is one draw for the bodies and one for a soft contact shadow. Kinds with a free gait or chains of
 // links (`rigExtended`) are drawn by a second program, the same text with `WH_RIG_EXT` defined, made when the first
-// such kind is added; every other kind keeps the first program as it was.
+// such kind is added; every other kind keeps the first program as it was. The extended program also runs parts on
+// a clock (`RigPart.rate`, driven by `RigLayer.time`), swings about y and z, and turns instances by a full frame
+// (`RigDesc.orient: 'frame'`).
 //
 // The posing is its own vertex include (`RIG_POSE_GLSL`, registered as `<rig-pose>`), so a game can draw the bodies
 // with its own material (`RigLayerOptions.material`); without one the layer draws exactly as before. By default rigs
@@ -13,10 +15,10 @@
 // `castShadow` draws them into it as a dynamic caster. The instance field `state` is not read by any shader.
 
 import type { MaterialDesc, PassName } from '../base/material.ts';
-import { RIG_ATTRIBS, RIG_INSTANCE_FLOATS, RIG_INSTANCE_LAYOUT, rigExtended } from '../base/rig.ts';
+import { RIG_ATTRIBS, RIG_INSTANCE_FLOATS, RIG_INSTANCE_LAYOUT, rigClockRates, rigExtended } from '../base/rig.ts';
 import type { RigDesc } from '../base/rig.ts';
 import type { CullVolume } from '../base/view.ts';
-import type { InstanceBuffer, Mesh } from '../gpu/index.ts';
+import type { InstanceBuffer, Mesh, Program } from '../gpu/index.ts';
 import { rigMesh, rigShadowMesh } from '../gen-mesh/rig-mesh.ts';
 import type { DrawContext, Layer, Material, Renderer } from './renderer.ts';
 import { SHADOW_MAP_UNIT } from './renderer.ts';
@@ -37,6 +39,10 @@ in vec4 i_look;    // state, height scale, width scale, variant bits
 in vec4 i_colors;
 uniform vec4 u_rig;   // x stride m (0: rolls instead of walking), y steering base m, z roll gain, w roll limit rad
 uniform vec4 u_rig2;  // x bob m, y animate 0–1, z lamps 0–1, w leg length m
+#ifdef WH_RIG_EXT
+uniform vec4 u_rig4;     // x orientation (0 heading, 1 full frame from the record)
+uniform vec4 u_rigClock; // fract(time × rate) of the kind's clocks 1–4
+#endif
 const float TAU = 6.2831853;
 mat3 rotX(float a) { float c = cos(a), s = sin(a); return mat3(1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c); }
 mat3 rotY(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
@@ -46,6 +52,14 @@ mat3 rotZ(float a) { float c = cos(a), s = sin(a); return mat3(c, s, 0.0, -s, c,
 /** Places a segment-local point (already posed and scaled) in the world on the segment's anchor and heading. */
 const FRAME = /* glsl */ `
 vec3 toWorld(vec3 q, float seg, out vec3 fwd, out vec3 right) {
+#ifdef WH_RIG_EXT
+  if (u_rig4.x > 0.5) {
+    // A full frame: forward in floats 6–8, up in 9–11, world space; one segment.
+    fwd = normalize(vec3(i_dir.z, i_dir.w, i_p1.x));
+    right = normalize(cross(fwd, i_p1.yzw));
+    return i_p0.xyz + right * q.x + cross(right, fwd) * q.y + fwd * q.z;
+  }
+#endif
   vec4 p = seg < 0.5 ? i_p0 : i_p1;
   vec2 d = seg < 0.5 ? i_dir.xy : i_dir.zw;
 #ifdef WH_LOCAL_UP
@@ -85,6 +99,11 @@ bool rigPose(out vec3 pos, out vec3 nrm) {
     return false;
   }
   float kind = a_motion.x;
+#ifdef WH_RIG_EXT
+  // A part on a clock carries the clock's index above its kind (RIG_CLOCK_STEP).
+  float clk = floor(kind / 16.0);
+  kind -= 16.0 * clk;
+#endif
   float amount = a_motion.y;
   float anim = u_rig2.y;
   float dist = i_move.x;
@@ -153,13 +172,32 @@ bool rigPose(out vec3 pos, out vec3 nrm) {
       r = rotX(-amount * 4.0 * ux * walkX);
     }
   }
-  if (kind > 6.5) {
+  // Cycles of the part's clock, with the instance's seed as its phase.
+  float cyc = clk > 0.5 ? (clk < 1.5 ? u_rigClock.x : clk < 2.5 ? u_rigClock.y : clk < 3.5 ? u_rigClock.z : u_rigClock.w) + seed : 0.0;
+  if (kind > 6.5 && kind < 9.5) {
     // A link of a chain (kind 7, 8, 9: about x, y, z): turns about the root by amount × its distance from the root ×
     // a wave that lags along the chain; zero at the root, so the chain never leaves the body and links stay joined.
     float dr = length(a_pos - a_pivot);
     float wave = walkX * sin(TAU * (g - a_extra.x * dr)) + (1.0 - walkX) * 0.4 * sin(TAU * (0.15 * t + seed - a_extra.x * dr)) * anim;
+    // On a clock: the wave at full size, whatever the speed.
+    if (clk > 0.5) wave = sin(TAU * (cyc - a_extra.x * dr)) * anim;
     float th = amount * dr * wave;
     r = kind < 7.5 ? rotX(th) : kind < 8.5 ? rotY(th) : rotZ(th);
+  } else if (kind > 9.5) {
+    // A swing about y (10) or z (11), in the gait as a swing about x.
+    float fy = fract(g + a_extra.x);
+    float uy = fy < 0.5 ? 0.25 - fy : -0.25 + 0.5 * smoothstep(0.0, 1.0, (fy - 0.5) * 2.0);
+    float th = -amount * 4.0 * uy * walkX;
+    r = kind < 10.5 ? rotY(th) : rotZ(th);
+  }
+  if (clk > 0.5) {
+    if (kind == 1.0) {
+      // A spin on a clock: one turn about x per cycle.
+      r = rotX(TAU * fract(cyc) * anim);
+    } else if (kind == 4.0 || kind > 9.5) {
+      float th = amount * sin(TAU * (cyc + a_extra.x)) * anim;
+      r = kind == 4.0 ? rotX(th) : kind < 10.5 ? rotY(th) : rotZ(th);
+    }
   }
 #endif
   if (kind == 5.0) {
@@ -186,6 +224,9 @@ bool rigPose(out vec3 pos, out vec3 nrm) {
   nrm = normalize(right * n.x + cross(right, fwd) * n.y + fwd * n.z);
 #else
   nrm = normalize(right * n.x + vec3(0.0, n.y, 0.0) + fwd * n.z);
+#ifdef WH_RIG_EXT
+  if (u_rig4.x > 0.5) nrm = normalize(right * n.x + cross(right, fwd) * n.y + fwd * n.z);
+#endif
 #endif
   return true;
 }
@@ -368,6 +409,9 @@ interface Kind {
   /** Drawn by the extended program; its gait mode, dip and the two walk speeds. */
   ext: boolean;
   rig3: [number, number, number, number];
+  /** Extended only: orientation mode; the clock rates in cycles per second. */
+  rig4: [number, number, number, number];
+  rates: number[];
 }
 
 export interface RigCounts {
@@ -381,6 +425,12 @@ export class RigLayer implements Layer {
   lamps = 0;
   /** Off draws nothing. */
   enabled = true;
+  /**
+   * Seconds of the clock that drives the parts with a `rate`. The caller sets it every frame (the film's or the
+   * game's time); the engine never reads a wall clock for it. Only the fraction of `time × rate` reaches the shader,
+   * worked out in double precision, so it may grow without bound.
+   */
+  time = 0;
   /** Counts of the last drawn frame, all kinds together. */
   readonly counts: RigCounts = { near: 0, far: 0, hidden: 0 };
   /** `'dynamic'` with `castShadow`; unset otherwise (a layer that casts nothing, as before the option existed). */
@@ -416,6 +466,8 @@ export class RigLayer implements Layer {
   /** Adds a kind of rig that can be drawn up to `capacity` times; returns its index for `set`. */
   addKind(desc: RigDesc, capacity: number): number {
     const ext = rigExtended(desc);
+    if (desc.orient === 'frame' && desc.segments.length !== 1) throw new Error(`RigLayer: rig ${desc.name} is turned by a full frame and needs exactly one segment`);
+    const rates = rigClockRates(desc);
     if (ext && !this.bodyExt) this.bodyExt = this.renderer.material(extended(this.bodyDesc));
     if (ext && this.castShadow && !this.depthExt) this.depthExt = this.renderer.material(extended(this.depthDesc()));
     const bodyMaterial = ext ? this.bodyExt! : this.body;
@@ -443,6 +495,8 @@ export class RigLayer implements Layer {
       rig2: [desc.bob ?? 0, 1, 0, legs?.amount ?? 1],
       ext,
       rig3: desc.gait === 'free' ? [1, desc.dip ?? 0, desc.walkSpeed?.[0] ?? 0.15, desc.walkSpeed?.[1] ?? 0.9] : [0, 0, 0.15, 0.9],
+      rig4: [desc.orient === 'frame' ? 1 : 0, 0, 0, 0],
+      rates,
     });
     return this.kinds.length - 1;
   }
@@ -519,7 +573,7 @@ export class RigLayer implements Layer {
           const mesh = contact ? lod.contact : lod.body;
           program.set('u_rig', { vec4: k.rig });
           program.set('u_rig2', { vec4: [k.rig2[0], animate, this.lamps, k.rig2[3]] });
-          if (ext) program.set('u_rig3', { vec4: k.rig3 });
+          if (ext) this.setExtended(program, k);
           mesh.instances = lod.count;
           device.draw(mesh);
           ctx.count(mesh.triangles * lod.count);
@@ -549,12 +603,24 @@ export class RigLayer implements Layer {
         device.writeBuffer(k.shade.buffer.buffer, k.source, k.count * RIG_INSTANCE_FLOATS);
         program.set('u_rig', { vec4: k.rig });
         program.set('u_rig2', { vec4: [k.rig2[0], 1, this.lamps, k.rig2[3]] });
-        if (ext) program.set('u_rig3', { vec4: k.rig3 });
+        if (ext) this.setExtended(program, k);
         k.shade.body.instances = k.count;
         device.draw(k.shade.body);
         ctx.count(k.shade.body.triangles * k.count);
       }
     }
+  }
+
+  /** The uniforms of the extended pose: gait, orientation and the clocks at `time`. */
+  private setExtended(program: Program, k: Kind): void {
+    program.set('u_rig3', { vec4: k.rig3 });
+    program.set('u_rig4', { vec4: k.rig4 });
+    const c: [number, number, number, number] = [0, 0, 0, 0];
+    for (let i = 0; i < k.rates.length; i++) {
+      const x = this.time * k.rates[i]!;
+      c[i] = x - Math.floor(x);
+    }
+    program.set('u_rigClock', { vec4: c });
   }
 
   /** The material of the shadow pass: the game's when it has a `shadow` pass, else the engine's depth of the pose. */

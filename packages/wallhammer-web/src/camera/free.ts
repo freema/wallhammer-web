@@ -89,7 +89,7 @@ const UP_Y: UpSource = { upAt: () => [0, 1, 0] };
  * Reference directions in the horizon of `up`: the world −z axis laid into the horizon (heading 0) and the direction a
  * quarter turn to its left (heading 90°). Where up runs along z, the +x axis takes the place of −z.
  */
-function horizonRef(up: Vec3): [Vec3, Vec3] {
+export function horizonRef(up: Vec3): [Vec3, Vec3] {
   // (−z) − up·((−z)·up)
   let n: Vec3 = [up[0] * up[2], up[1] * up[2], up[2] * up[2] - 1];
   if (n[0] * n[0] + n[1] * n[1] + n[2] * n[2] < 1e-12) n = [1 - up[0] * up[0], -up[1] * up[0], -up[2] * up[0]];
@@ -108,6 +108,8 @@ export class FreeRig implements View {
   origin: Vec3 = [0, 0, 0];
   /** Pitch in radians; positive looks below the horizon. */
   pitch = 0;
+  /** Roll about the view direction in radians, positive banks to the right. Default 0; turning and moving keep it. */
+  roll = 0;
   /** Multiplier of the cruise speed the user controls (see `scaleSpeed`). */
   speedScale = 1;
   /** World velocity in metres per second after the last `move`. */
@@ -224,7 +226,15 @@ export class FreeRig implements View {
     const s = Math.sin(this.pitch);
     const right = cross(t, up);
     const forward: Vec3 = [t[0] * c - up[0] * s, t[1] * c - up[1] * s, t[2] * c - up[2] * s];
-    return { right, forward, up: cross(right, forward) };
+    const screenUp = cross(right, forward);
+    if (this.roll === 0) return { right, forward, up: screenUp };
+    const cr = Math.cos(this.roll);
+    const sr = Math.sin(this.roll);
+    return {
+      right: [right[0] * cr - screenUp[0] * sr, right[1] * cr - screenUp[1] * sr, right[2] * cr - screenUp[2] * sr],
+      forward,
+      up: [screenUp[0] * cr + right[0] * sr, screenUp[1] * cr + right[1] * sr, screenUp[2] * cr + right[2] * sr],
+    };
   }
 
   /** The eye in the renderer's space: the world position minus `origin`, subtracted in double precision. With `out` it is written there. */
@@ -314,7 +324,7 @@ export class FreeRig implements View {
     const p = this.position;
     const o = this.origin;
     const t = this.tangent;
-    return `free|${p[0].toFixed(3)},${p[1].toFixed(3)},${p[2].toFixed(3)}|${o[0]},${o[1]},${o[2]}|${t[0].toFixed(5)},${t[1].toFixed(5)},${t[2].toFixed(5)}|${this.pitch.toFixed(5)}|${this.clearance.toFixed(2)}|${this.width}x${this.height}`;
+    return `free|${p[0].toFixed(3)},${p[1].toFixed(3)},${p[2].toFixed(3)}|${o[0]},${o[1]},${o[2]}|${t[0].toFixed(5)},${t[1].toFixed(5)},${t[2].toFixed(5)}|${this.pitch.toFixed(5)}|${this.clearance.toFixed(2)}|${this.width}x${this.height}|${this.setup.fovYDeg}${this.roll === 0 ? '' : `|r${this.roll.toFixed(5)}`}`;
   }
 
   /** Ray under a screen point in physical pixels from the top-left corner, in the renderer's space. */

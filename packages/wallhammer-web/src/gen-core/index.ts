@@ -24,5 +24,7 @@ export { flatStripSurface, sphereStripSurface } from './strip-surface.ts';
 export type { StripSurface } from './strip-surface.ts';
 export { NEAR_FADE_GLSL, NEAR_FLOATS, NEAR_LAYOUT, nearCount, nearKeep, nearLeaveM, nearScatter } from './near-scatter.ts';
 export type { NearFade, NearRecords, NearScatterOptions } from './near-scatter.ts';
+export { NearSquareGrid, nearLatticeValue, nearPatch, nearSlopeDeg, newNearPatchPoint } from './near-squares.ts';
+export type { NearPatchPoint, NearSquare, NearSquareGridOptions } from './near-squares.ts';
 export { WAVES_GLSL, WAVE_GRAVITY, WAVE_TRAINS_MAX, waveDisplace, waveFade, waveHeight, waveNormal, waveTrains, waveUniforms, waveUnresolved } from './waves.ts';
 export type { WaveFieldOptions, WaveTrain } from './waves.ts';

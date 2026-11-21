@@ -174,7 +174,7 @@ Setup (`FreeSetup`, defaults in `DEFAULT_FREE`):
 | `nearPerHeight` | 0.25 | The near plane is at most this fraction of the height above the surface. |
 | `minNear` | 0.1 | Smallest near distance in metres. |
 
-Fields: `position`, `origin`, `pitch` (radians, positive looks down), `yaw` (radians, accessor), `speedScale`, `velocity` (world m/s after the last `move`), `clearance` (height at the last `keepClear`, NaN without a callback), `focusDistance`, `heightAbove`. Methods: `setState`, `state` (degrees, as the orbit rig), `turn`, `turnPixels`, `lookAt`, `move`, `scaleSpeed`, `keepClear`, `up`, `headingDir`, `eye`, `screenRay`, `project`.
+Fields: `position`, `origin`, `pitch` (radians, positive looks down), `yaw` (radians, accessor), `roll` (radians about the view direction, positive banks to the right, default 0; turning and moving keep it), `speedScale`, `velocity` (world m/s after the last `move`), `clearance` (height at the last `keepClear`, NaN without a callback), `focusDistance`, `heightAbove`. Methods: `setState`, `state` (degrees, as the orbit rig), `turn`, `turnPixels`, `lookAt`, `move`, `scaleSpeed`, `keepClear`, `up`, `headingDir`, `eye`, `screenRay`, `project`.
 
 The heading is measured in the local horizon from the world −z axis (yaw 0 looks toward −z on a flat world, positive turns left, as for the orbit rig). Where up runs along z the +x axis is the reference instead.
 
@@ -188,6 +188,47 @@ Weak spots:
 - `origin` must match the origin the layers draw with in the same frame. Set it in `renderer.beforeFrame`, after the code that moves the render origin.
 
 The endless example uses the rig behind `#cam=free` (`examples/endless/src/free-camera.ts`); its default is still an orbit rig whose target is moved with held keys (`trackHeldKeys`).
+
+### Free paths
+
+`FreePath` moves a free view along keyframes (`FreeKey`): an eye in world metres at a time `t` in seconds, and an aim. The aim is a point to look at (`look`) or a heading and pitch in the local horizon (`yawDeg`, `pitchDeg`, the convention of `FreeRig`); `rollDeg` (positive banks right) and `fovYDeg` are optional. Every channel is a cubic Hermite curve with Catmull-Rom tangents for uneven key spacing, as in [Orbit paths](#orbit-paths), computed in double precision, so a path over a sphere of 100 km keeps millimetres.
+
+- **Up is yours.** `up` in the options is an up source (a `WorldShape`), a function of the world position or one vector; default +y. Headings and pitches are measured in the horizon of up at the sampled eye, so the same path works on a sphere and on a flat world. Give the rig the same up.
+- **Two kinds of aim.** A segment between two look keys follows the look point, so a tracking shot keeps its target in the middle; any other segment turns by the heading and pitch (look keys are converted at their eye). The heading takes the shorter way round between keys.
+- **Velocity continuous inside a group.** The tangents are shared by the two segments at a key. `ease` on a key shapes the segment that starts there: `'smooth'` (default), `'linear'` (a constant rate, a corner at its keys), `'ease-in'`, `'ease-out'`, `'ease-in-out'` (rest at the start, the end or both; the rest holds for the neighbouring segment too, so nothing jumps). The look point is continuous only within a run of look keys; where the kind of aim changes the direction is continuous but its rate of turn may not be.
+- **Cuts.** A key with `cut: true` starts a new group; nothing is interpolated across it, and it may repeat the time of the key before (a hard cut at that time). Until the cut the group before holds its last key. `cuts` lists the start times of the groups, `group(t)` tells which is shown.
+- **Ends.** By default every group starts and ends at rest, as an open `OrbitPath`. `endsAtRest: false` lets a group start and end moving (a shot cut into a move).
+
+Time is relative to the first key and clamped to `0 … duration`. `sample(t, out)` writes a `FreePose` (`eye`, unit `forward`, `up` and `right` after the roll, `localUp`, `fovYDeg`, `rollDeg`, `group`) into a pose you own (`newFreePose()`) and allocates nothing else beyond small vectors; it is a pure function of the keys and the time. `ahead(t, horizonS, stepS)` returns new poses from `t` on, every `stepS` seconds up to `horizonS` later (and the first pose of every group that starts in that time), for preloading what the view will need (`preloadTickets`, see [Preloading along a coming path](streaming.md#preloading-along-a-coming-path)). `apply(rig, t)` and `writeFreePose(rig, pose)` write a pose into a `FreeRig`: position (velocity dropped, the rig's clearance applied), view direction, `roll` and `setup.fovYDeg`.
+
+<!-- check: wrap -->
+```ts
+import { FreePath, FreeRig, newFreePose, writeFreePose } from 'wallhammer-web/camera';
+import type { SphereWorld } from 'wallhammer-web/world';
+declare const shape: SphereWorld; // radius 100 km, centre at the origin
+declare const seconds: number;
+
+const path = new FreePath(
+  [
+    { t: 0, eye: [0, 100_400, 0], yawDeg: 0, pitchDeg: 20 },
+    { t: 6, eye: [300, 100_150, -400], yawDeg: 35, pitchDeg: 8, rollDeg: -10, ease: 'ease-out' },
+    // A cut to a shot that circles a point on the ground and narrows the view.
+    { t: 6, eye: [2000, 100_030, 1500], look: [2050, 100_000, 1450], cut: true, fovYDeg: 45 },
+    { t: 14, eye: [2100, 100_040, 1500], look: [2050, 100_000, 1450], fovYDeg: 30 },
+  ],
+  { up: shape, endsAtRest: false },
+);
+const rig = new FreeRig({ minClearance: 0.5 }, { shape });
+path.apply(rig, seconds); // every frame, before rendering
+
+// Or sample into an own pose, reused every frame, and write it yourself.
+const pose = newFreePose();
+path.sample(seconds, pose);
+writeFreePose(rig, pose);
+console.log(path.duration, path.group(seconds), pose.forward);
+```
+
+Weak spots: no looping (an open path only); the heading's reference direction is the world −z laid into the horizon, which turns quickly near the points where up runs along z (on a sphere, the poles of the z axis), so keep heading keys away from them or aim by look points there; `writeFreePose` goes through `lookAt`, which clamps the pitch to `maxPitchDeg` (89° by default).
 
 ## `FollowRig`
 

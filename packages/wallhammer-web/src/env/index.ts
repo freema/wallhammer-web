@@ -83,6 +83,7 @@ export {
   ATMOSPHERE_TABLE_UNIT,
   DEFAULT_ATMOSPHERE,
   DEFAULT_ATMOSPHERE_MEDIUM,
+  DEFAULT_ATMOSPHERE_PAINT,
   atmosphereFor,
   atmosphereGlsl,
   atmosphereOvercast,
@@ -90,9 +91,14 @@ export {
   atmosphereTables,
   computeAtmosphere,
 } from './atmosphere.ts';
-export type { AtmosphereMedium, AtmosphereParams, AtmosphereSlot, AtmosphereTables, AtmosphereValues } from './atmosphere.ts';
+export type { AtmosphereMedium, AtmosphereParams, AtmospherePaint, AtmosphereSlot, AtmosphereTables, AtmosphereValues } from './atmosphere.ts';
 export { ENV_CORE_SLOT, assembleFrameBlock } from './frame-block.ts';
 export type { EnvFrameBlock, FrameBlockValues, FrameRegions } from './frame-block.ts';
 export type { CloudConfig, DayLight, EnvironmentConfig, FixedLight, StudioLight, SunObserver, WeatherState, WindConfig } from './environment.ts';
 export { dayOfYear, skyDirection, sphereSunDirection, sunPosition } from './sun.ts';
 export type { SunPosition, SunSite } from './sun.ts';
+export { LIQUID_RIPPLES, LIQUID_SIMPLEX_SKEW, LiquidSurface, liquidClearDistance, liquidGlsl, liquidRipplesGlsl, liquidShaftsGlsl } from './liquid.ts';
+export type { LiquidLook, LiquidOptics, LiquidRipples, LiquidShaftsOptions, LiquidState, LiquidSurfaceOptions } from './liquid.ts';
+export { DEPTH_ONLY_FS, SPHERE_GROUND_WATERLINE_GLSL, sphereCoverThinGlsl, sphereGroundDepthVs, sphereGroundVs } from './sphere-ground.ts';
+export type { SphereGroundOptions, SphereGroundVsOptions } from './sphere-ground.ts';
+export { loopClock, loopFade, loopTurns, loopWrap } from './loop.ts';

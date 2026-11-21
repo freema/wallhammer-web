@@ -3,7 +3,7 @@
 // out `nearOnly` parts) and a flat contact shadow quad per segment.
 
 import type { MeshData } from '../base/data.ts';
-import { RIG_BEND_AXIS, RIG_FINISH, RIG_MOTION, RIG_VERTEX_FLOATS, RIG_VERTEX_LAYOUT } from '../base/rig.ts';
+import { RIG_BEND_AXIS, RIG_CLOCK_STEP, RIG_FINISH, RIG_MOTION, RIG_SWING_KIND, RIG_VERTEX_FLOATS, RIG_VERTEX_LAYOUT, rigClockRates } from '../base/rig.ts';
 import type { RigDesc, RigPart } from '../base/rig.ts';
 
 type V3 = readonly [number, number, number];
@@ -111,9 +111,11 @@ function rod(b: Builder, at: V3, dir: V3, len: number, t: number): void {
   b.face([corner(len, 0), corner(len, 1), corner(len, 2), corner(len, 3)]);
 }
 
-function addPart(b: Builder, p: RigPart): void {
-  // A link of a chain carries its axis in the kind: 7 + 0, 1 or 2.
-  const motion = p.motion === 'bend' ? RIG_MOTION.bend + RIG_BEND_AXIS[p.axis ?? 'y'] : RIG_MOTION[p.motion ?? 'fixed'];
+function addPart(b: Builder, p: RigPart, rates: readonly number[]): void {
+  // A link of a chain carries its axis in the kind: 7 + 0, 1 or 2; a swing about y or z has kinds of its own.
+  let motion = p.motion === 'bend' ? RIG_MOTION.bend + RIG_BEND_AXIS[p.axis ?? 'y'] : p.motion === 'swing' ? RIG_SWING_KIND[p.axis ?? 'x'] : RIG_MOTION[p.motion ?? 'fixed'];
+  // A part on a clock: its clock's index above the kind.
+  if (p.rate !== undefined) motion += RIG_CLOCK_STEP * (rates.indexOf(p.rate) + 1);
   b.part(p.pivot ?? p.at, motion, p.amount ?? 0, p.segment ?? 0, p.slot ?? -1, p.tint ?? [1, 1, 1], RIG_FINISH[p.finish ?? 'matte'], p.phase ?? 0, p.variant ?? -1);
   const s = p.shape;
   if (s.kind === 'box') box(b, p.at, s.size);
@@ -125,7 +127,8 @@ function addPart(b: Builder, p: RigPart): void {
 /** The rig's parts as one mesh in `RIG_VERTEX_LAYOUT`. `far` leaves out the parts marked `nearOnly`. */
 export function rigMesh(desc: RigDesc, far = false): MeshData {
   const b = new Builder();
-  for (const p of desc.parts) if (!far || !p.nearOnly) addPart(b, p);
+  const rates = rigClockRates(desc);
+  for (const p of desc.parts) if (!far || !p.nearOnly) addPart(b, p, rates);
   return b.mesh();
 }
 

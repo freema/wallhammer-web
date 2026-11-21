@@ -17,6 +17,7 @@ import { box, cylinder, extrude, polygon, revolve, sweep } from '../../packages/
 import type { ShapeVertex } from '../../packages/wallhammer-web/src/gen-mesh/bare-shapes.ts';
 import { MeshBuilder } from '../../packages/wallhammer-web/src/gen-mesh/mesh-builder.ts';
 import type { VertexFormat } from '../../packages/wallhammer-web/src/gen-mesh/mesh-builder.ts';
+import { RIG_CASES } from './rig-cases.ts';
 
 // --- Two vertex formats of imagined games ------------------------------------------------------------------------------
 
@@ -390,6 +391,8 @@ const cases: [string, () => Result][] = [
     return { ok: same, detail: `${a.length} bytes, two runs ${same ? 'identical' : 'differ'}` };
   }],
 ];
+
+cases.push(...RIG_CASES);
 
 const filter = process.argv[2] ?? '';
 let failed = 0;

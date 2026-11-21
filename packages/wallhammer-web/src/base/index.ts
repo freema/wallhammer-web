@@ -29,7 +29,7 @@ export type { BakeDesc, BakeTarget, BlendFactor, BlendSpec, CullMode, DrawState,
 export type { EnvSlot, FogLayer, FrameEnvironment, FrameField, FrameRegion, LightMode } from './env-slot.ts';
 export { DAMAGE, PART_FLAG, PART_ROLE, RUBBLE, entryDir, entryRung, entryVariant, packEntry } from './destructible.ts';
 export type { ConvexPiece, DamageEntry, DamageRung, DestructibleMaterial, DestructionEvent, PartRole, RubbleArchetype, RubbleFootprint, StructureBond, StructureDesc, StructurePart, StructureState } from './destructible.ts';
-export { RIG_ATTRIBS, RIG_BEND_AXIS, RIG_FINISH, RIG_INSTANCE_FLOATS, RIG_INSTANCE_LAYOUT, RIG_MOTION, RIG_VERTEX_FLOATS, RIG_VERTEX_LAYOUT, packRgb, rigExtended, writeRigInstance } from './rig.ts';
+export { RIG_ATTRIBS, RIG_BEND_AXIS, RIG_CLOCK_STEP, RIG_FINISH, RIG_INSTANCE_FLOATS, RIG_INSTANCE_LAYOUT, RIG_MAX_CLOCKS, RIG_MOTION, RIG_SWING_KIND, RIG_VERTEX_FLOATS, RIG_VERTEX_LAYOUT, packRgb, rigClockPhase, rigClockRates, rigExtended, writeRigFrame, writeRigInstance } from './rig.ts';
 export type { RigDesc, RigFinish, RigInstance, RigMotion, RigPart, RigSegment, RigShape } from './rig.ts';
 export { Progress } from './progress.ts';
 export type { ProgressReport, ProgressStage } from './progress.ts';

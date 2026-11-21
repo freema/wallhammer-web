@@ -10,12 +10,14 @@
 import { COLLIDE_SCENARIOS } from './collide-scenarios.ts';
 import { COURSE_SCENARIOS } from './course-scenarios.ts';
 import type { Scenario } from './scenario.ts';
+import { STREAMING_SCENARIOS } from './streaming-scenarios.ts';
 import { WALKER_SCENARIOS } from './walker-scenarios.ts';
 
 const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
   { label: 'collision world', scenarios: COLLIDE_SCENARIOS },
   { label: 'walker', scenarios: WALKER_SCENARIOS },
   { label: 'test course (examples/walk)', scenarios: COURSE_SCENARIOS },
+  { label: 'streaming preload along a path', scenarios: STREAMING_SCENARIOS },
 ];
 
 const LIMIT_MS = 5000;

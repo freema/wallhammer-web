@@ -295,8 +295,48 @@ order, on any thread, whatever else is made.
 - What can still be seen from a distance is therefore a prefix of the records: `nearCount` finds its length by a
   binary search, and a drawing layer copies only that. `NEAR_FADE_GLSL` is the same fade for a shader.
 
-`NearInstanceLayer` of `render` draws such sets ([Instances near the viewer](rendering.md#instances-near-the-viewer)).
-The system example makes small details round the camera with it (`examples/system/src/details.ts`).
+- `slope` (optional, default none) leaves out a candidate kept by its density where the ground is steeper than
+  `maxDeg`: `slopeDegAt(kind, u, v)` gives the slope, usually `nearSlopeDeg(nearPatch(…))`. Every other record keeps
+  its bytes.
+
+On a sphere the squares are those of one level of the cube grid (`NearSquareGrid`, `gen-core/near-squares.ts`):
+`key(square)`, `centre`, `distanceM(dir, square)` (to the nearest point a square can have, from half its diagonal),
+and `near(dir, reachM, out)`, every square a reach round a direction touches, nearest first, across the cube's edges.
+`keepStart` (default false) takes the square under the direction even when the warped grid puts its estimate out of
+reach. The ground of a square is the caller's lattice of (sub + 1)² points with fields beside it: `nearLatticeValue`
+reads a field between the points, `nearPatch` gives the point and outward normal of the ground at (u, v), and
+`nearSlopeDeg` its angle to the place's up.
+
+<!-- check: wrap -->
+```ts
+import { NearSquareGrid, nearLatticeValue, nearPatch, nearScatter, nearSlopeDeg, newNearPatchPoint } from 'wallhammer-web/gen-core';
+import type { Vec3 } from 'wallhammer-web/base';
+declare const dir: Vec3, seed: number;
+declare const pos: Float64Array; // (sub + 1)² lattice points of a square, x y z from the centre
+declare const density: Float64Array; // one number per lattice point
+
+const grid = new NearSquareGrid({ level: 13, radiusM: 150_000, halfDiagM: 14.5 });
+const sub = 4;
+const at = newNearPatchPoint();
+for (const square of grid.near(dir, 60, [])) {
+  const records = nearScatter({
+    seed,
+    key: [square.face, square.i, square.j],
+    candidates: [400],
+    densityAt: (_kind, u, v) => nearLatticeValue(density, sub, 1, 0, u, v),
+    slope: { maxDeg: 45, slopeDegAt: (_kind, u, v) => nearSlopeDeg(nearPatch(pos, sub, u, v, at)) },
+    fill: (_kind, u, v, roll, out, i) => {
+      const p = nearPatch(pos, sub, u, v, at).p;
+      out.set([p[0], p[1], p[2], 0, 0.3, 0.5, roll(0) * 6.28, 1, 0.2, 0.5, 0.1, 0], i);
+    },
+  });
+  console.log(grid.key(square), records.start);
+}
+```
+
+`NearInstanceLayer` of `render` draws such sets ([Instances near the viewer](rendering.md#instances-near-the-viewer)),
+and `NearDetailStream` of `runtime` streams them round the eye ([Details streamed round the eye](rendering.md#details-streamed-round-the-eye)).
+The system example makes small details round the camera with them (`examples/system/src/details.ts`).
 
 ## `gen-tex`: textures
 

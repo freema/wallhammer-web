@@ -195,6 +195,43 @@ void main() {
   o_color = vec4(texelFetch(u_src, ivec2(gl_FragCoord.xy), 0).rgb, 1.0);
 }`;
 
+/**
+ * A grade of the finished picture, applied to every pixel when the offscreen main target is copied to the canvas
+ * (`Device.grade`). In this order: `exposure` multiplies the colour; `lift` raises the dark end toward a colour
+ * (`c + lift × (1 − c)`) and `gain` multiplies the result; `gamma` bends the middle (`c ^ (1 / gamma)`, above 1
+ * brighter); `saturation` moves the colour away from its grey (0 grey, 1 unchanged); `contrast` moves it away from the
+ * middle grey 0.5. The result is clamped to 0–1.
+ */
+export interface DisplayGrade {
+  exposure: number;
+  contrast: number;
+  saturation: number;
+  lift: readonly [number, number, number];
+  gamma: readonly [number, number, number];
+  gain: readonly [number, number, number];
+}
+
+/** The grade that changes nothing. */
+export const DEFAULT_DISPLAY_GRADE: DisplayGrade = { exposure: 1, contrast: 1, saturation: 1, lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1, 1, 1] };
+
+/** The same copy with a `DisplayGrade`. */
+const PRESENT_GRADE_FS = /* glsl */ `#version 300 es
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D u_src;
+uniform vec4 u_gradeLift;  // rgb lift, w exposure
+uniform vec4 u_gradeGamma; // rgb 1 / gamma, w saturation
+uniform vec4 u_gradeGain;  // rgb gain, w contrast
+out vec4 o_color;
+void main() {
+  vec3 c = texelFetch(u_src, ivec2(gl_FragCoord.xy), 0).rgb * u_gradeLift.w;
+  c = (c + u_gradeLift.rgb * (1.0 - c)) * u_gradeGain.rgb;
+  c = pow(max(c, 0.0), u_gradeGamma.rgb);
+  c = mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, u_gradeGamma.w);
+  c = (c - 0.5) * u_gradeGain.w + 0.5;
+  o_color = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+
 /** Samples per pixel of the offscreen main target (what a canvas with antialiasing usually has). */
 const SCENE_SAMPLES = 4;
 
@@ -223,6 +260,13 @@ export class Device {
   private clip: ClipControl | null = null;
   private scene: SceneTarget | null = null;
   private presentProgram: Program | null = null;
+  private gradeProgram: Program | null = null;
+  /**
+   * A grade of the finished picture (`DisplayGrade`), or null for none. Applied in `present`, so only where the main
+   * target is offscreen: the reversed and logarithmic depth modes, a readable depth, two samples. Change it or its
+   * values at any time.
+   */
+  grade: DisplayGrade | null = null;
   /** Depth convention of the bound target: true = 1 nearest, 0 farthest (the main target in the reversed mode). */
   private reversedNow = false;
   /** True while the bound program applies the polygon offset itself (the main target in the logarithmic mode). */
@@ -478,8 +522,10 @@ export class Device {
    */
   present(): void {
     const s = this.scene;
-    const program = this.presentProgram;
-    if (!s || !program || !this.offscreen()) return;
+    if (!s || !this.presentProgram || !this.offscreen()) return;
+    const grade = this.grade;
+    if (grade) this.gradeProgram ??= this.program('present (graded)', FULLSCREEN_VS, PRESENT_GRADE_FS);
+    const program = grade ? this.gradeProgram! : this.presentProgram;
     const gl = this.gl;
     // Samples → one colour per pixel. Same size and same format on both sides, as a multisample resolve requires.
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, s.fbo);
@@ -493,6 +539,11 @@ export class Device {
     this.use(program);
     this.texture(0, s.resolved);
     program.int('u_src', 0);
+    if (grade) {
+      program.set('u_gradeLift', { vec4: [grade.lift[0], grade.lift[1], grade.lift[2], grade.exposure] });
+      program.set('u_gradeGamma', { vec4: [1 / Math.max(grade.gamma[0], 1e-3), 1 / Math.max(grade.gamma[1], 1e-3), 1 / Math.max(grade.gamma[2], 1e-3), grade.saturation] });
+      program.set('u_gradeGain', { vec4: [grade.gain[0], grade.gain[1], grade.gain[2], grade.contrast] });
+    }
     this.drawFullscreen();
     this.texture(0, null);
     gl.bindVertexArray(null);

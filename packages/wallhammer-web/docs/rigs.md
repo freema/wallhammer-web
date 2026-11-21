@@ -15,10 +15,12 @@ Local axes of every rig: x to the right of travel, y up, z forward, the origin o
 | `fixed` | Moves with the body (bob, roll, sway). |
 | `spin`, `spin-steer` | Turns about x by distance / `amount` (a wheel of that radius); `spin-steer` also steers by the curvature (`steerBase`). |
 | `limb` | A leg of length `amount`, swinging in the gait; the foot stays put during the stance half. `phase` 0 or 0.5 picks the side; with the free gait any phase. |
-| `swing` | Swings in the gait by up to `amount` radians (arms, a bag). |
+| `swing` | Swings in the gait by up to `amount` radians (arms, a bag), about x, or about `axis` `y` or `z`. |
 | `look` | Turns about y while standing, slowly. |
 | `wobble` | Small noise about x and y. |
 | `bend` | A link of a chain: turns about the chain's root, about its `axis`, more the farther it is from the root. See [Free gait and chains](#free-gait-and-chains). |
+
+`spin`, `swing` and `bend` may run on a clock instead of the distance travelled (`rate`, see [Motions on a clock and a full frame](#motions-on-a-clock-and-a-full-frame)).
 
 Colour comes from one of four instance colour slots times `tint`, or from `tint` alone. `finish` makes a part glass, a front or rear lamp (lit by `RigLayer.lamps`), a lit interior (`glow`) or a paved top (`tiles`, a world-aligned 0.5 m grid). `variant` shows a part only when the instance sets that bit (a backpack). `nearOnly` drops it from the far level of detail. A rig has one or two segments; the second (an articulated vehicle's trailer) gets its own anchor and heading in the record.
 
@@ -77,6 +79,79 @@ const body: RigDesc = {
   radius: 1.4,
 };
 console.log(rigExtended(body));
+```
+
+## Motions on a clock and a full frame
+
+Every motion above advances with the distance an instance has travelled, so a body that stands still stands still. Two more options of a description serve bodies that move while they hover, glide or stand, and bodies that bank and pitch. Like the free gait and chains they make the description extended (`rigExtended`); a description without them keeps its program and its mesh bytes.
+
+- **A clock** (`RigPart.rate`, cycles per second, on `spin`, `swing` and `bend`): the part runs on `RigLayer.time`, which you set every frame (the engine reads no wall clock; a film or a simulation hands its own time, so a held time poses the same every run). Its phase in cycles is `rigClockPhase(time, rate, seed, phase)` = `fract(fract(time · rate) + seed + phase)`: the instance's `seed` is its own phase, the part's `phase` the offset within the rig. A clocked part moves at full size whatever the speed: `spin` turns once per cycle about x, `swing` swings by `amount · sin(2π · phase)` about its axis, a `bend` link's wave is `sin(2π · (cycles − phase · d))`. A negative rate runs backward. At most `RIG_MAX_CLOCKS` (4) different rates per kind (`rigClockRates`); the mesh writes the clock's index above the kind (`RIG_CLOCK_STEP`). Use `rigClockPhase` on the CPU to place events, a wing beat where the phase passes 0.25 (a swing at its top). Mirror a pair by the sign of `amount` (a wing on the left swings with `-amount`).
+- **A swing about y or z** (`axis` on a `swing` part, kinds `RIG_SWING_KIND`): in the gait or on a clock. A wing flaps about z (the forward axis), a tail sways about y.
+- **A full frame** (`orient: 'frame'`, one segment only): by default an instance turns only about up by its heading, its slope shears it and its body rolls a little in curves, which cannot bank or pitch a flyer. With `orient: 'frame'` the shader takes a forward and an up direction in world space (render space, any length, not necessarily at right angles) from floats 6–11 of the record, written by `writeRigFrame` after `writeRigInstance`. The slope is not read; the body roll of curves and the bob still apply, so set `turnRate` 0 if the frame carries the bank already. The contact shadow still lies on the ground under the anchor along `dirX`, `dirZ`; a flyer usually has `shadow: [0, 0, 0]`. The frame works the same under radial up.
+
+<!-- check: wrap -->
+```ts
+import { RIG_INSTANCE_FLOATS, packRgb, rigClockPhase, writeRigFrame, writeRigInstance } from 'wallhammer-web/base';
+import type { RigDesc, RigInstance, RigPart } from 'wallhammer-web/base';
+import { RigLayer } from 'wallhammer-web/render';
+import type { Renderer } from 'wallhammer-web/render';
+declare const renderer: Renderer;
+declare const filmSeconds: number;
+declare const flight: (t: number) => { at: [number, number, number]; forward: [number, number, number]; up: [number, number, number]; speed: number };
+
+/** A wing on each side flapping about the forward axis twice a second, and a tail of three links swaying slowly. */
+const wing = (side: 1 | -1): RigPart => ({
+  shape: { kind: 'box', size: [1.6, 0.05, 0.7] },
+  at: [side * 1.0, 0, 0],
+  pivot: [side * 0.2, 0, 0],
+  motion: 'swing',
+  axis: 'z',
+  amount: side * 0.6,
+  rate: 2,
+  slot: 1,
+});
+const tail = (i: number): RigPart => ({
+  shape: { kind: 'box', size: [0.15, 0.1, 0.5] },
+  at: [0, 0, -0.6 - 0.5 * i],
+  pivot: [0, 0, -0.4],
+  motion: 'bend',
+  axis: 'y',
+  amount: 0.25,
+  phase: 0.3,
+  rate: 0.5,
+  slot: 0,
+});
+const flyer: RigDesc = {
+  name: 'flyer',
+  parts: [{ shape: { kind: 'box', size: [0.6, 0.3, 1.2] }, at: [0, 0, 0], slot: 0 }, wing(1), wing(-1), tail(0), tail(1), tail(2)],
+  segments: [{ shadow: [0, 0, 0] }],
+  orient: 'frame',
+  height: 1,
+  radius: 2.5,
+};
+
+const rigs = new RigLayer(renderer);
+renderer.add(rigs);
+const kind = rigs.addKind(flyer, 1);
+const r: RigInstance = { x: 0, y: 0, z: 0, slope: 0, dirX: 0, dirZ: 1, x1: 0, y1: 0, z1: 0, slope1: 0, dirX1: 0, dirZ1: 1, distance: 0, speed: 0, turnRate: 0, seed: 0.37, state: 0, heightScale: 1, widthScale: 1, variants: 0, colors: [packRgb(0.1, 0.5, 0.5), packRgb(0.9, 0.85, 0.7), 0, 0] };
+
+/** Every frame, with positions already in render space. */
+function frame(): void {
+  const f = flight(filmSeconds);
+  const out = rigs.staging(kind);
+  [r.x, r.y, r.z] = f.at;
+  const h = Math.hypot(f.forward[0], f.forward[2]) || 1;
+  r.dirX = f.forward[0] / h; // the heading still places the contact shadow
+  r.dirZ = f.forward[2] / h;
+  r.speed = f.speed;
+  writeRigInstance(out, 0, r);
+  writeRigFrame(out, 0, f.forward, f.up); // bank and pitch of any size
+  rigs.commit(kind, 1);
+  rigs.time = filmSeconds; // the clock of the wings and the tail
+}
+// A wing beat for the sound: the right wing is at its top where the phase passes 0.25.
+const beatNow = Math.abs(rigClockPhase(filmSeconds, 2, r.seed) - 0.25) < 0.01;
+console.log(RIG_INSTANCE_FLOATS, beatNow, frame);
 ```
 
 ## Drawing instances
@@ -155,11 +230,11 @@ The field `state` (float 16, `i_look.x` in GLSL) is **not read by any shader of 
 
 ## A material of the game, shadows into the map
 
-The posing is a vertex include of its own, `RIG_POSE_GLSL`, which `RigLayer` registers as `<rig-pose>`. It declares the attributes and the instance record (`RIG_ATTRIBS`), the uniforms the layer sets (`u_rig`, `u_rig2`, and `u_rig3` where `WH_RIG_EXT` is defined) and two functions: `bool rigPose(out vec3 pos, out vec3 nrm)`, the world position and normal of the vertex in its instance's pose (false: the instance lacks the part's variant, collapse the vertex), and `vec3 rigColor()`, the part's colour times its instance colour slot. Write it after `<header>` and `<noise>`.
+The posing is a vertex include of its own, `RIG_POSE_GLSL`, which `RigLayer` registers as `<rig-pose>`. It declares the attributes and the instance record (`RIG_ATTRIBS`), the uniforms the layer sets (`u_rig`, `u_rig2`, and `u_rig3`, `u_rig4`, `u_rigClock` where `WH_RIG_EXT` is defined) and two functions: `bool rigPose(out vec3 pos, out vec3 nrm)`, the world position and normal of the vertex in its instance's pose (false: the instance lacks the part's variant, collapse the vertex), and `vec3 rigColor()`, the part's colour times its instance colour slot. Write it after `<header>` and `<noise>`.
 
 `new RigLayer(renderer, options)` takes `RigLayerOptions`:
 
-- `material`: the game's `MaterialDesc` for the bodies (attributes `RIG_ATTRIBS`), with its own look in the fragment shader. Kinds with a free gait or chains get the same description with `WH_RIG_EXT` defined after the header line. Without it the engine's material draws exactly as before.
+- `material`: the game's `MaterialDesc` for the bodies (attributes `RIG_ATTRIBS`), with its own look in the fragment shader. Extended kinds (a free gait, chains, clocks, swings about y or z, a full frame) get the same description with `WH_RIG_EXT` defined after the header line. Without it the engine's material draws exactly as before.
 - `castShadow` (default false): the posed bodies are drawn into the shadow map, every instance at near detail, as a dynamic caster (`shadowCasters: 'dynamic'`, `shadowDirty()` true after `set` or `commit`). The depth program is the `shadow` pass of the game's material when it has one, otherwise the engine's (`rigPose` and `u_lightRender`).
 - `contactShadows` (default true): the soft shadow under every rig.
 

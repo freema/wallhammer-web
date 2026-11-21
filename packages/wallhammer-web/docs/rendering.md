@@ -414,7 +414,7 @@ A clear medium that fills everything below a level (water under a sea's surface,
 | `mediumClearDistance(extinction, share)` (TypeScript only) | the distance at which every channel has fallen to `share`: beyond it the medium hides everything, so a backdrop may stand there |
 | `mediumFresnel(cosI, eta)` | the share the boundary reflects (Schlick), with total reflection from the denser side (`eta` > 1) |
 
-The engine does not draw the medium. The content chooses the level, the extinction and the inscattered colour, and calls these from its materials: a fragment applies `mediumApply` over `mediumPath(eyeHeight, fragmentHeight, distance)`, and from inside the medium a layer can stand a backdrop at `mediumClearDistance` in place of the sky. The `planet` example does this for its sea ([The sea](planet.md#the-sea)).
+The engine draws a medium only as the liquid of a sphere ([A liquid below the level of a sphere](#a-liquid-below-the-level-of-a-sphere)); otherwise the content chooses the level, the extinction and the inscattered colour, and calls these from its materials: a fragment applies `mediumApply` over `mediumPath(eyeHeight, fragmentHeight, distance)`, and from inside the medium a layer can stand a backdrop at `mediumClearDistance` in place of the sky. The `planet` example does this for its sea ([The sea](planet.md#the-sea)).
 
 ```ts
 import { mediumClearDistance, mediumFresnel, mediumPath, mediumThrough } from 'wallhammer-web/core';
@@ -456,6 +456,107 @@ console.log(surfaceM, normal, jacobian, Object.keys(uniforms).length, WAVES_GLSL
 ```
 
 The `planet` example builds its sea with them ([The sea](planet.md#the-sea)): a chart of the sphere as the plane, a grid of rings round the eye moved by the waves, the flat water of the cells beyond it, and the eye's height above the moving surface from `waveHeight` on the CPU.
+
+## A liquid below the level of a sphere
+
+The two pieces above make a liquid on a radial world: `env` holds its CPU side and GLSL, `runtime` the layers that draw
+it round the eye. The content keeps its own look and the materials of its far surface and of what lies under it.
+
+- `LiquidSurface` (`env`): the waves of a wind (`waveTrains`) on a chart of the sphere, the face of a cube under the
+  eye, whose coordinates are metres along the face's axes. `uniforms(seed, eye, origin, timeS)` gives a frame's
+  `common` uniforms (`u_liquid`: the eye's height above the moving surface and above the level, the near radius and
+  the factor on the waves; `u_liquidFoot`, `u_liquidAxisA/B/N`: the chart; `u_liquidSlope`) and `water` (common plus
+  the trains of `waveUniforms` and the ripples' `u_liquidRipple0`…), rewritten in place every call; `state` holds what
+  it computed (`aboveSurfaceM`, `aboveLevelM`, `nearM`). `surfaceHeight` is the height of the surface over a point on
+  the CPU, the same function the picture uses. `setLoop(seconds, clockS)` moves every train to a length whose period
+  divides `seconds`, so a scene that plays in a circle shows the same surface where it begins and ends.
+- `liquidGlsl(look)` writes the look (`LiquidLook`: extinction, the liquid's own colour, the light lost with depth, the
+  colours from high above, optional other optics for an eye below and caustics that follow a looping clock) into GLSL
+  with the functions its materials share: `liquidLightAt`, `liquidSurfaceLight`, `liquidInscatter`, `liquidDisplay`,
+  `liquidPlane`, `liquidTangents`, `liquidSunIn`, `liquidCaustic` and more. It needs `<noise>`, `<lighting>`,
+  `<atmosphere>` and `MEDIUM_GLSL` before it. `liquidRipplesGlsl()` adds the ripples (`liquidRipples`), fine detail of
+  the normal down to a few centimetres, and `liquidShaftsGlsl()` the light shafts seen from below.
+- The layers (`runtime`), each taking the renderer and the surface: `LiquidNearLayer` a grid of rings round the eye's
+  foot drawn with the caller's material (it moves the grid with `waveDisplace`), `LiquidBackdropLayer` the liquid's own
+  light at `clearM` ahead while the eye is below the surface, `LiquidShaftsLayer` the light shafts along every view
+  ray then, and `LiquidLensLayer` the line where the surface crosses the front of the lens. Each draws only while
+  `surface.state` says it is needed; the page hands them the frame's uniforms.
+
+<!-- check: wrap -->
+```ts
+import type { MaterialDesc, Vec3 } from 'wallhammer-web/base';
+import { LiquidSurface } from 'wallhammer-web/env';
+import type { LiquidLook } from 'wallhammer-web/env';
+import type { Renderer } from 'wallhammer-web/render';
+import { LiquidBackdropLayer, LiquidLensLayer, LiquidNearLayer, LiquidShaftsLayer } from 'wallhammer-web/runtime';
+declare const renderer: Renderer;
+declare const NEAR_MATERIAL: MaterialDesc; // its shaders include MEDIUM_GLSL, liquidGlsl(look), WAVES_GLSL, liquidRipplesGlsl()
+declare const seed: number, eye: Vec3, origin: Vec3, timeS: number;
+
+const look: LiquidLook = {
+  extinction: [0.32, 0.055, 0.06],
+  body: [0.03, 0.24, 0.34],
+  lightLoss: [0.3, 0.05, 0.03],
+  farShallow: [0.14, 0.41, 0.49],
+  farDeep: [0.03, 0.12, 0.27],
+};
+const surface = new LiquidSurface({ radiusM: 100_000, wind: { speedMs: 6, fromDeg: 240 }, look });
+const near = new LiquidNearLayer(renderer, surface, NEAR_MATERIAL);
+const backdrop = new LiquidBackdropLayer(renderer, surface);
+const shafts = new LiquidShaftsLayer(renderer, surface);
+const lens = new LiquidLensLayer(renderer, surface);
+// every frame, with the eye and the render origin from the sphere's centre:
+const { common, water } = surface.uniforms(seed, eye, origin, timeS);
+near.uniforms = water;
+lens.uniforms = water;
+backdrop.uniforms = common;
+shafts.uniforms = common;
+console.log(surface.state.aboveSurfaceM, surface.clearM);
+```
+
+The `planet` example draws its sea this way (`examples/planet/src/sea.ts`): the backdrop before
+the streamed world, the near surface after it, the shafts after the water and the lens last.
+
+## The ground of a sphere from patch cells
+
+`env` holds the shader parts of a ground streamed as sphere patch cells (`SPHERE_PATCH_ATTRIBS` and
+`SPHERE_PATCH_COVER_ATTRIBS`), with a cover of objects that lifts the surface where it stands for them from afar
+(`env/sphere-ground.ts`). The fragment shader, with its palette and colours, stays with the content.
+
+- `sphereGroundVs(options)` is the vertex shader of the colour pass, `sphereGroundDepthVs(options)` that of the shadow
+  pass (the surface lifted as the colour pass lifts it), `DEPTH_ONLY_FS` a fragment shader that writes only depth.
+  `thinRank` and `thinFrom` set the share of the far look by level (`sphereCoverThinGlsl`, also for the objects'
+  own shaders: `coverShareAt`, `thinKeep`). The hooks are four GLSL functions in `lift`: `coverLift`,
+  `coverLiftShare`, `coverElevation` and `coverShade`.
+- The varyings for the content's fragment shader: `v_world`, `v_normal`, `v_color` (alpha: 0.5 or more under the
+  level, a number of the content's above it), `v_cover`, `v_lift` (x the lift, y the sine of the view's angle above
+  the ground, z the share of the far look, w the ground's height), `v_air`, `v_airThrough`.
+- **The waterline**, opt-in: a test of the interpolated alpha (`step(0.5, v_color.a)`) makes teeth along every
+  triangle that crosses the level, and the content's number above the level is mixed with the marks of the vertices
+  under it. With `waterline: true` the vertex shader also hands over `v_landMark`, and `SPHERE_GROUND_WATERLINE_GLSL`
+  gives `groundUnder(p, blendM)`, the share under the level by the fragment's own height (over ± `blendM`, at least a
+  pixel), and `groundLandAlpha()`, the alpha of the vertices above the level alone. Without it the program is unchanged.
+
+<!-- check: wrap -->
+```ts
+import type { MaterialDesc } from 'wallhammer-web/base';
+import { DEPTH_ONLY_FS, SPHERE_GROUND_WATERLINE_GLSL, sphereGroundDepthVs, sphereGroundVs } from 'wallhammer-web/env';
+declare const LIFT_GLSL: string; // defines coverLift, coverLiftShare, coverElevation, coverShade
+declare const MY_FS_HEAD: string, MY_FS_MAIN: string; // the content's look; MY_FS_MAIN reads groundUnder(v_world, 0.05)
+declare const material: Omit<MaterialDesc, 'passes'>;
+
+const ground = { thinRank: [0.12, 0.25, 0.5, 1], thinFrom: [0.75, 0.6, 0.55, 0.5], lift: LIFT_GLSL };
+const desc: MaterialDesc = {
+  ...material,
+  passes: {
+    color: { vs: sphereGroundVs({ ...ground, waterline: true }), fs: `${MY_FS_HEAD}${SPHERE_GROUND_WATERLINE_GLSL}${MY_FS_MAIN}` },
+    shadow: { vs: sphereGroundDepthVs(ground), fs: DEPTH_ONLY_FS },
+  },
+};
+console.log(desc.name);
+```
+
+The `planet` example builds its ground this way.
 
 ## Levels of detail with a fade
 
@@ -688,6 +789,43 @@ layer.view(eye, [gain]);
 `nearScale()`, `nearAxes(base)` (upright along `localFrame`, turned about up) and `nearPoint(unitPos)`, the vertex in
 render space. The unit shape stands on y = 0 and reaches y = 1; width scales x and z, height y.
 
+### Details streamed round the eye
+
+`NearDetailStream` (`runtime/near-details.ts`) runs such a layer on a sphere: which squares of a `NearSquareGrid` are
+wanted, the jobs that make their records, the squares dropped behind the eye and the gain.
+
+- The kinds are made in groups (`NearDetailGroup`: a mask, its kinds, a reach), one job per square and group. Per
+  frame a group wants the squares its reach + `wantM` (25 m) touches and drops those beyond its reach + `dropM`
+  (60 m); the missing ones start nearest first, up to `inFlight` (2) jobs on the `pool` (or one square a frame on the
+  main thread through `generate`). `idleWorkersOnly` starts a job only on an idle worker with nothing waiting.
+- A group's gain is `lift` × the least, over its wanted squares not there yet, of clamp((distance − `nearM`) / reach,
+  0, 1). It falls at once and rises by at most `rise` (0.04) a frame, so no square appears inside the visible reach.
+- From `offM` above the ground, or with no eye, every square is dropped. The content (shapes, material, the function
+  that makes a square's records, the wind) stays with the caller.
+
+<!-- check: wrap -->
+```ts
+import type { MaterialDesc, Vec3 } from 'wallhammer-web/base';
+import type { NearSquareGrid } from 'wallhammer-web/gen-core';
+import type { Layer, NearKindDraw, Renderer } from 'wallhammer-web/render';
+import { NearDetailStream } from 'wallhammer-web/runtime';
+import type { NearDetailReply } from 'wallhammer-web/runtime';
+declare const renderer: Renderer, before: Layer, grid: NearSquareGrid, MY_MATERIAL: MaterialDesc;
+declare const kinds: NearKindDraw[];
+declare function makeSquare(face: number, i: number, j: number, mask: number): NearDetailReply;
+declare const eye: Vec3, dir: Vec3, heightM: number, timeS: number, windDir: Vec3;
+
+const details = new NearDetailStream({
+  renderer, material: MY_MATERIAL, kinds, before, grid,
+  groups: [{ mask: -1, kinds: kinds.map((_, k) => k), reachM: 60 }],
+  offM: 300,
+  generate: (s, mask) => makeSquare(s.face, s.i, s.j, mask),
+});
+// every frame, after the render origin has moved:
+details.frame({ eye, dir, heightM, timeS, windDir, windStrength: 0.5 });
+console.log(details.settled(), details.stats().squares);
+```
+
 ## Noise volumes
 
 `NoiseVolumes` (in `render`) makes two tileable noise volumes on the graphics card from a seed, for volumetric media such as the [volumetric clouds](environment.md#volumetric-clouds). Both repeat in all three axes.
@@ -807,6 +945,24 @@ const engine = createEngine({ ...options, maxPixelRatio: 1.5, renderer: { ...opt
 console.log(engine.view.dpr, engine.device.mainSamples());
 ```
 
+## A grade of the picture
+
+`createEngine({ grade })` (or `device.grade`, a `DisplayGrade` or null) grades the finished picture when the frame is shown, in the copy of the offscreen main target to the canvas (`Device.present`). In this order: `exposure` multiplies the colour, `lift` raises the dark end toward a colour and `gain` multiplies the result, `gamma` bends the middle (above 1 brighter), `saturation` moves the colour away from its grey and `contrast` away from the middle grey. `DEFAULT_DISPLAY_GRADE` changes nothing. The engine keeps the object it was given, so its values may change in any frame. The grade needs the offscreen main target: the reversed and logarithmic depth modes have it, and in the standard mode `createEngine` turns on the readable depth for it (by hand: `readableDepth`). Without a grade the copy is the same as before.
+
+<!-- check: wrap -->
+```ts
+import { DEFAULT_DISPLAY_GRADE } from 'wallhammer-web/gpu';
+import type { DisplayGrade } from 'wallhammer-web/gpu';
+import { createEngine } from 'wallhammer-web/runtime';
+import type { EngineOptions, EngineView } from 'wallhammer-web/runtime';
+
+declare const options: EngineOptions<EngineView>;
+const grade: DisplayGrade = { ...DEFAULT_DISPLAY_GRADE, saturation: 1.1, lift: [0.01, 0.01, 0.03] };
+const engine = createEngine({ ...options, grade });
+grade.exposure = 0.9; // at any time
+engine.invalidate();
+```
+
 ## Allocation-free frames
 
 A frame of a still scene allocates nothing in the renderer: the Frame block is written in place, the shadow key is compared as numbers and the view key, and the renderer hands its own scratch to the view (`View.axes(out)`, `View.cornerRays(out)`, `View.viewProj(…, out)`, `depthViewProj(…, out)`). These `out` arguments are optional: a rig that ignores them still works and allocates as before. `PerspectiveOrbitRig` and `SteppedOrthoRig` honour them and build `key()` only when a number in it changed; `FreeRig` takes `eye(out)` only (its up comes from the world shape). `SkyLayer` and the frame loop allocate nothing per frame either. Still allocating per frame: the returned `FrameStats` object, the environment (`Environment.frame` and the slots' `pack`), and a refit (the light fit and the view's cull volume).
@@ -884,6 +1040,7 @@ What is not restored: anything drawn into a texture outside a bake, and GPU obje
   | 1–11 | the layer that is drawing (`MeshLayer` starts at 1) | during its own draws |
   | 2–4 | the data view's ground (`tools`) | during its draws; next to `MeshLayer`'s units starting at 1 |
   | 7–11 | `CloudVolumeLayer`: the noise volumes, the weather map, the scene's depth, its own targets | during its own draws in `prepare` and the colour pass |
+  | 11 | the liquid's near surface and shafts: the scene's depth (`LIQUID_SCENE_UNIT`) | during their own draws |
   | 12 | the cloud shadow texture (`CLOUD_SHADOW_UNIT`) | the whole colour pass, with `cloudShadows` |
   | 13 | nobody: the spare unit the engine's layers select after their binds | keep it empty |
   | 14 | the atmosphere's tables (`ATMOSPHERE_TABLE_UNIT`) | the whole colour pass, with `atmosphere` |

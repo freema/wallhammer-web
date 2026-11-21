@@ -16,6 +16,7 @@ import type { EnvSlot } from '../base/env-slot.ts';
 import { FrameLoop, bindOrbitInput, observeCanvasSize, syncCanvasSize, watchContextLoss } from '../platform/index.ts';
 import type { Canvas, CanvasSizeTarget, LoopClock, OrbitControl } from '../platform/index.ts';
 import { Device, createContext } from '../gpu/index.ts';
+import type { DisplayGrade } from '../gpu/index.ts';
 import { Renderer } from '../render/index.ts';
 import type { Layer, RendererOptions } from '../render/index.ts';
 import { Environment, assembleFrameBlock, atmosphereSlot, cloudShadowSlot, skySlot } from '../env/index.ts';
@@ -75,6 +76,12 @@ export interface EngineOptions<V extends EngineView> extends HeadlessEngineOptio
    * light from `atmosphereLight`, both from `<atmosphere>`. Use it in the place of `sky`, not together with it.
    */
   atmosphere?: boolean | Partial<AtmosphereParams>;
+  /**
+   * A grade of the finished picture (`DisplayGrade`: exposure, lift, gain, gamma, saturation, contrast), applied when
+   * the frame is shown. The engine keeps the object as `device.grade`: change its values at any time. In the standard
+   * depth mode it makes the main target an offscreen one, as `RendererOptions.readableDepth` does. Default: none.
+   */
+  grade?: DisplayGrade;
   /**
    * Cloud shadows from a texture (default off): the slot `cloudShadowSlot` in the Frame block and the layer that draws
    * the texture (`Engine.cloudShadows`). `cloudLight` then reads one texel where the texture reaches (a square of 24
@@ -221,8 +228,9 @@ export class Engine<V extends EngineView = EngineView> extends HeadlessEngine {
     // logarithmic mode is created without its own depth buffer.
     // Precipitation with landing marks reads the depth, which a canvas in the standard mode cannot give.
     const precipitation = o.precipitation === true ? {} : o.precipitation ? o.precipitation : null;
-    const readableDepth = (o.renderer?.readableDepth ?? false) || (precipitation !== null && precipitationNeedsDepth(precipitation, o.view));
+    const readableDepth = (o.renderer?.readableDepth ?? false) || (precipitation !== null && precipitationNeedsDepth(precipitation, o.view)) || o.grade !== undefined;
     this.device = new Device(createContext(o.canvas, o.renderer?.depth ?? 'standard', o.renderer?.samples, readableDepth));
+    if (o.grade) this.device.grade = o.grade;
     this.maxPixelRatio = o.maxPixelRatio;
     if (o.contextRecovery) {
       // Before the first upload: the device keeps only what is uploaded from now on.

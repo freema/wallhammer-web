@@ -197,6 +197,38 @@ Which to call in a material:
 
 At the scale of a planet `applyFog` has two catches. The fog layer is measured above the base sphere (`env.fogLayer = { bottomY: 0, topY: 1500 }` is 0–1500 m over it). And fog is applied by height, not distance, so fog that suits the ground also covers the planet seen from orbit: set `weather.fog` from the eye's place and fade it out with the eye's height, as the system example does.
 
+### A painted sky
+
+The computed air gives the colours of real air. For a picture with colours of its own, make the slot with `paint` (`AtmospherePaint`): `createEngine({ atmosphere: { ...params, paint } })` or `atmosphereSlot({ paint })`. Whether a slot has a paint is fixed when it is made: only then are its shader code (`WH_ATM_PAINT`) and its six Frame members there, and a slot without one is unchanged. The values of the object are read every frame, so the app may change them by the hour and the place.
+
+- `amount` (0–1) is the share of the painted colours; 0 shows the computed air alone. Fade it out with the eye's height to keep the computed air from orbit.
+- `zenith`, `horizon` and `curve` are the sky: a gradient by the elevation above the horizon the eye sees from its height (`curve` below 1 keeps the horizon's colour in a narrow band).
+- `glow`, `glowAmount` and `glowTightness` are a glow round the sun, in the sky and in the air in front of far things; `sun` is the colour of the sun's disc (its size is `sunDiscRad` of the params).
+- The air in front of the scene takes the horizon's colour in the place of the computed light, by as much as the computed air hides (so distance and height still follow the medium).
+- `haze`, `hazePerM`, `hazeScaleM` and `hazeBaseM` add a haze that is densest at and below a height above the ground sphere and thins above it: a mist in the valleys, a pale band toward the horizon. `hazePerM` 0 is none. `hazeStartM` keeps the first metres from the eye free of it (only the way beyond them counts), so what stands near keeps its own colours; omitted or 0, the haze starts at the eye.
+
+All colours are screen-space colours. Materials need no change: `atmosphereApply` applies the paint, in both of its forms, and so do the clouds through it. A shader that draws the sky itself (a reflection) calls `atmospherePaintSky(dir, atmDisplay(light))` under `#ifdef WH_ATM_PAINT`. The light on surfaces (`atmosphereLight`) stays the computed one; `sunLight`, `skyLightGain` and `nightLight` tint it.
+
+<!-- check: wrap -->
+```ts
+import { DEFAULT_ATMOSPHERE_PAINT } from 'wallhammer-web/env';
+import type { AtmospherePaint } from 'wallhammer-web/env';
+import { createEngine } from 'wallhammer-web/runtime';
+import type { EngineOptions, EngineView } from 'wallhammer-web/runtime';
+
+declare const options: EngineOptions<EngineView>;
+const paint: AtmospherePaint = { ...DEFAULT_ATMOSPHERE_PAINT, amount: 1, zenith: [0.11, 0.37, 0.82], horizon: [0.65, 0.85, 0.95] };
+const engine = createEngine({ ...options, atmosphere: { paint } });
+// At any time: a dusk, with a mist 60 m deep over ground 200 m high.
+paint.zenith = [0.1, 0.16, 0.4];
+paint.horizon = [0.95, 0.6, 0.45];
+paint.haze = [0.9, 0.7, 0.7];
+paint.hazePerM = 1 / 2000;
+paint.hazeScaleM = 60;
+paint.hazeBaseM = 200;
+engine.invalidate();
+```
+
 ## Weather
 
 `env.weather` (`WeatherState`) is six numbers. The engine does not simulate weather: the app sets them, from a preset, from data or from its own rules.
@@ -623,6 +655,16 @@ if (engine.cloudVolume) {
 
 `createEngine` keeps the layer after every layer added through `engine.add`, before the precipitation; `engine.moveCloudsBefore(layer)` puts it before `layer` (water, glass, the air shells of a planet) and keeps it there. `enabled = false` turns it off at run time and shows the shell in full. `noise` and `weather` are its noise volumes and cloud weather map.
 
+`style` (`CloudVolumeStyle`, `DEFAULT_CLOUD_VOLUME_STYLE` changes nothing) is the look of the clouds over what the frame's light gives; change it at any time, and the shell that draws the volume's clouds follows. `edge` above 1 makes the density rise faster from a cloud's edge: crisp outlines and solid bodies in the place of soft ones (the cloud shadows follow). `selfShadow` scales how much the clouds shade themselves, `even` (0–1) takes the bright rim toward the sun away, and `lit` and `shade` multiply the sun's light and the sky's and ground's light in the clouds by channel: the colour of their sunlit sides and of their shaded sides and bases.
+
+<!-- check: wrap -->
+```ts
+import type { Engine, EngineView } from 'wallhammer-web/runtime';
+
+declare const engine: Engine<EngineView>;
+if (engine.cloudVolume) engine.cloudVolume.style = { edge: 6, selfShadow: 0.8, even: 0.6, lit: [1.05, 1.04, 1], shade: [1.3, 1.35, 1.75] };
+```
+
 ## Fog
 
 Fog is `weather.fog` inside a height layer, `env.fogLayer = { bottomY, topY }`. The default layer is 0 to 1 m, so set it when the scene is known (for example from the terrain's lowest and highest point). `applyFog(display, worldPos)` mixes the colour toward the fog colour by `fog × (0.5 + 0.38 × valley + 0.24 × (wisp − 0.5))`, at most 0.94:
@@ -903,3 +945,23 @@ Every example runs at <https://freema.github.io/wallhammer-web/>. Their URL hash
 | [endless](https://freema.github.io/wallhammer-web/endless/#hour=15&w=clouds) | Volumetric clouds and their shadows over a flat streamed landscape, on by default; `#vol=0` goes back to the flat deck. |
 | [endless, sphere with air](https://freema.github.io/wallhammer-web/endless/sphere.html#atm=1) | The atmosphere and `Environment.observer` on a sphere of 100 km; `[` and `]` move the sun. |
 | [system, clouds of Hearth](https://freema.github.io/wallhammer-web/system/#body=Hearth&alt=8000&pitch=28) | The cloud cover by place, the volumetric clouds with the cloud shell as their far layer, and their shadows from a texture; `&volume=0` keeps the cloud shell alone. Add `&cover=0.8` for one closed deck over the whole planet (rain from 0.6), `&clouds=0` to hide the clouds; `C` toggles them. Whether the place is in daylight depends on the time of the system, `t`. |
+
+## A scene that plays in a circle
+
+`loopWrap`, `loopClock`, `loopTurns` and `loopFade` (in `env`, `env/loop.ts`) are the arithmetic of a scene that ends
+where it began: the time brought into one pass, the animation clock (`Environment.time`) that runs `clockS` seconds a
+pass from `baseS` (a sine of the shaders whose period divides `clockS` closes with the loop), a sine that passes a whole
+number of times in a pass, and the share of a fade over to the same motion one pass earlier, with no speed at either
+end. `LiquidSurface.setLoop` makes a liquid's waves close with the same loop.
+
+<!-- check: wrap -->
+```ts
+import { loopClock, loopFade, loopTurns, loopWrap } from 'wallhammer-web/env';
+declare const t: number;
+
+const loopS = 60;
+const clock = loopClock(t, loopS, 20 * Math.PI, 200 * Math.PI); // ten turns of a sine of 1 rad/s a pass
+const sway = 0.1 * loopTurns(t, 3, loopS); // three swings a pass
+const blend = loopFade(t, loopS); // weight of the motion one pass back
+console.log(loopWrap(t, loopS), clock, sway, blend);
+```

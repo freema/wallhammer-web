@@ -175,6 +175,9 @@ void main() {
   if (u_atmMarch > 0.5) light = atmosphereSky(dir, through, ground);
   else light = atmSkyRead(dir, through, ground);
   vec3 c = atmDisplay(light);
+#ifdef WH_ATM_PAINT
+  c = atmospherePaintSky(dir, c);
+#endif
   // Behind the air, where the ground sphere is not in the way: the stars, lost in a bright sky, and the sun's disc,
   // so bright that only a long way through the air gives it a colour.
   float behind = 1.0 - ground;
@@ -183,7 +186,12 @@ void main() {
   c += vec3(0.88, 0.92, 1.0) * through * (atmStars(dir, pa) * u_atmTune.w * dark * dark * behind);
   float rs = u_atmShell.w;
   float disc = (1.0 - smoothstep(rs - pa, rs + pa, length(dir - u_atmSun.xyz))) * behind;
-  c += (1.0 - c) * (1.0 - exp(-through * 30.0)) * disc;
+  vec3 lit = c + (1.0 - c) * (1.0 - exp(-through * 30.0));
+#ifdef WH_ATM_PAINT
+  // The painted disc: one colour while any of the sun passes the air.
+  lit = mix(lit, u_atmPaintSun.rgb, u_atmPaintZenith.w * (1.0 - exp(-max(through.r, through.g) * 30.0)));
+#endif
+  c = mix(c, lit, disc);
   o_color = vec4(c, 1.0);
 }`;
 

@@ -210,6 +210,7 @@ uniform highp sampler2D u_cvWeather;
 uniform vec4 u_cvTile;
 #endif
 uniform vec4 u_cvScale; // x 1 / shape tile, y 1 / wide tile, z 1 / detail tile, w wide cover
+uniform float u_cvEdge; // CloudVolumeStyle.edge − 1: how much faster the density rises from a cloud's edge
 // The weather of the place over a point: x cover, y deck share, z precipitation.
 vec3 cvWeather(vec3 rel) {
 #ifdef WH_LOCAL_UP
@@ -241,9 +242,10 @@ vec2 cvBaseShare(float shape, float lod, float wide, vec3 weather, float h) {
   float m = mix(cloudVolumeRainShape(shape, weather.z), ${SHAPE_MEAN}, lod) * p;
   float w = ${SHAPE_SPREAD} * lod * p;
   if (m + w <= t) return vec2(0.0);
-  if (m - w >= t) return vec2(min((m - t) / (1.0 - t), 1.0), 1.0);
+  if (m - w >= t) return vec2(min((m - t) / (1.0 - t) * (1.0 + u_cvEdge), 1.0), 1.0);
   float e = m + w - t;
-  return vec2(e * e / (4.0 * w * (1.0 - t)), e / (2.0 * w));
+  float share = e / (2.0 * w);
+  return vec2(min(e * e / (4.0 * w * (1.0 - t)) * (1.0 + u_cvEdge), share), share);
 }
 float cvBase(float shape, float lod, float wide, vec3 weather, float h) {
   return cvBaseShare(shape, lod, wide, weather, h).x;
@@ -261,9 +263,12 @@ float cvStepThrough(float sigma, float f, float dt) {
  * cloud shell: `cvLightAt` once per pixel at a point of the layer, `cvSampleLight` for every sample. The sun at the
  * clouds (through the air where there is an atmosphere), the sky's light from above, greyed by the cloud around, and
  * the ground's from below. `u_cvLook`: y gain that undoes the frame's overcast dimming of the sun, z ambient gain.
+ * `u_cvLit`, `u_cvShade`: the layer's `CloudVolumeStyle` (`CloudVolumeLayer.styleUniforms`); unset, the default look.
  */
 export const VOLUME_LIGHT_GLSL = /* glsl */ `
 uniform vec4 u_cvLook;
+uniform vec4 u_cvLit;   // CloudVolumeStyle as differences from 1: rgb the sun's light in the clouds, w their own shadow
+uniform vec4 u_cvShade; // rgb the sky's and the ground's light in the clouds, w how evenly they scatter the sun (0–1)
 vec3 cvL;
 vec3 cvSun;
 vec3 cvSkyGrey;
@@ -279,7 +284,7 @@ float cvPhase(float c, float k) { return mix(cvHg(c, 0.75 * k), cvHg(c, -0.3 * k
 // The three phase values of a view ray (ever softer forward scattering of light scattered a few times).
 vec3 cvPhases(vec3 dir) {
   float c = dot(dir, cvL);
-  return vec3(cvPhase(c, 1.0), cvPhase(c, 0.5), cvPhase(c, 0.25));
+  return mix(vec3(cvPhase(c, 1.0), cvPhase(c, 0.5), cvPhase(c, 0.25)), vec3(1.0), u_cvShade.w);
 }
 // The light at the clouds round a point (relative to the reference point, and in render space): the frame's light
 // (the sun, or the moon at night), or with the atmosphere the sun through the air, the sky's light at that height
@@ -321,6 +326,7 @@ void cvLightAt(vec3 rel, vec3 world) {
 // density, h the height in the layer (0–1), weather the place's (cover, deck share, precipitation), ph cvPhases,
 // cosT the cosine between the view ray and the light.
 vec3 cvSampleLight(float tau, float d, float h, vec3 weather, vec3 ph, float cosT) {
+  tau *= 1.0 + u_cvLit.w;
   // Light scattered once or a few times (ever less extinction, ever softer forward scattering), and light that
   // diffused through the cloud, which falls off slowly with the optical depth.
   float direct = ph.x * exp(-tau) + 0.5 * ph.y * exp(-0.5 * tau) + 0.25 * ph.z * exp(-0.25 * tau);
@@ -330,7 +336,7 @@ vec3 cvSampleLight(float tau, float d, float h, vec3 weather, vec3 ph, float cos
   // The sky's light falls off toward the base, the more so under a closing deck (the cloud above shades it) and
   // under a raining cloud, whose heavy base is darker still and gets less light from the ground.
   float shade = mix(0.4 - 0.22 * smoothstep(0.55, 0.9, weather.x) - 0.2 * weather.z, 1.0, h);
-  vec3 c = cvSun * (direct + diffuse) + mix(cvSkyBlue, cvSkyGrey, h) * shade + cvGround * (1.0 - h) * (0.7 - 0.4 * weather.z);
+  vec3 c = cvSun * (1.0 + u_cvLit.rgb) * (direct + diffuse) + (mix(cvSkyBlue, cvSkyGrey, h) * shade + cvGround * (1.0 - h) * (0.7 - 0.4 * weather.z)) * (1.0 + u_cvShade.rgb);
   // A raining cloud is a thick, water-laden column: little of the light gets through to its lower part, which turns
   // a dark slate grey (a little more than a quarter of the light at its base under the heaviest rain), its top grey.
   // Already light rain shows (the square root of the precipitation).
@@ -869,6 +875,34 @@ export interface CloudFarLayer {
   volume?: CloudVolumeLayer | null;
 }
 
+/**
+ * The look of the clouds' light, over what the frame's light gives (`CloudVolumeLayer.style`).
+ */
+export interface CloudVolumeStyle {
+  /**
+   * How fast the density rises from a cloud's edge inward, a multiple (the density stays at most 1). Above 1 the
+   * clouds have crisp edges and solid bodies; their shadows follow.
+   */
+  edge: number;
+  /**
+   * How much the clouds shade themselves: a multiple of the optical depth toward the light. Below 1 the sunlit
+   * side and the inside stay bright in dense clouds (dense clouds have crisp edges), above 1 they darken sooner.
+   */
+  selfShadow: number;
+  /**
+   * How evenly the clouds scatter the sun's light, 0–1: 0 as water drops do (a bright rim toward the sun, darker
+   * with the sun behind the eye), 1 the same from every side (no rim).
+   */
+  even: number;
+  /** A multiple of the sun's light in the clouds, by channel: their lit sides. */
+  lit: readonly [number, number, number];
+  /** A multiple of the sky's and the ground's light in the clouds, by channel: their shaded sides and bases. */
+  shade: readonly [number, number, number];
+}
+
+/** The style that changes nothing. */
+export const DEFAULT_CLOUD_VOLUME_STYLE: CloudVolumeStyle = { edge: 1, selfShadow: 1, even: 0, lit: [1, 1, 1], shade: [1, 1, 1] };
+
 /** What the layer keeps of a frame's view for the next one. */
 interface FrameCamera {
   valid: boolean;
@@ -901,6 +935,8 @@ export class CloudVolumeLayer implements Layer, CloudShadowSource {
   readonly name: string = 'cloud-volume';
   /** The model: heights, extinction, noise scales. Change it at any time. */
   readonly shape: CloudVolumeShape;
+  /** The look of the clouds' light. Change it at any time; the cloud shell that draws this volume's clouds follows. */
+  style: CloudVolumeStyle = { ...DEFAULT_CLOUD_VOLUME_STYLE };
   /** How finely the layer is marched. Change it at any time; a new `scale` makes new targets. */
   quality: CloudVolumeQuality;
   fadeFromM: number;
@@ -1045,6 +1081,7 @@ export class CloudVolumeLayer implements Layer, CloudShadowSource {
       u_cvTile: { vec4: this.weather.tile },
       u_cvScale: { vec4: [1 / s.shapeSizeM, 1 / s.wideSizeM, 1 / s.detailSizeM, s.wideCover] },
       u_cvShadow: { vec4: [Math.max(1, Math.min(32, Math.round(this.shadowSamples))), this.weight, 0, 0] },
+      u_cvEdge: { float: Math.max(0.01, this.style.edge) - 1 },
     };
   }
 
@@ -1076,6 +1113,17 @@ export class CloudVolumeLayer implements Layer, CloudShadowSource {
       u_cvScale: { vec4: [1 / s.shapeSizeM, 1 / s.wideSizeM, 1 / s.detailSizeM, s.wideCover] },
       u_cvFar: { vec4: [this.far[0], this.far[1], this.weight, 0] },
       u_cvLook: { vec4: [0, this.gain, AMBIENT_GAIN, 1] },
+      ...this.styleUniforms(),
+    };
+  }
+
+  /** The uniforms of `style` for `VOLUME_LIGHT_GLSL`. */
+  styleUniforms(): Uniforms {
+    const { edge, selfShadow, even, lit, shade } = this.style;
+    return {
+      u_cvEdge: { float: Math.max(0.01, edge) - 1 },
+      u_cvLit: { vec4: [lit[0] - 1, lit[1] - 1, lit[2] - 1, Math.max(0, selfShadow) - 1] },
+      u_cvShade: { vec4: [shade[0] - 1, shade[1] - 1, shade[2] - 1, Math.min(1, Math.max(0, even))] },
     };
   }
 
@@ -1212,6 +1260,7 @@ export class CloudVolumeLayer implements Layer, CloudShadowSource {
       u_cvTile: { vec4: this.weather.tile },
       u_cvScale: { vec4: [1 / s.shapeSizeM, 1 / s.wideSizeM, 1 / s.detailSizeM, s.wideCover] },
       u_cvLook: { vec4: [q.detail ? s.erosion : 0, gain, AMBIENT_GAIN, this.weight] },
+      ...this.styleUniforms(),
       u_cvFar: { vec4: this.far },
       // With a history every texel is marched every fourth frame: its jitter moves on once per visit.
       u_cvMarch: { vec4: [Math.max(1, Math.min(128, Math.round(q.steps))), lightSteps, reach / (lightSteps * lightSteps), history ? Math.floor(this.index / 4) : this.index] },

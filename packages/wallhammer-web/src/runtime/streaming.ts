@@ -52,6 +52,14 @@ export interface StreamedWorldOptions {
   originAxes?: OriginAxes;
   /** Upload time per frame in ms (at least one cell per frame is uploaded). Default 3. */
   uploadMsPerFrame?: number;
+  /**
+   * Uploads the cells fetched ahead of need as well (the children a ticket will split next, the cells of `preload`
+   * tickets), in what the wanted uploads leave of `uploadMsPerFrame`. They wait on the GPU without being drawn and
+   * are on the screen in the very step a ticket wants them: a cut to a preloaded place shows it complete in its
+   * first frame. Their GPU bytes are outside the manager's budgets until then. Default off: such cells wait on the
+   * CPU and are uploaded when wanted.
+   */
+  uploadAhead?: boolean;
   /** Main-thread generation time per frame in ms, for blocking providers (at least one job per frame). Default 6. */
   blockingMsPerFrame?: number;
   /** Called when streaming work wants another frame (a job finished, or more is waiting). */
@@ -153,6 +161,11 @@ export class StreamedWorld implements Layer {
   textures: Record<string, Record<string, Texture | null>>;
   materialUniforms: Record<string, Uniforms>;
   private readonly gpuCeiling: number | undefined;
+  private readonly uploadAhead: boolean;
+  /** Cells on the GPU ahead of need (`uploadAhead`): uploaded, not yet RESIDENT for the manager, with their bytes. */
+  private readonly aheadGpu = new Map<string, number>();
+  private aheadBytes = 0;
+  private aheadWaiting = 0;
   private readonly onResident: StreamedWorldOptions['onResident'];
   private readonly onReleased: StreamedWorldOptions['onReleased'];
   /** Uniforms set for every material before its cells are drawn. */
@@ -168,6 +181,12 @@ export class StreamedWorld implements Layer {
   private tickets: Ticket[] = [];
   private readonly cpu = new Map<string, CellContent>();
   private readonly gpu = new Map<string, GpuCell>();
+  /**
+   * The level-of-detail meshes of each archetype, uploaded once on first use and shared by the batches of every cell
+   * (each batch draws them with its own instance buffer). They stay until `dispose`; the device counts them, so with a
+   * GPU ceiling they are part of what everything but the cells holds.
+   */
+  private readonly archetypeMeshes = new Map<string, Mesh[]>();
   private readonly running = new Map<string, AbortController>();
   private readonly blocking: BlockingJob[] = [];
   private readonly arrived: { req: CellRequest; result: CellResult }[] = [];
@@ -193,6 +212,7 @@ export class StreamedWorld implements Layer {
     this.renderer = o.renderer;
     this.manager = new StreamingManager(o.gpuCeilingBytes === undefined ? o.config : { ...o.config, gpuBudgetBytes: o.gpuCeilingBytes });
     this.gpuCeiling = o.gpuCeilingBytes;
+    this.uploadAhead = o.uploadAhead ?? false;
     this.textures = o.textures ?? {};
     this.materialUniforms = o.materialUniforms ?? {};
     this.onResident = o.onResident;
@@ -232,8 +252,12 @@ export class StreamedWorld implements Layer {
     for (const key of [...this.gpu.keys()]) {
       const g = this.gpu.get(key)!;
       this.gpu.delete(key);
-      this.onReleased?.(g.cell);
+      if (!this.aheadGpu.has(key)) this.onReleased?.(g.cell);
     }
+    this.aheadGpu.clear();
+    this.aheadBytes = 0;
+    // The shared archetype meshes died with the context as well: made again on their next use.
+    this.archetypeMeshes.clear();
     this.manager.dropResident();
     this.drawList = [];
     this.viewList = [];
@@ -277,6 +301,16 @@ export class StreamedWorld implements Layer {
     return this.manager.settled && this.pendingUploads.length === 0 && this.drawList.length === this.manager.drawn().length;
   }
 
+  /**
+   * True when the image is settled (`settled`) and everything the tickets fetch ahead of need is loaded as well
+   * (`StreamingManager.prefetched`): with `preload` tickets along a coming path (`preloadTickets`), the cells they
+   * ask for are on the CPU and only wait for their upload, which happens within `uploadMsPerFrame` once the viewer
+   * wants them on the screen.
+   */
+  get preloaded(): boolean {
+    return this.settled && this.manager.prefetched && this.aheadWaiting === 0;
+  }
+
   /** True while jobs run or wait, or uploads wait. */
   get busy(): boolean {
     const c = this.manager.counters();
@@ -310,7 +344,8 @@ export class StreamedWorld implements Layer {
     for (const req of this.failedJobs.splice(0)) m.fail(req);
 
     // 2. Decisions. With a GPU ceiling the manager is told what everything but the cells holds right now.
-    if (this.gpuCeiling !== undefined) m.gpuReserveBytes = Math.max(0, this.renderer.device.memory().total - m.counters().gpuBytes);
+    // Cells uploaded ahead of need are neither the manager's nor part of the reserve.
+    if (this.gpuCeiling !== undefined) m.gpuReserveBytes = Math.max(0, this.renderer.device.memory().total - m.counters().gpuBytes - this.aheadBytes);
     const a = m.update(this.tickets);
     for (const c of a.cancels) {
       this.running.get(c.key)?.abort();
@@ -345,6 +380,20 @@ export class StreamedWorld implements Layer {
     // A blocking provider resolves at once, but the promise callbacks run after this frame: take them next frame.
 
     // 4. Uploads within the budget (at least one), most urgent first.
+    // A wanted cell that was uploaded ahead of need is there already: the manager is told, nothing is uploaded.
+    if (this.aheadGpu.size > 0) {
+      const there: { cell: CellId; gpuBytes: number }[] = [];
+      for (const c of a.uploads) {
+        const k = cellKey(c);
+        const bytes = this.aheadGpu.get(k);
+        if (bytes === undefined || !this.gpu.has(k) || !this.cpu.has(k)) continue;
+        this.aheadGpu.delete(k);
+        this.aheadBytes -= bytes;
+        there.push({ cell: c, gpuBytes: bytes });
+      }
+      m.residentAll(there);
+      for (const { cell } of there) this.onResident?.(cell, this.gpu.get(cellKey(cell))!.meshes, this.cpu.get(cellKey(cell))!);
+    }
     this.pendingUploads = a.uploads.filter((c) => this.cpu.has(cellKey(c)) && !this.gpu.has(cellKey(c)));
     const u0 = this.now();
     let ups = 0;
@@ -360,6 +409,27 @@ export class StreamedWorld implements Layer {
       this.totals.upMs += this.now() - tu;
       this.totals.upCells++;
       ups++;
+    }
+    if (this.uploadAhead) {
+      // Cells fetched ahead of need: uploaded in what is left of the budget, dropped once nothing asks for them.
+      const ahead = m.ahead();
+      const asked = new Set(ahead.map(cellKey));
+      for (const k of [...this.aheadGpu.keys()]) if (!asked.has(k)) this.release(k);
+      const waiting = ahead.filter((c) => this.cpu.has(cellKey(c)) && !this.gpu.has(cellKey(c)));
+      while (waiting.length > 0 && this.pendingUploads.length === 0 && this.now() - u0 < this.uploadMs) {
+        const c = waiting.shift()!;
+        const k = cellKey(c);
+        const tu = this.now();
+        const g = this.upload(this.cpu.get(k)!);
+        this.gpu.set(k, g);
+        this.aheadGpu.set(k, g.bytes);
+        this.aheadBytes += g.bytes;
+        this.totals.upMs += this.now() - tu;
+        this.totals.upCells++;
+        ups++;
+      }
+      this.aheadWaiting = waiting.length;
+      if (waiting.length > 0) this.onActivity();
     }
     this.frame.uploadMs = this.now() - u0;
     this.frame.uploads = ups;
@@ -500,9 +570,15 @@ export class StreamedWorld implements Layer {
       const count = (b.data.data.length * 4) / b.data.layout.stride;
       if (count === 0) continue;
       const instances = r.createInstances(b.data);
-      const lods = arch.lods.map((l) => r.createMesh(l.mesh, material, instances));
+      // The archetype's own meshes are uploaded once; the cell adds only its instances (a VAO per level of detail).
+      let base = this.archetypeMeshes.get(b.archetype);
+      if (!base) {
+        base = arch.lods.map((l) => r.createMesh(l.mesh, material));
+        this.archetypeMeshes.set(b.archetype, base);
+      }
+      const lods = base.map((m) => r.device.shareMesh(m, material.attribs, instances));
       g.batches.push({ archetype: b.archetype, material, instances, lods, count });
-      g.bytes += b.data.data.byteLength + arch.lods.reduce((s, l) => s + l.mesh.vertices.byteLength + (l.mesh.indices?.byteLength ?? 0), 0);
+      g.bytes += b.data.data.byteLength;
     }
     return g;
   }
@@ -517,6 +593,13 @@ export class StreamedWorld implements Layer {
       d.deleteInstances(b.instances);
     }
     this.gpu.delete(key);
+    // A cell uploaded ahead of need was never announced as resident.
+    const ahead = this.aheadGpu.get(key);
+    if (ahead !== undefined) {
+      this.aheadGpu.delete(key);
+      this.aheadBytes -= ahead;
+      return;
+    }
     this.onReleased?.(g.cell);
   }
 
@@ -645,6 +728,8 @@ export class StreamedWorld implements Layer {
     for (const a of this.running.values()) a.abort();
     this.running.clear();
     for (const k of [...this.gpu.keys()]) this.release(k);
+    for (const lods of this.archetypeMeshes.values()) for (const m of lods) this.renderer.device.deleteMesh(m);
+    this.archetypeMeshes.clear();
     this.cpu.clear();
     this.renderer.remove(this);
   }
@@ -682,6 +767,40 @@ export function viewerTickets(o: {
     t.push({ id: 'predict', kind: 'predict', center: [o.eye[0] + v[0] * look, o.eye[1] + v[1] * look, o.eye[2] + v[2] * look], altitude, base: 1, dir: v, ...px });
   }
   return t;
+}
+
+/** A coming pose of the viewer, for `preloadTickets`. */
+export interface PreloadPose {
+  /** World position of the eye. */
+  eye: WorldPos;
+  /** Height of the eye above the surface under it (as for `viewerTickets`). */
+  altitude: number;
+  /** View direction in world space; cells in front of it are fetched first. Optional. */
+  forward?: readonly [number, number, number];
+  /** Pixels one radian covers on the viewer's screen at that pose (selection by screen-space error). */
+  pixelsPerRadian?: number;
+}
+
+/**
+ * Tickets that load what a viewer will need at coming poses (a camera path sampled ahead) without changing what is
+ * drawn now: one `preload` ticket per pose, `kind` 'travel', base 0 (the rings of the viewer itself), with stable ids
+ * `<prefix>-000`, `<prefix>-001`, … in the order of the poses. Hand them to `StreamedWorld.setTickets` together with
+ * the viewer's own tickets and wait for `StreamedWorld.preloaded`. With selection by screen-space error the cells
+ * they alone ask for stay on the CPU until the viewer arrives; with `splitLevel` selection a preload ticket counts as
+ * any ticket (its cells are drawn and `settled` waits for them).
+ */
+export function preloadTickets(poses: readonly PreloadPose[], prefix = 'preload'): Ticket[] {
+  const width = Math.max(3, String(Math.max(0, poses.length - 1)).length);
+  return poses.map((p, i) => ({
+    id: `${prefix}-${String(i).padStart(width, '0')}`,
+    kind: 'travel',
+    center: [p.eye[0], p.eye[1], p.eye[2]],
+    altitude: Math.max(0, p.altitude),
+    base: 0,
+    preload: true,
+    ...(p.forward ? { dir: [p.forward[0], p.forward[1], p.forward[2]] as const } : {}),
+    ...(p.pixelsPerRadian !== undefined ? { pixelsPerRadian: p.pixelsPerRadian } : {}),
+  }));
 }
 
 /** Generator provider running in a pool of module workers. The worker script calls `serveCellGenerator`. */

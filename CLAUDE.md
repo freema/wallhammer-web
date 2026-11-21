@@ -19,7 +19,8 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 ## Where things are
 
 - `packages/wallhammer-web/src/<module>/`: engine modules. `packages/wallhammer-web/docs/`: documentation (its samples are type-checked).
-- `examples/<name>/`: example pages (`minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`), served by `dev` at http://localhost:5281/<name>/.
+- `examples/<name>/`: example pages (`minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`), served by `dev` at http://localhost:5281/<name>/.
+- `examples/shared/`: code used by more than one example (the pathfinder figure), imported by relative path; not a page, not listed or built.
 - `tools/layers`, `tools/docs`, `tools/pack`, `tools/mesh`, `tools/motion`: checks of the engine.
 - `tools/golden/engine/` (engine recipes) and `tools/golden/` (recipes that need example code): golden hashes, each set with its own `hashes.json`.
 - `tools/walk`, `tools/follow-check`: checks of walking and the follow camera (`check:walk`, `check:follow`).

@@ -21,7 +21,7 @@ Another host port: `EXAMPLES_PORT=5291 docker compose up -d` (5280 is left to th
 
 ## Pages
 
-- http://localhost:5281/ lists the examples; http://localhost:5281/<name>/ serves `examples/<name>`: `minimal-3d`, `destruction`, `endless` (second page `/endless/sphere.html`), `planet`, `system`, `fantasy-village`, `walk`, `outpost`.
+- http://localhost:5281/ lists the examples; http://localhost:5281/<name>/ serves `examples/<name>`: `minimal-3d`, `destruction`, `endless` (second page `/endless/sphere.html`), `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`.
 - The live demos, built from `main`: https://freema.github.io/wallhammer-web/ and `/wallhammer-web/<name>/`.
 
 Check that a page answers (prints `200`):
@@ -99,13 +99,13 @@ Every page exposes `window.__wh`. Read the object at the end of the page's `src/
 | `settled()` | all but `destruction` and `minimal-3d` (wait two frames there) |
 | `setTimeOfDay(h)` (hour), `setTime(s)` (freezes animation time) | `setTime` all but `walk`; `setTimeOfDay` all but `walk` and `outpost` |
 | `profile(n)`, `profileText(n)` (frame and per-layer cost) | `walk`, `outpost`, `fantasy-village` |
-| `measureFrame(n)` (ms of a frame, GPU work finished) | `planet`, `system` |
+| `measureFrame(n)` (ms of a frame, GPU work finished) | `planet`, `system`, `rivers` |
 | `benchmark(n)` | `minimal-3d`, `endless`, `destruction` |
 | `hold(input, s)`, `freeze(on)`, `walkTo`, `teleport`, `state()`, `setWire(on)`, `stations()` | `walk` |
 | `kind` (a name of the page's kind, read by `tools/shot/shot.mjs`) | all |
 | `hash()` (the URL hash of the current state) | `planet`, `endless`, `fantasy-village`, `walk`, `outpost` |
 | `isSettled()` (the synchronous form of `settled()`) | `endless` (both pages), `planet`, `system` |
-| `setTick(n)` (the simulation's tick) | all but `destruction`, `fantasy-village` and `walk` |
+| `setTick(n)` (the simulation's tick) | all but `destruction`, `fantasy-village`, `walk` and `rivers` |
 | `setWeather(w)` (a preset name, as `w` in the hash) | `minimal-3d`, `destruction`, `endless` |
 | `hud()` (the text of the panel), `overlay()` (the debug overlay) | `hud`: `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`; `overlay`: `endless` (both pages), `planet`, `system` |
 | `startFlight()`, `stopFlight()`, `setFlight(t)`, `flightSeconds()`, `flightReport()` | `planet`, `system` |
@@ -115,6 +115,7 @@ Every page exposes `window.__wh`. Read the object at the end of the page's `src/
 | `movie.start()`, `movie.stop()`, `movie.active()`, `movie.seek(t)`; `walk.start()`, `walk.stop()`, `walk.active()`; `setEvening(on)`, `inspect(filter)` | `fantasy-village` |
 | `blast`, `blastAtScreen`, `reset`, `setState`, `debrisAt`, `collapseAt`, `falling`, `structures`, `regenCost` | `destruction` |
 | `rigs` | `minimal-3d` |
+| `checks()` (the water plan's numbers: lines, lakes, falls, stretches where a level rises), `mode()`, `setMode('orbit'\|'free')` (orbit or free flight, `F` or `#free`), `freeState()`, `progress()` (the loading `ProgressReport`) | `rivers` |
 | `resetCamera()`, `setPaused(on)`, `tick()`, `inspect(filter)` | `outpost` |
 
 Movie modes. Two pages have one, with different members; both hold the movie at a time `t` for a frame-by-frame recording:

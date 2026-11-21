@@ -127,6 +127,7 @@ Then open <http://localhost:5281/>. It lists the examples, each at `http://local
 - [`endless`](examples/endless/) ([live](https://freema.github.io/wallhammer-web/endless/)): an endless streamed world in quadtree cells, generated in workers or read from baked files, under volumetric clouds (`#vol=0` turns them off). Engine only. A second page, `sphere.html` ([live](https://freema.github.io/wallhammer-web/endless/sphere.html)), shows the sphere world.
 - [`destruction`](examples/destruction/) ([live](https://freema.github.io/wallhammer-web/destruction/)): generated structures on plain ground that break part by part. Uses the content modules (`gen-arch`, `sim/destruction`).
 - [`walk`](examples/walk/) ([live](https://freema.github.io/wallhammer-web/walk/)): a walking test course: a collision world, a walker and a follow camera.
+- [`rivers`](examples/rivers/) ([live](https://freema.github.io/wallhammer-web/rivers/)): rivers and paths: an island whose sea, lakes and rivers follow one rule (the ground is cut down to a planned level of water, and water stands wherever the ground lies under it), with footpaths of seven kinds and walkers on them. Engine only.
 - [`minimal-3d`](examples/minimal-3d/) ([live](https://freema.github.io/wallhammer-web/minimal-3d/)): a perspective orbit view of an island with standing stones. Engine only.
 
 ## Repository
@@ -134,7 +135,7 @@ Then open <http://localhost:5281/>. It lists the examples, each at `http://local
 The repository is a pnpm workspace:
 
 - `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/).
-- `examples/`: the example pages above, each with its own `README.md`.
+- `examples/`: the example pages above, each with its own `README.md`, and `examples/shared/`, code used by more than one example (not a page).
 - `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`) and host tools (`shot/shot.mjs`, `bench`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
 - `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending, releasing).
@@ -162,6 +163,7 @@ The one service `dev` installs the dependencies, serves every example on one por
 | <http://localhost:5281/fantasy-village/> | `examples/fantasy-village` |
 | <http://localhost:5281/walk/> | `examples/walk` |
 | <http://localhost:5281/outpost/> | `examples/outpost` |
+| <http://localhost:5281/rivers/> | `examples/rivers` |
 
 In general `http://localhost:5281/<name>/` serves `examples/<name>`. Another host port: `EXAMPLES_PORT=5291 docker compose up -d`. Port 5280 is left to the app of the city repository. The service is healthy once the dependencies are installed and the server answers. Stop it with `docker compose down`.
 

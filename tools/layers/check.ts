@@ -22,9 +22,11 @@
 //                      a file imports a later subfolder or a file of the module root (the root ranks after all
 //                      subfolders; a self-import through `wallhammer-web/<module>` counts as the root), or a file sits
 //                      in a subfolder the order does not list; type imports and re-exports count
-//   [example-imports]  an example imports an app, or an engine-only example (ENGINE_ONLY_EXAMPLES) imports anything
-//                      but the engine package or imports a content module; other examples may import the whole engine
-//                      (a package's vite.config.ts may import dev tooling from tools/)
+//   [example-imports]  an example imports an app or another example; an example may import the engine, its own files
+//                      and the files of examples/shared (SHARED_EXAMPLE), code used by several examples; an engine-only
+//                      example (ENGINE_ONLY_EXAMPLES) and examples/shared itself may not import a content module, and
+//                      examples/shared imports nothing but the engine and its own files (a package's vite.config.ts may
+//                      import dev tooling from tools/)
 //   [webgl]            WebGL types or calls outside the engine module `gpu` (engine and examples)
 //   [dom]              browser DOM outside the engine module `platform` (engine)
 //   [worker]           the Worker API (new Worker, postMessage, onmessage, importScripts) outside the engine module
@@ -69,7 +71,9 @@ const ENGINE = 'wallhammer-web';
 /** Content generators: optional engine modules of layer 3 that nothing else in the engine imports. */
 export const CONTENT_MODULES: ReadonlySet<string> = new Set(['gen-arch', 'gen-ground', 'gen-vegetation']);
 /** Examples that prove the engine alone: they may import only the engine package, without the content modules. */
-const ENGINE_ONLY_EXAMPLES = new Set(['minimal-3d', 'endless', 'planet', 'fantasy-village', 'walk', 'outpost']);
+const ENGINE_ONLY_EXAMPLES = new Set(['minimal-3d', 'endless', 'planet', 'fantasy-village', 'walk', 'outpost', 'rivers', 'shared']);
+/** The folder under examples/ with code used by several examples: any example may import it, it imports no example. */
+const SHARED_EXAMPLE = 'shared';
 /** Words of use cases that only the content modules may name (file names, exported identifiers, comments). */
 export const USE_CASE_WORDS: ReadonlySet<string> = new Set([
   'city', 'cities', 'building', 'buildings', 'roof', 'roofs', 'facade', 'facades', 'façade', 'façades', 'tree', 'trees',
@@ -330,10 +334,12 @@ export function check(root: string): Violation[] {
         if (path.basename(file) === 'vite.config.ts' && spec.startsWith('.') && path.resolve(path.dirname(file), spec).startsWith(path.join(root, 'tools') + path.sep)) continue;
         const engineOnly = ENGINE_ONLY_EXAMPLES.has(owner.pkg);
         const toContent = target.kind === 'engine' && target.module !== null && CONTENT_MODULES.has(target.module);
-        const allowed = (target.kind === 'engine' && !(engineOnly && toContent)) || (target.kind === 'example' && target.pkg === owner.pkg);
+        const toExample = target.kind === 'example' && (target.pkg === owner.pkg || target.pkg === SHARED_EXAMPLE);
+        const allowed = (target.kind === 'engine' && !(engineOnly && toContent)) || toExample;
         if (!allowed) {
           const what = target.kind === 'engine' ? `content module ${target.module}` : target.kind === 'other' ? spec : target.pkg;
-          add('example-imports', m.index, `example ${owner.pkg} imports ${what} ("${spec}"); ${engineOnly ? 'only the engine without its content modules' : 'only the engine'}`);
+          const may = owner.pkg === SHARED_EXAMPLE ? 'only the engine without its content modules' : `only the engine${engineOnly ? ' without its content modules' : ''} and examples/${SHARED_EXAMPLE}`;
+          add('example-imports', m.index, `example ${owner.pkg} imports ${what} ("${spec}"); ${may}`);
         }
       }
     }

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Wallhammer Web: rivers and paths</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #9cb8cf; overflow: hidden; }
+      /* Hidden until the first frame is drawn (an empty WebGL canvas is black, the page's own background is the sky); shown
+         at once, without a fade, so that a picture taken when __wh.ready resolves shows the whole frame. */
+      canvas#view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; opacity: 0; }
+      canvas#view.drawn { opacity: 1; }
+      canvas#view.dragging { cursor: grabbing; }
+      canvas#view.free { cursor: crosshair; }
+      #panel {
+        position: fixed; left: 12px; top: 12px; max-width: min(420px, calc(100vw - 24px)); margin: 0; padding: 8px 10px;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: #f2f5f7; white-space: pre-wrap;
+        background: rgba(18, 28, 36, 0.62); border-radius: 6px; pointer-events: none;
+      }
+      #panel[hidden], #loading[hidden] { display: none; }
+      /* The loading bar: centred over the sky-coloured canvas, the same dark glass as the panel. */
+      #loading {
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); box-sizing: border-box;
+        width: min(360px, calc(100vw - 32px)); padding: 14px 16px 16px; border-radius: 8px;
+        background: rgba(18, 28, 36, 0.62); color: #f2f5f7; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        pointer-events: none; transition: opacity 0.6s ease;
+      }
+      #loading.done { opacity: 0; }
+      #loading .title { margin: 0 0 10px; font-size: 13px; letter-spacing: 0.04em; color: #ffffff; }
+      #loading .row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; color: rgba(242, 245, 247, 0.82); }
+      #loading .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #loading .percent { font-variant-numeric: tabular-nums; }
+      #loading .track { height: 4px; border-radius: 2px; background: rgba(242, 245, 247, 0.18); overflow: hidden; }
+      #loading .fill { height: 100%; background: #f2f5f7; transform: scaleX(0); transform-origin: left center; transition: transform 0.12s linear; }
+      #loading.failed .label { white-space: normal; color: #ffb4a8; }
+      #loading.failed .fill { background: #ffb4a8; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="panel" hidden></pre>
+    <div id="loading" role="progressbar" aria-label="Building the island" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <p class="title">Building the island</p>
+      <div class="row"><span class="label">Starting</span><span class="percent">0 %</span></div>
+      <div class="track"><div class="fill"></div></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

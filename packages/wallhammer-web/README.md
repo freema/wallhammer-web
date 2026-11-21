@@ -23,7 +23,7 @@ npm install wallhammer-web
 
 ## Where the engine lives
 
-The engine is developed in this repository, at `packages/wallhammer-web`. The repository is a pnpm workspace: the engine, its checks (`tools/`) and the examples that exercise it (`examples/`: `minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`), which import the package through the workspace, so a change here reaches them at once. Paths such as `examples/endless/...` in these docs are paths from the repository root.
+The engine is developed in this repository, at `packages/wallhammer-web`. The repository is a pnpm workspace: the engine, its checks (`tools/`) and the examples that exercise it (`examples/`: `minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`), which import the package through the workspace, so a change here reaches them at once. Paths such as `examples/endless/...` in these docs are paths from the repository root.
 
 Projects outside this repository use the published package or keep a copy of a fixed version.
 

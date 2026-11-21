@@ -59,6 +59,16 @@ for (const c of subfolderCases) {
     console.log(`FAIL: the known-bad fixture did not report [subfolder-order] for gen-arch/${c}`);
   }
 }
-if (!failed) console.log(`ok: known-bad fixture fails with all ${expected.length} expected findings`);
+// examples/shared (code used by several examples) may import neither an example nor a content module; each case on its own.
+const sharedCases = ['to-example.ts', 'to-content.ts'];
+for (const c of sharedCases) {
+  const file = `examples/shared/src/${c}:`;
+  if (!lines.some((l) => l.startsWith(file) && l.includes('[example-imports]'))) {
+    failed = true;
+    console.log(`FAIL: the known-bad fixture did not report [example-imports] for examples/shared/src/${c}`);
+  }
+}
+const findings = expected.length + subfolderCases.length + sharedCases.length;
+if (!failed) console.log(`ok: known-bad fixture fails with all ${findings} expected findings`);
 else console.log(bad.out);
 process.exit(failed ? 1 : 0);

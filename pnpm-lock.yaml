@@ -96,6 +96,32 @@ importers:
         specifier: ^8.3.8
         version: 8.3.8(@types/node@22.20.5)
 
+  examples/rivers:
+    dependencies:
+      wallhammer-web:
+        specifier: workspace:*
+        version: link:../../packages/wallhammer-web
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vite:
+        specifier: ^8.3.8
+        version: 8.3.8(@types/node@22.20.5)
+
+  examples/shared:
+    dependencies:
+      wallhammer-web:
+        specifier: workspace:*
+        version: link:../../packages/wallhammer-web
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   examples/system:
     dependencies:
       wallhammer-web:

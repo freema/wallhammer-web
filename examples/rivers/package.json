@@ -1,0 +1,22 @@
+{
+  "name": "wallhammer-example-rivers",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Rivers and paths on wallhammer-web: an island whose sea, lakes and rivers are one rule, the ground cut down to a planned level of water, and footpaths of seven kinds with walkers on them.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "pictures": "node scripts/pictures.ts"
+  },
+  "dependencies": {
+    "wallhammer-web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

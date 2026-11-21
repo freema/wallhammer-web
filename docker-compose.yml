@@ -34,6 +34,8 @@ services:
       - minimal-3d_node_modules:/app/examples/minimal-3d/node_modules
       - outpost_node_modules:/app/examples/outpost/node_modules
       - planet_node_modules:/app/examples/planet/node_modules
+      - rivers_node_modules:/app/examples/rivers/node_modules
+      - shared_node_modules:/app/examples/shared/node_modules
       - system_node_modules:/app/examples/system/node_modules
       - walk_node_modules:/app/examples/walk/node_modules
       - pnpm_store:/pnpm-store
@@ -80,6 +82,8 @@ volumes:
   minimal-3d_node_modules:
   outpost_node_modules:
   planet_node_modules:
+  rivers_node_modules:
+  shared_node_modules:
   system_node_modules:
   walk_node_modules:
   pnpm_store:

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+## 0.6.0
+
 ### Added
 
 - **A painted sky**, opt-in: `AtmosphereParams.paint` (`AtmospherePaint`, `DEFAULT_ATMOSPHERE_PAINT`, in `env`) lays a gradient from the horizon to the zenith, a glow round the sun and a plain sun disc over the computed sky, gives the air in front of the scene the horizon's colour, and adds a haze that thins with height and may start some way from the eye (`hazeStartM`). Its values are read every frame; a slot made without it is unchanged. See [A painted sky](packages/wallhammer-web/docs/environment.md#a-painted-sky).

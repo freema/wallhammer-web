@@ -1,7 +1,7 @@
 // Documentation check for the wallhammer-web package. Reads the package README and every Markdown file under
 // packages/wallhammer-web/docs/ and fails (exit code 1) on any of the rules below. The other Markdown files of the
 // repository (the root README, CHANGELOG, CONTRIBUTING, CLAUDE.md, the examples' READMEs and the skills) get the
-// [link] rule only.
+// [link] rule only; the Markdown files of the users' plugin (plugins/**) get [link] and [subpath].
 //
 //   [code]     a fenced `ts` block does not type-check against the package (strict, as the package itself)
 //              (an error inside the package source itself is reported too, marked as such: fix the package first)
@@ -9,6 +9,13 @@
 //   [subpath]  the text names `wallhammer-web/<subpath>` that is not an export of the package
 //   [reference] a name exported by an entry of the package (the `export { … }` lists of its index.ts) is not named in
 //              docs/reference.md
+//   [plugin]   the Claude Code marketplace (.claude-plugin/marketplace.json) or a plugin it lists is malformed: missing
+//              name, owner.name or plugins; a plugin source that is not a relative path starting with `./` or a folder
+//              without .claude-plugin/plugin.json; a version in the marketplace entry; plugin.json without name,
+//              description, author.name or license, with a name other than the entry's, or with a version other than
+//              the package's; a SKILL.md (of a plugin or of .claude/skills) without `name` (lower case, digits and
+//              hyphens, equal to its folder) and `description` in its front matter, with description and when_to_use
+//              together over 1536 characters, or with a body over 200 lines. No network.
 //
 //   node tools/docs/check.ts            check (run from the repository root, e.g. `pnpm check:docs`)
 //   node tools/docs/check.ts --keep     keep the generated TypeScript files and print where they are
@@ -34,7 +41,7 @@ const TSC = path.join(PKG, 'node_modules/.bin/tsc');
 const keep = process.argv.includes('--keep');
 
 interface Finding {
-  rule: 'code' | 'link' | 'subpath' | 'reference';
+  rule: 'code' | 'link' | 'subpath' | 'reference' | 'plugin';
   file: string;
   line: number;
   message: string;
@@ -72,7 +79,22 @@ function linkOnlyFiles(): string[] {
   return out;
 }
 
-const pkg = JSON.parse(fs.readFileSync(path.join(PKG, 'package.json'), 'utf8')) as { name: string; exports: Record<string, string> };
+/** Every Markdown file under plugins/ (the users' Claude Code plugin and its skills), sorted. */
+function pluginMarkdownFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.md')) out.push(p);
+    }
+  };
+  walk(path.join(WEB, 'plugins'));
+  return out;
+}
+
+const pkg = JSON.parse(fs.readFileSync(path.join(PKG, 'package.json'), 'utf8')) as { name: string; version: string; exports: Record<string, string> };
 const subpaths = new Set(Object.keys(pkg.exports).filter((k) => k !== '.').map((k) => k.slice(2)));
 
 // --- Headings and links ----------------------------------------------------------------------------------------------
@@ -261,6 +283,129 @@ function checkReference(): void {
   }
 }
 
+// --- The users' plugin --------------------------------------------------------------------------------------------------
+
+/** Claude Code cuts a skill's description plus when_to_use at this many characters in its listing. */
+const SKILL_DESCRIPTION_MAX = 1536;
+/** A skill's body stays short; the details live in the docs it points to. */
+const SKILL_BODY_MAX_LINES = 200;
+
+function pluginFinding(file: string, message: string, line = 0): void {
+  findings.push({ rule: 'plugin', file, line, message });
+}
+
+function readJson(file: string): Record<string, unknown> | null {
+  try {
+    const v: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+    pluginFinding(file, 'not a JSON object');
+  } catch (e) {
+    pluginFinding(file, `not valid JSON: ${(e as Error).message}`);
+  }
+  return null;
+}
+
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** Front matter of a SKILL.md: `key: value` lines between the opening and the closing `---`. */
+function checkSkill(file: string): void {
+  const text = fs.readFileSync(file, 'utf8');
+  const lines = text.split('\n');
+  const end = lines[0] === '---' ? lines.indexOf('---', 1) : -1;
+  if (end < 0) {
+    pluginFinding(file, 'no front matter (--- … ---) at the top', 1);
+    return;
+  }
+  const fm = new Map<string, string>();
+  for (const l of lines.slice(1, end)) {
+    const m = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(l);
+    if (m) fm.set(m[1]!, m[2]!.trim());
+  }
+  const name = fm.get('name');
+  const folder = path.basename(path.dirname(file));
+  if (!nonEmpty(name)) pluginFinding(file, 'front matter has no name', 1);
+  else if (!KEBAB.test(name) || name.length > 64) pluginFinding(file, `name "${name}" is not lower case letters, digits and hyphens (at most 64)`, 1);
+  else if (name !== folder) pluginFinding(file, `name "${name}" differs from its folder "${folder}"`, 1);
+  const description = fm.get('description');
+  if (!nonEmpty(description)) pluginFinding(file, 'front matter has no description', 1);
+  else {
+    const total = description.length + (fm.get('when_to_use')?.length ?? 0);
+    if (total > SKILL_DESCRIPTION_MAX) pluginFinding(file, `description and when_to_use have ${total} characters, over ${SKILL_DESCRIPTION_MAX}`, 1);
+  }
+  const body = lines.length - end - 1;
+  if (body > SKILL_BODY_MAX_LINES) pluginFinding(file, `body has ${body} lines, over ${SKILL_BODY_MAX_LINES}`, end + 2);
+}
+
+function checkPlugin(dir: string, entryName: string): void {
+  const manifest = path.join(dir, '.claude-plugin/plugin.json');
+  if (!fs.existsSync(manifest)) {
+    pluginFinding(dir, 'plugin folder has no .claude-plugin/plugin.json');
+    return;
+  }
+  const p = readJson(manifest);
+  if (!p) return;
+  if (p.name !== entryName) pluginFinding(manifest, `name ${JSON.stringify(p.name)} differs from the marketplace entry "${entryName}"`);
+  if (p.version !== pkg.version) pluginFinding(manifest, `version ${JSON.stringify(p.version)} differs from the package version ${pkg.version} (bump both together)`);
+  if (!nonEmpty(p.description)) pluginFinding(manifest, 'no description');
+  if (!nonEmpty((p.author as { name?: unknown } | undefined)?.name)) pluginFinding(manifest, 'no author.name');
+  if (!nonEmpty(p.license)) pluginFinding(manifest, 'no license');
+  const skills = path.join(dir, 'skills');
+  const found = fs.existsSync(skills) ? fs.readdirSync(skills, { withFileTypes: true }).filter((e) => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name)) : [];
+  if (found.length === 0) pluginFinding(dir, 'plugin has no skills/<name>/SKILL.md');
+  for (const e of found) {
+    const f = path.join(skills, e.name, 'SKILL.md');
+    if (fs.existsSync(f)) checkSkill(f);
+    else pluginFinding(path.join(skills, e.name), 'skill folder without SKILL.md');
+  }
+}
+
+/** The marketplace at the repository root and every plugin it lists; also the repository's own skills' front matter. */
+function checkMarketplace(): void {
+  const file = path.join(WEB, '.claude-plugin/marketplace.json');
+  if (!fs.existsSync(file)) {
+    pluginFinding(file, 'file missing');
+    return;
+  }
+  const m = readJson(file);
+  if (m) {
+    if (!nonEmpty(m.name) || !KEBAB.test(m.name)) pluginFinding(file, 'name missing or not lower case letters, digits and hyphens');
+    if (!nonEmpty((m.owner as { name?: unknown } | undefined)?.name)) pluginFinding(file, 'no owner.name');
+    if (!nonEmpty(m.description)) pluginFinding(file, 'no description');
+    const plugins = m.plugins;
+    if (!Array.isArray(plugins) || plugins.length === 0) pluginFinding(file, 'no plugins');
+    else {
+      const names = new Set<string>();
+      for (const [i, raw] of plugins.entries()) {
+        const e = (raw ?? {}) as Record<string, unknown>;
+        const at = `plugins[${i}]`;
+        if (!nonEmpty(e.name) || !KEBAB.test(e.name)) {
+          pluginFinding(file, `${at}: name missing or not lower case letters, digits and hyphens`);
+          continue;
+        }
+        if (names.has(e.name)) pluginFinding(file, `${at}: name "${e.name}" twice`);
+        names.add(e.name);
+        if (!nonEmpty(e.description)) pluginFinding(file, `${at}: no description`);
+        if ('version' in e) pluginFinding(file, `${at}: version belongs in the plugin's plugin.json, not in the marketplace`);
+        if (typeof e.source !== 'string' || !e.source.startsWith('./') || e.source.includes('..')) {
+          pluginFinding(file, `${at}: source must be a relative path starting with ./ inside the repository`);
+          continue;
+        }
+        const dir = path.resolve(WEB, e.source);
+        if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) pluginFinding(file, `${at}: source ${e.source} is not a folder`);
+        else checkPlugin(dir, e.name);
+      }
+    }
+  }
+  const own = path.join(WEB, '.claude/skills');
+  if (fs.existsSync(own)) {
+    for (const e of fs.readdirSync(own, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const f = path.join(own, e.name, 'SKILL.md');
+      if (e.isDirectory() && fs.existsSync(f)) checkSkill(f);
+    }
+  }
+}
+
 // --- Run -------------------------------------------------------------------------------------------------------------
 
 const files = markdownFiles();
@@ -278,8 +423,15 @@ for (const f of files) {
 const checked = checkCode(blocks);
 const linkOnly = linkOnlyFiles();
 for (const f of linkOnly) checkLinks(f, fs.readFileSync(f, 'utf8'));
+const plugin = pluginMarkdownFiles();
+for (const f of plugin) {
+  const text = fs.readFileSync(f, 'utf8');
+  checkLinks(f, text);
+  checkSubpaths(f, text);
+}
 checkReference();
+checkMarketplace();
 
 for (const f of findings) console.log(`[${f.rule}] ${rel(f.file)}:${f.line}  ${f.message}`);
-console.log(`docs: ${files.length} files (and ${linkOnly.length} more for links), ${checked} code blocks type-checked, ${findings.length} finding(s)`);
+console.log(`docs: ${files.length} files (and ${linkOnly.length + plugin.length} more for links), ${checked} code blocks type-checked, ${findings.length} finding(s)`);
 process.exit(findings.length ? 1 : 0);

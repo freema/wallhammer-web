@@ -130,6 +130,37 @@ Then open <http://localhost:5281/>. It lists the examples, each at `http://local
 - [`rivers`](examples/rivers/) ([live](https://freema.github.io/wallhammer-web/rivers/)): rivers and paths: an island whose sea, lakes and rivers follow one rule (the ground is cut down to a planned level of water, and water stands wherever the ground lies under it), with footpaths of seven kinds and walkers on them. Engine only.
 - [`minimal-3d`](examples/minimal-3d/) ([live](https://freema.github.io/wallhammer-web/minimal-3d/)): a perspective orbit view of an island with standing stones. Engine only.
 
+## Building with an AI agent
+
+The engine is meant to be built on with a coding agent. Its documentation ships in the npm package, so an agent in your project reads the version you installed under `node_modules/wallhammer-web/docs/`:
+
+- [Wallhammer Web for agents](packages/wallhammer-web/docs/agents.md): the one page to read first: the rules for code built on the engine, goal → entry → page → example, the module map, debugging.
+- [Cookbook](packages/wallhammer-web/docs/cookbook.md): recipes by goal with checked code, the example to open and the pitfalls.
+- [Marks](packages/wallhammer-web/docs/marks.md): pin notes to points of your running scene; the agent lists them, fixes and attaches an after-picture, you accept.
+
+**Claude Code.** The repository is a plugin marketplace with one plugin, `wallhammer`, holding two skills: `wallhammer-build` (rules, where things go, which recipe serves which goal, verifying) and `wallhammer-marks` (working through marks). Install it once:
+
+```text
+/plugin marketplace add freema/wallhammer-web
+/plugin install wallhammer@wallhammer-web
+```
+
+Update it with `/plugin marketplace update wallhammer-web`.
+
+**Codex** (and other agents that read `.agents/skills/`): copy the same skills into your project.
+
+```sh
+npx degit freema/wallhammer-web/plugins/wallhammer/skills .agents/skills
+```
+
+**One instruction file for both.** Put this line in your project's `AGENTS.md`:
+
+```text
+Read node_modules/wallhammer-web/docs/agents.md before writing engine code.
+```
+
+and a `CLAUDE.md` that contains only `@AGENTS.md`, so Claude Code and Codex read the same instructions.
+
 ## Repository
 
 The repository is a pnpm workspace:
@@ -138,7 +169,8 @@ The repository is a pnpm workspace:
 - `examples/`: the example pages above, each with its own `README.md`, and `examples/shared/`, code used by more than one example (not a page).
 - `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`), host tools (`shot/shot.mjs`, `bench`) and this repository's marks tools and the store's test (`marks`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
-- `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending, releasing).
+- `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent on this repository (running, checks, extending, releasing).
+- `.claude-plugin/marketplace.json` and `plugins/wallhammer/`: the Claude Code plugin for projects built on the package (see [Building with an AI agent](#building-with-an-ai-agent)); its version follows the package's.
 - `internal/`: internal working material, ignored by git (see [Internal notes](#internal-notes)).
 
 ## Running

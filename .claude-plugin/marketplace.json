@@ -1,0 +1,12 @@
+{
+  "name": "wallhammer-web",
+  "owner": { "name": "freema" },
+  "description": "Skills for building games and worlds on Wallhammer Web, a WebGL2 engine where all graphics come from code.",
+  "plugins": [
+    {
+      "name": "wallhammer",
+      "source": "./plugins/wallhammer",
+      "description": "Build on the wallhammer-web npm package with its rules and recipes, and work through the marks a developer pins to a scene."
+    }
+  ]
+}

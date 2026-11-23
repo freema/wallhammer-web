@@ -23,13 +23,14 @@ Publishing is npm trusted publishing (OIDC) from `.github/workflows/publish.yml`
 
 3. **Set the version** `X.Y.Z` (from `OLD`):
    - `"version"` in `packages/wallhammer-web/package.json` and in the root `package.json` (kept equal);
+   - `"version"` in `plugins/wallhammer/.claude-plugin/plugin.json`, the users' Claude Code plugin, to the same `X.Y.Z` (`pnpm check:docs` fails with a `[plugin]` finding while it differs; the marketplace entry in `.claude-plugin/marketplace.json` carries no version);
    - `README.md`, the two mentions of the current version: `gh release create vOLD` (section "Release") and `(now OLD)` (section "By hand"). Find them with `grep -n 'OLD' README.md`; leave the historical `0.4.0` of "Origin" and "Copy in the city repository" alone;
    - `CHANGELOG.md`: a heading `## X.Y.Z` (no date) right under `## Unreleased`, every Unreleased entry moved under it, `## Unreleased` left empty.
 
 4. **Commit and push.** The message is English, `Release X.Y.Z`, a body of one or two sentences on what the version brings, and the attribution trailer the session prescribes.
 
    ```sh
-   git add package.json packages/wallhammer-web/package.json README.md CHANGELOG.md
+   git add package.json packages/wallhammer-web/package.json plugins/wallhammer/.claude-plugin/plugin.json README.md CHANGELOG.md
    git commit    # "Release X.Y.Z" + body + trailer
    git push origin main
    ```

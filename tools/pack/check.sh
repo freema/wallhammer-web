@@ -2,6 +2,8 @@
 # Check of the published shape of the wallhammer-web package: packs it (build included, as `pnpm publish` would),
 # installs the tarball into an empty project outside the workspace and, there,
 #   - imports every entry of the package in plain Node (the built JavaScript resolves and loads),
+#   - finds the files a user needs (the README, the licence, the agent pages docs/agents.md and docs/cookbook.md that
+#     the Claude Code plugin points to),
 #   - runs the package's `bin` (`wallhammer-marks list`) on an empty folder,
 #   - type-checks a small program against the packed declarations (module resolution `nodenext`), the Node-only entry
 #     `wallhammer-web/marks-store` included (without Node's or Vite's types).
@@ -18,7 +20,7 @@ FILES=$(tar -tzf "$TARBALL" | wc -l | tr -d ' ')
 BYTES=$(wc -c < "$TARBALL" | tr -d ' ')
 echo "pack: $(basename "$TARBALL"), $FILES files, $BYTES bytes"
 if tar -tzf "$TARBALL" | grep -q '^package/src/'; then echo "pack: FAIL the tarball contains src/"; exit 1; fi
-for f in package/LICENSE package/README.md package/dist/index.js package/dist/index.d.ts package/dist/marks-store/cli.js; do
+for f in package/LICENSE package/README.md package/dist/index.js package/dist/index.d.ts package/dist/marks-store/cli.js package/docs/agents.md package/docs/cookbook.md; do
   tar -tzf "$TARBALL" | grep -qx "$f" || { echo "pack: FAIL the tarball lacks $f"; exit 1; }
 done
 

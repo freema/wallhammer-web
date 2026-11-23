@@ -115,6 +115,8 @@ Things to notice:
 
 ## Where to look next
 
+- [Wallhammer Web for agents](agents.md) is the one page for a coding agent (or a hurried reader): the rules for code built on the engine, which entry serves which goal, the module map and how to debug.
+- [Cookbook](cookbook.md) has recipes by goal (a streamed world, terrain, houses from footprints, weather, walking, destruction, schedules, your own data, performance, marks), each with checked code, the example to open and the pitfalls.
 - [Recipes](recipes.md) has short, checked samples for the common extensions; [Draw moving copies with instance sets](recipes.md#draw-moving-copies-with-instance-sets) shows `instanceSet`, `writeInstance`, `pushInstance` and `InstanceSetLayer` with their material.
 - [The environment](environment.md) explains the light this scene gets: the hour and the date, the sky, the weather, clouds, fog and seasons, and what a material calls to receive them.
 - `examples/minimal-3d/src/main.ts` is the same pattern with instancing, an environment slot, the sky and the simulation.

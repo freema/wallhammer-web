@@ -29,6 +29,7 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 - `tools/pages`: the static build of the examples for the live demos (`pnpm build:examples`).
 - `examples/planet/scripts/verify.ts`, `examples/endless/scripts/verify.ts`: the examples' own headless checks (`pnpm verify` in the example's folder).
 - `.claude/skills/`: `wallhammer-run` (running), `wallhammer-verify` (checks), `wallhammer-extend` (where things go when extending), `wallhammer-release` (releasing a version), `wallhammer-marks` (reading and updating the marks made in a dev page).
+- `.claude-plugin/marketplace.json` and `plugins/wallhammer/`: the Claude Code plugin for the users of the package (skills `wallhammer-build`, `wallhammer-marks`, pointing into `node_modules/wallhammer-web/docs/`, mainly `agents.md` and `cookbook.md`), distinct from this repository's own `.claude/skills/`; its version equals the package's (`check:docs` enforces it).
 - `internal/`: internal working material, never committed.
 - `.github/workflows/`: `checks.yml` (all checks on push and pull request), `publish.yml` (npm publish when a GitHub release is published), `pages.yml` (live demos: the examples built to GitHub Pages on push to `main`).
 - `README.md`: running, checks, pictures, npm publishing and release, origin, the copy in the city repository.

@@ -33,6 +33,8 @@ What changed between versions: [CHANGELOG](https://github.com/freema/wallhammer-
 
 Start here:
 
+- [Wallhammer Web for agents](docs/agents.md): the first page for a coding agent: rules for code built on the engine, goal → entry → page → example, the module map, debugging.
+- [Cookbook](docs/cookbook.md): recipes by goal, each with checked code, the example to open and the pitfalls.
 - [Getting started](docs/getting-started.md): start the dev container and draw a first scene.
 - [Architecture](docs/architecture.md): modules, layers, the import rules and what enforces them.
 - [Concepts](docs/concepts.md): plain-data contracts, determinism, the palette, the frame order.
@@ -80,6 +82,37 @@ engine.start();
 ```
 
 This draws only the background. [Getting started](docs/getting-started.md) adds a mesh.
+
+## Building with an AI agent
+
+The engine is meant to be built on with a coding agent. Its documentation ships in the npm package, so an agent in your project reads the version you installed under `node_modules/wallhammer-web/docs/`:
+
+- [Wallhammer Web for agents](docs/agents.md): the one page to read first: the rules for code built on the engine, goal → entry → page → example, the module map, debugging.
+- [Cookbook](docs/cookbook.md): recipes by goal with checked code, the example to open and the pitfalls.
+- [Marks](docs/marks.md): pin notes to points of your running scene; the agent lists them, fixes and attaches an after-picture, you accept.
+
+**Claude Code.** The repository is a plugin marketplace with one plugin, `wallhammer`, holding two skills: `wallhammer-build` (rules, where things go, which recipe serves which goal, verifying) and `wallhammer-marks` (working through marks). Install it once:
+
+```text
+/plugin marketplace add freema/wallhammer-web
+/plugin install wallhammer@wallhammer-web
+```
+
+Update it with `/plugin marketplace update wallhammer-web`.
+
+**Codex** (and other agents that read `.agents/skills/`): copy the same skills into your project.
+
+```sh
+npx degit freema/wallhammer-web/plugins/wallhammer/skills .agents/skills
+```
+
+**One instruction file for both.** Put this line in your project's `AGENTS.md`:
+
+```text
+Read node_modules/wallhammer-web/docs/agents.md before writing engine code.
+```
+
+and a `CLAUDE.md` that contains only `@AGENTS.md`, so Claude Code and Codex read the same instructions.
 
 ## Rules in one paragraph
 

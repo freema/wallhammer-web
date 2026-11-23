@@ -11,4 +11,4 @@ export type { FreeOptions, FreeSetup, FreeState, HeightAbove, UpSource } from '.
 export { FreePath, newFreePose, writeFreePose } from './free-path.ts';
 export type { FreeKey, FreePathEase, FreePathOptions, FreePathUp, FreePose } from './free-path.ts';
 export { DEFAULT_FOLLOW, FollowRig } from './follow.ts';
-export type { BoomClearance, FollowOptions, FollowSetup } from './follow.ts';
+export type { BoomClearance, FollowOptions, FollowSetup, FollowState } from './follow.ts';

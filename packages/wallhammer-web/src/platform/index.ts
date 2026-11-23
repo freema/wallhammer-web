@@ -27,3 +27,5 @@ export { captureCanvas } from './marks/capture.ts';
 export type { CanvasCapture } from './marks/capture.ts';
 export { markStore } from './marks/store.ts';
 export type { MarkStore } from './marks/store.ts';
+export { hashParam, pageMarking } from './marks/page.ts';
+export type { PageMarking } from './marks/page.ts';

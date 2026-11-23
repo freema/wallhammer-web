@@ -41,6 +41,11 @@ Then open <http://localhost:5281/walk/>. Another port: `EXAMPLES_PORT=5291 docke
   A gamepad works too.
 - `F` first person and back, `C` the wireframe of the collision solids (yellow standable, red blocking, violet the
   invisible edge of the course), `R` back to the start.
+- `N` switches the mark mode (dev server only, not in the live demo): a click pins a note to the course, picked against
+  the collision world (`collisionPick`), kept in `internal/marks/` by the dev server's store; one call to the engine's
+  `installEngineMarking` in `src/main.ts` (Marks in the engine's docs). Opening a mark's view puts the walker back on
+  its spot and the camera exactly where it was; the figure's heading comes from the page's own hash (`yaw`, to 0.1°).
+  `marks=1` turns the marks on in a page driven by a script, `marks=0` hides the pins.
 - URL hash: `#seed=7&x=60&z=60&yaw=0&fp=0&c=0&lock=0&pr=1.5`. `fp=1` first person, `c=1` the wireframe, `lock=1` a click
   locks the pointer, `pr` caps the canvas pixel ratio (default 1.5, `0` the device's own).
 

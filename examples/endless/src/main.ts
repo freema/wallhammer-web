@@ -9,6 +9,8 @@
 // cam=free in the hash swaps the orbit camera for the engine's free camera (see free-camera.ts): W A S D fly along the
 // view, E / Q up and down, drag looks around, the wheel changes the speed; alt is the start height above the surface.
 // follow=1 (or the key F) makes the free camera hold its height above the surface while it moves.
+// N in the free camera switches the mark mode (dev server only): a click pins a note to the terrain, kept by the dev
+// server's store; marks=1 turns the marks on in a page driven by a script, marks=0 hides the pins.
 // lod=smooth in the hash switches on smooth levels of detail (off by default): levels are chosen by the error on the
 // screen within a budget of cells (px: tolerance in pixels, default 2; cells: the budget, default 800) and the terrain
 // blends between levels instead of jumping. Baked files of this mode live in their own folder (see README).
@@ -34,7 +36,7 @@ import { cellId, cellKey, shapeHash } from 'wallhammer-web/gen-core';
 import type { CellContent, CellId } from 'wallhammer-web/gen-core';
 import { DEFAULT_STREAMING, FileCellProvider, GeneratorCellProvider, encodeCell, pixelsPerRadian } from 'wallhammer-web/world';
 import type { CellEdits, CellProvider, StreamingConfig, Ticket } from 'wallhammer-web/world';
-import { StreamedWorld, WorkerCellProvider, createEngine, viewTickets } from 'wallhammer-web/runtime';
+import { StreamedWorld, WorkerCellProvider, createEngine, heightPick, installEngineMarking, viewTickets } from 'wallhammer-web/runtime';
 import { CellStates, applyEventToAll, decodeCellStates, raycastParts } from 'wallhammer-web/sim/destruction';
 import { hashBytes } from 'wallhammer-web/sim';
 import { DAMAGE, entryRung } from 'wallhammer-web/base';
@@ -605,4 +607,11 @@ async function fly(f: { toX: number; toZ: number; frames: number }): Promise<voi
   hud: damageLine,
   benchmark: (n: number): number => renderer.benchmark(engine.view, n),
 };
+
+// Marks (key N in the free camera): notes pinned to points of the terrain, picked against its height function. Only in
+// the dev server (the live demos have none); `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  const marks = installEngineMarking(engine, { pick: heightPick((x, z) => surfaceHeight(seed, x, z), { maxDistanceM: 50_000 }), hash: viewHash });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
 engine.start();

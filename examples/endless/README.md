@@ -41,6 +41,11 @@ The overlay shows the cell states, the work queue, generation and upload time pe
   positive looks down). `dist` is not used.
 - Shot presets in this mode: `free-low`, `free-mid`, `free-high`, `free-down`, `free-far-low`
   (`node shot.mjs --url http://127.0.0.1:5281/endless/ --hash cam=free`).
+- `N` switches the mark mode (dev server only, not in the live demo): a click pins a note to the terrain, picked
+  against its height function (`heightPick`), kept in `internal/marks/` by the dev server's store; one call to the
+  engine's `installEngineMarking` in `src/main.ts` (Marks in the engine's docs). A mark's view comes back exactly from
+  its hash (`mkview=`). `marks=1` turns the marks on in a page driven by a script, `marks=0` hides the pins. The orbit
+  camera has no marks.
 
 ### Smooth levels of detail
 

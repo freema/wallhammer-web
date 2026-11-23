@@ -61,6 +61,23 @@ export interface FollowOptions {
   clearance?: BoomClearance;
 }
 
+/**
+ * Everything that places a following view, as numbers: enough to put the eye back exactly. The followed point
+ * belongs to the caller (a figure the game moves); the next `follow` and `update` move the view on from here.
+ */
+export interface FollowState {
+  /** The followed point as last given to `follow`. */
+  target: Vec3;
+  /** The smoothed pivot (it may trail the followed point raised by `pivotHeight`). */
+  pivot: Vec3;
+  yawDeg: number;
+  pitchDeg: number;
+  /** The wanted boom length. */
+  distance: number;
+  /** The boom length drawn (shortened by the clearance, or growing back). */
+  boom: number;
+}
+
 /** Below this boom length (with `minDistance` 0) zooming in snaps to the view from the pivot. */
 const SNAP_TO_PIVOT = 0.5;
 
@@ -124,6 +141,36 @@ export class FollowRig implements View {
     this.pivot[1] = t[1] + this.setup.pivotHeight;
     this.pivot[2] = t[2];
     this._boom = this.reach(this.distance);
+  }
+
+  /** The view as numbers (copies), for `setState`. */
+  state(): FollowState {
+    const t = this.target;
+    const p = this.pivot;
+    return { target: [t[0], t[1], t[2]], pivot: [p[0], p[1], p[2]], yawDeg: this.yawDeg, pitchDeg: this.pitchDeg, distance: this.distance, boom: this._boom };
+  }
+
+  /**
+   * Puts the view at a state as it is, without smoothing and without asking the clearance (a recorded view comes back
+   * bit for bit). Left-out parts keep their values; without `boom` the boom gets the length the clearance allows for
+   * `distance`. The followed point is the caller's: the next `follow` and `update` move the view on from here.
+   */
+  setState(s: Partial<FollowState>): void {
+    if (s.target) {
+      this.target[0] = s.target[0];
+      this.target[1] = s.target[1];
+      this.target[2] = s.target[2];
+    }
+    if (s.yawDeg !== undefined) this.yawDeg = s.yawDeg;
+    if (s.pitchDeg !== undefined) this.pitchDeg = s.pitchDeg;
+    if (s.distance !== undefined) this.distance = s.distance;
+    if (s.pivot) {
+      this.pivot[0] = s.pivot[0];
+      this.pivot[1] = s.pivot[1];
+      this.pivot[2] = s.pivot[2];
+    }
+    if (s.target || s.pivot) this.placed = true;
+    this._boom = s.boom ?? this.reach(this.distance);
   }
 
   /** Smooths the pivot and shortens the boom by `clearance`; call once per frame with the real seconds since the last. */

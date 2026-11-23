@@ -6,7 +6,8 @@
 //   x, z, yaw  start place (yaw in degrees, 0 faces −z)     fp=1 first person     c=1 the wireframe of the solids
 //   lock=1     a click locks the pointer (Escape lets it go)  pr  cap of the canvas pixel ratio (default 1.5; 0 = none)
 // Controls: W A S D or the arrows walk, Shift runs, Space jumps, a drag turns, the wheel moves the camera in and out;
-// F first person and back, C the wireframe of the solids, R back to the start. A gamepad works too (left stick,
+// F first person and back, C the wireframe of the solids, R back to the start, N the mark mode (dev server only: a click
+// pins a note to the course; marks=1 turns the marks on in a page driven by a script). A gamepad works too (left stick,
 // right stick, A, RT or the left stick pressed). A jump keeps the speed and the heading of take-off until landing (the
 // walker's defaults); the view can still be turned in the air. The figure's poses come from src/pose.ts.
 
@@ -17,7 +18,7 @@ import { bindWalkInput } from 'wallhammer-web/platform';
 import type { WalkInputState } from 'wallhammer-web/platform';
 import { InstanceSetLayer, MeshLayer } from 'wallhammer-web/render';
 import type { Material } from 'wallhammer-web/render';
-import { createEngine } from 'wallhammer-web/runtime';
+import { collisionPick, createEngine, installEngineMarking } from 'wallhammer-web/runtime';
 import { collisionLines, formatProfile, profileFrame } from 'wallhammer-web/tools';
 import type { FrameProfile } from 'wallhammer-web/tools';
 import { Walker, newWalkIntent } from 'wallhammer-web/world';
@@ -414,6 +415,13 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
   profile,
   profileText: (frames = 20): string => formatProfile(profile(frames)),
 };
+
+// Marks (key N): notes pinned to points of the course, picked against the collision world. A mark's view puts the
+// walker back on its spot. Only in the dev server (the live demos have none); `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  const marks = installEngineMarking(engine, { pick: collisionPick(world), hash, placeTarget: (t) => walker.teleport(t[0], t[1], t[2]) });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
 
 // Start once the loading screen has painted.
 const loadingEl = document.getElementById('loading');

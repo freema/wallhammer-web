@@ -23,3 +23,5 @@ export { LIQUID_SCENE_UNIT, LiquidBackdropLayer, LiquidLensLayer, LiquidNearLaye
 export type { LiquidLayerOptions, LiquidLensOptions, LiquidShaftsLayerOptions } from './liquid.ts';
 export { NearDetailStream } from './near-details.ts';
 export type { NearDetailFrame, NearDetailGroup, NearDetailReply, NearDetailStats, NearDetailStreamOptions } from './near-details.ts';
+export { collisionPick, engineMarkHost, gapPick, heightPick, installEngineMarking, restoreRigView, rigViewText } from './marks.ts';
+export type { CollisionPickOptions, EngineMarkingOptions, GapPickOptions, HeightPickOptions, MarkEngine, MarkPick, MarkRig } from './marks.ts';

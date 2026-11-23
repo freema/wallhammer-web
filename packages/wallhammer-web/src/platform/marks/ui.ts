@@ -75,7 +75,7 @@ const OPEN: readonly MarkStatus[] = ['new', 'seen', 'working', 'reopened'];
 const inFilter = (f: Filter, s: MarkStatus): boolean => (f === 'all' ? true : f === 'fixed' ? s === 'fixed' : OPEN.includes(s));
 
 export interface MarkingApi {
-  /** The saved marks, oldest first (copies). */
+  /** The saved marks of this page (`Mark.page` is its path), oldest first (copies). */
   list(): Mark[];
   /** Picks at a canvas point (physical pixels; the middle by default) and saves a mark with `note`, as a click would. */
   add(note: string, px?: number, py?: number): Promise<Mark>;
@@ -165,6 +165,10 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
 
   const keyName = options.key.replace(/^Key/, '');
   let statusEl: HTMLParagraphElement | null = null;
+
+  /** The store keeps the marks of every page of the dev server; this page shows and lists its own (`Mark.page`). */
+  const page = location.pathname;
+  const own = (list: Mark[]): Mark[] => list.filter((m) => m.page === page);
 
   function setMarks(list: Mark[]): void {
     marks = list;
@@ -390,7 +394,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     if (polling) return;
     polling = true;
     try {
-      const list = await store.list();
+      const list = own(await store.list());
       if (JSON.stringify(list) !== signature) {
         setMarks(list);
         if (comparing) showCompare(comparing);
@@ -435,7 +439,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     const rect = host.canvas.getBoundingClientRect();
     const draft: MarkDraft = {
       note: '',
-      page: location.pathname,
+      page,
       point,
       // The click in the canvas's own pixels (the camera's pixels should be the same; scaled in case they are not).
       pixel: { x: Math.round(((px * host.canvas.width) / w) * 10) / 10, y: Math.round(((py * host.canvas.height) / h) * 10) / 10 },
@@ -534,7 +538,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
 
   async function load(): Promise<number> {
     try {
-      setMarks(await store.list());
+      setMarks(own(await store.list()));
       status = '';
     } catch (err) {
       status = `store not reachable: ${String(err)}`;

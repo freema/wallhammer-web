@@ -1,6 +1,6 @@
 ---
 name: wallhammer-verify
-description: Run the Wallhammer Web checks (TypeScript typecheck, layer check and its fixtures, golden hashes of the engine and of the examples, documentation check, mesh, motion, walking and follow-camera checks, check of the published package, build of the live demos) in Docker and interpret the results. Use after any change in this repository, before saying a change is done, or when the user asks whether things still work. Typical requests "verify it", "check the types", "do the tests pass?", "run the checks", "did I break something?", "golden test", "golden", "layer check", "check the docs", "can it be published?", "does the demo build?".
+description: Run the Wallhammer Web checks (TypeScript typecheck, layer check and its fixtures, golden hashes of the engine and of the examples, documentation check, mesh, motion, walking and follow-camera checks, the marks store test, check of the published package, build of the live demos) in Docker and interpret the results. Use after any change in this repository, before saying a change is done, or when the user asks whether things still work. Typical requests "verify it", "check the types", "do the tests pass?", "run the checks", "did I break something?", "golden test", "golden", "layer check", "check the docs", "can it be published?", "does the demo build?".
 ---
 
 # Verify Wallhammer Web
@@ -21,6 +21,7 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'
 docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'
 docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'
 docker compose exec -T dev sh -c 'cd /app && pnpm check:follow'
+docker compose exec -T dev sh -c 'cd /app && pnpm test:marks'
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'     # needs the network
 docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'
 ```
@@ -40,6 +41,7 @@ A check passes when it exits 0 and its last line counts every case as passed: bo
 | `check:motion` | `motion: N of N scenarios ok, … ms` |
 | `check:walk` | `walk: N of N scenarios ok, … ms` |
 | `check:follow` | `N/N follow cases passed in … ms` |
+| `test:marks` | `marks: N of N cases ok` |
 | `check:pack` | `ok: the packed package installs, loads and type-checks` |
 | planet `pnpm verify` | `planet: all checks passed` |
 
@@ -56,6 +58,7 @@ Parts: `pnpm test:golden:engine`, `pnpm test:golden:examples`; `node tools/walk/
 - **Golden `MISSING <name>`**: a new recipe without a stored hash. Same accept step, with the user's approval.
 - **`check:docs`**: `[code]` is a sample that does not type-check, `[link]` a broken relative link or anchor, `[subpath]` an unknown `wallhammer-web/<x>` entry, `[reference]` an export of an entry that `docs/reference.md` does not name. The link rule also covers the root README, CHANGELOG, CONTRIBUTING, CLAUDE.md, the examples' READMEs and the skills. `node tools/docs/check.ts --keep` in `/app` keeps the generated files and prints their folder.
 - **`check:motion`, `check:walk`**: one line per scenario, `ok`, `FAIL` or `slow`. `slow` is a missed CPU-time target and does not fail; the run fails also when it takes over 5 s. `check:walk` has three groups: `# collision world` (including the camera boom's clearance), `# walker`, `# test course (examples/walk)`. The follow camera itself (`FollowRig`) is `check:follow`: one line per case, `ok` or `FAIL follow: <name> — <detail>`.
+- **`test:marks`**: one `FAIL marks: <case> — <detail>` line per failed case of the marks store (save, list, patch, after-pictures, delete, refused input) or of `wallhammer-marks`; it works on a scratch folder in the system's temp folder, never on `internal/marks/`.
 - **`check:pack`**: `pack: FAIL …` names a file the tarball lacks or must not have (`files` in the package's `package.json`); an import error in `smoke` usually means an entry of `exports` without its twin in `publishConfig.exports`; a `tsc` error means the declarations in `dist/` do not resolve for a consumer. Without network it cannot run; say so.
 - A failure in files you did not touch may come from another agent editing at the same time. Report it, do not fix it, retry later.
 

@@ -1,8 +1,8 @@
-// The page's client of the marks store on the dev server (tools/vite/marks-store.ts): list, save with a picture,
+// The page's client of the marks store on the dev server (`marksStore` of wallhammer-web/marks-store): list, save with a picture,
 // change (note, category, status, a log entry) and delete. Every request that changes something carries the header
 // `x-marks: 1`, which a page of another origin cannot send without a preflight the store never answers.
 
-import type { Mark, MarkDraft, MarkPatch } from './types.ts';
+import type { Mark, MarkDraft, MarkPatch } from '../../base/marks.ts';
 
 export interface MarkStore {
   list(): Promise<Mark[]>;
@@ -11,7 +11,7 @@ export interface MarkStore {
   /** Changes a saved mark and appends an entry to its log; returns the mark the store wrote. */
   update(id: string, patch: MarkPatch): Promise<Mark>;
   remove(id: string): Promise<void>;
-  /** The URL of a picture of the store, from its path relative to the repository (`internal/marks/m0007.png`). */
+  /** The URL of a picture of the store, from its path in a record (`.marks/m0007.png`). */
   pictureUrl(path: string): string;
 }
 

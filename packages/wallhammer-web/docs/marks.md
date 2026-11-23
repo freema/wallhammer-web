@@ -6,21 +6,23 @@ a picture of the canvas with the pick circled and what the page can say about th
 numbered pins coloured by their status, carry an append-only log with pictures taken after a repair, and agents read
 and update them from the command line.
 
-Only one piece of this lives in the package: `marchRay` in `wallhammer-web/world`, the pick against a height function.
-The rest is workspace tooling and is never published:
+Marks ship in the package, split by where each part runs:
 
 | Part | Where | What it is |
 | --- | --- | --- |
+| The record | `wallhammer-web/base` (`Mark`, `MarkDraft`, `MarkLogEntry`, `MarkPatch`, `PickHit`, `MarkView`, `MARK_STATUSES`, `MARK_CATEGORIES`, `statusOf`, `lastLog`, `lastAfterPicture`) | Plain data, shared by the page, the store and the command line. |
 | The pick | `marchRay` in `wallhammer-web/world` | A ray marched against a signed gap function, pure. |
-| The page's part | `examples/shared/src/marks/` | The mark mode, the pins, the panel, the picture and the store client (DOM), and the record types. |
-| The store | `tools/vite/marks-store.ts` (with `tools/vite/png.ts`) | A dev-server plugin that keeps the marks in `internal/marks/`. |
-| Readers and updaters | `tools/marks/list.mjs`, `set.mjs`, `shoot.mjs` | List, change a status, take an after-picture on the host GPU. |
-| A page that uses it | `examples/planet/src/marks.ts` | Key `N` in the free camera of the planet example. |
+| The page's part | `wallhammer-web/platform` (`installMarking`, `MarkHost`, `MarkingOptions`, `MarkingApi`, `markStore`, `captureCanvas`, `MARK_STATUS_COLOURS`) | The mark mode, the pins, the panel, the picture and the store client (DOM). |
+| The store | `marksStore` in `wallhammer-web/marks-store` (Node only) | A Vite dev-server plugin that keeps the marks in a folder. |
+| The command line | the package's `bin` `wallhammer-marks` (`list`, `set`) | List the marks, change a status. |
+| A page that uses it | `examples/planet/src/marks.ts` (in the repository, not in the package) | Key `N` in the free camera of the planet example. |
 
-Why the page's part is not in the package: the browser DOM belongs to `platform` alone, which holds the plumbing of
-input, canvas and frame loop, not a review panel with its texts; a 2D canvas context is opened only in `gpu`; and the
-store it talks to exists only in the workspace's dev server. The record types travel with the page's part, the store
-and the command-line tools that share them, so the package gains no format it cannot store.
+The record types are plain data in `base`, so every layer may read them. `MarkHost` holds the page's canvas
+(`HTMLCanvasElement`) and `MarkingOptions` a key of the keyboard, so they sit in `platform` with the panel, the only
+layer that touches the DOM. The picture is taken with `toBlob` alone; no 2D context is opened outside `gpu`. The store
+and the command-line tool use Node's file system and run only in a dev server or a shell: they are an entry of their own
+that nothing else in the engine imports and the root entry does not re-export. The panel's labels are the tool's own,
+in English.
 
 ## The pick: `marchRay`
 
@@ -55,12 +57,13 @@ describes: instances, structures and effects drawn over the surface are not in i
 
 ## In a page
 
-A page installs the marks with `installMarking(host, options)` from `examples/shared/src/marks/ui.ts` and gets the
-script interface `MarkingApi` back (`list`, `add`, `update`, `remove`, `goto`, `compare`, `mode`, `reload`,
-`snapshot`). The `MarkHost` it hands over is small: the canvas and its size, the ray under a pixel, where a world point
-lands on the canvas, the pick, the current view as a URL hash that restores it, the facts of a place, a synchronous
-render, a frame hook and a way to put the camera at a view. `examples/planet/src/marks.ts` is a complete host in under
-200 lines.
+A page installs the marks with `installMarking(host, options)` from `wallhammer-web/platform` and gets the script
+interface `MarkingApi` back (`list`, `add`, `update`, `remove`, `goto`, `compare`, `mode`, `reload`, `snapshot`).
+`options` are the store's URL path (`${import.meta.env.BASE_URL}__marks` in a Vite page), the key
+(`KeyboardEvent.code`) and whether the pins are drawn. The `MarkHost` it hands over is small: the canvas and its size,
+the ray under a pixel, where a world point lands on the canvas, the pick, the current view as a URL hash that restores
+it, the facts of a place, a synchronous render, a frame hook and a way to put the camera at a view.
+`examples/planet/src/marks.ts` in the repository is a complete host in under 200 lines.
 
 The planet example loads its marks only when `import.meta.env.DEV` holds, so the static build of the live demos has
 none of them, and a page driven by a script (`navigator.webdriver`: the picture and benchmark tools) has none unless
@@ -72,8 +75,8 @@ reads back empty.
 
 ## Records
 
-The store keeps one JSON line per mark in `internal/marks/marks.jsonl` (git ignores `internal/`), the picture as
-`<id>.png` and after-pictures as `<id>-after-<n>.png`. A mark:
+The store keeps one JSON line per mark in `marks.jsonl` of its folder, the picture as `<id>.png` and after-pictures as
+`<id>-after-<n>.png`. A mark:
 
 | Field | Meaning |
 | --- | --- |
@@ -84,21 +87,47 @@ The store keeps one JSON line per mark in `internal/marks/marks.jsonl` (git igno
 | `pixel`, `canvas` | The click in physical canvas pixels; the canvas in physical and CSS pixels. |
 | `view` | `hash` (restores the camera) and what else the host records. |
 | `facts` | What the host can say about the place. |
-| `picture`, `pictureNote` | The picture's path, or null and why. |
+| `picture`, `pictureNote` | The picture's path (relative to the dev server's working folder when the store's folder lies in it), or null and why. |
 | `status` | `new` (also when missing), `seen`, `working`, `fixed`, `accepted`, `reopened`, `wontfix`. |
 | `log` | Entries `{ seq, status, by, text, picture?, at, was? }`; it only grows. |
 
-The store answers under the page's base (`/planet/__marks`): `GET` lists, `POST` saves, `PATCH /<id>` changes a mark
-and appends to its log (`fixed` needs an after-picture in the same request), `DELETE /<id>` removes a mark and its
-pictures. It takes only same-origin requests on localhost, and a change needs the header `x-marks: 1`.
+## The store and the command line
 
-## From the command line
+The store is a Vite plugin from the Node-only entry `wallhammer-web/marks-store`; it is active in the dev server only
+(`apply: 'serve'`), and the package does not depend on Vite (the plugin types the hooks it uses itself):
 
-```sh
-node tools/marks/list.mjs --open                                            # the open marks
-node tools/marks/set.mjs m0007 --status seen --by agent:clouds              # read
-node tools/marks/shoot.mjs m0007 --attach --by agent:clouds --status fixed --text "the edge fades over 200 m"
+<!-- check: skip -->
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import { marksStore } from 'wallhammer-web/marks-store';
+
+export default defineConfig({ plugins: [marksStore()] });
 ```
 
-`list.mjs` (`--open`, `--md`, `--json`) and `set.mjs` run on the host or in the container; `shoot.mjs` runs on the
-host, on the real GPU. The workflow for agents is the skill `wallhammer-marks` (`.claude/skills/wallhammer-marks/`).
+Its folder is the environment variable `WH_MARKS_DIR` when set (a scratch folder for a test), else the option `dir`
+(relative to Vite's root), else `.marks/` in Vite's root (`marksFolder`). This repository passes `internal/marks/`
+(ignored by git) in the planet example's `vite.config.ts`. The store answers under the page's base (`/planet/__marks`):
+`GET` lists, `POST` saves, `PATCH /<id>` changes a mark and appends to its log (`fixed` needs an after-picture in the
+same request), `DELETE /<id>` removes a mark and its pictures. It takes only same-origin requests on localhost, and a
+change needs the header `x-marks: 1`.
+
+The command-line tool is the package's `bin`:
+
+```sh
+npx wallhammer-marks list --open                                  # the open marks (fixed ones stay listed)
+npx wallhammer-marks list --md                                    # also marks.md with links, facts and logs
+npx wallhammer-marks set m0007 --status seen --by agent:clouds    # through the dev server's store
+npx wallhammer-marks set m0007 --status fixed --by agent:clouds --text "the edge fades over 200 m" --after after.png
+```
+
+The folder is `--dir`, else `WH_MARKS_DIR`, else `.marks` in the working folder; the dev server (for `set` and the links
+of `list`) is `--url`, else `WH_MARKS_URL`, else `http://localhost:5173`. An agent sets `seen`, `working`, `fixed`
+(with an after-picture of the same view) or `wontfix`; `accepted` and `reopened` are the developer's, in the panel.
+
+## In this repository
+
+`node tools/marks/list.mjs` and `set.mjs` run the same tool from the package's source with this repository's defaults
+(`internal/marks/` and the example server on port 5281); `shoot.mjs` takes an after-picture of a mark's view on the
+host GPU and is not part of the package. `pnpm test:marks` checks the store and the tool on a scratch folder. The
+workflow for agents is the skill `wallhammer-marks` (`.claude/skills/wallhammer-marks/`).

@@ -1,15 +1,13 @@
 // Marks: notes a developer pins to points of a 3D scene while moving through it, so that faults can be found and
-// followed up later by people and agents. This folder knows nothing of the scene it marks: the page hands it a
-// `MarkHost` (rays under the cursor, a pick, the camera as a restorable view, facts of a place, a frame hook) and gets
-// a mark mode, numbered pins and a store client back (`installMarking` in ui.ts).
+// followed up later by people and agents. This file holds the plain data of a mark: the record, its statuses and
+// categories, what a pick found and the camera of a mark, and small readers of a record. The page's part (the mark
+// mode, the pins, the panel, the picture and the store client) is in `platform` (`installMarking`); the dev-server
+// store and the command-line tool are the Node-only entry `wallhammer-web/marks-store`.
 //
-// A mark is a plain record, kept as one JSON line by the dev server's store (tools/vite/marks-store.ts) and read by the
-// command-line tools (tools/marks/). Each mark is tracked: a status, an optional category and an append-only log of
-// who did what.
+// A mark is kept as one JSON line by the store and read by the command-line tool (`wallhammer-marks`). Each mark is
+// tracked: a status, an optional category and an append-only log of who did what.
 
-import type { Ray, Vec3 } from 'wallhammer-web/base';
-
-export type { Ray, Vec3 };
+import type { Vec3 } from './math.ts';
 
 /** What a pick found under the cursor. */
 export interface PickHit {
@@ -33,7 +31,7 @@ export interface MarkView {
 /** A mark as the page drafts it, before the store gives it an id. */
 export interface MarkDraft {
   note: string;
-  /** The path of the page the mark was made on (`/planet/`); the tools open it again with the view's hash. */
+  /** The path of the page the mark was made on (`/scene/`); the tools open it again with the view's hash. */
   page: string;
   /** Null when the ray hit nothing. */
   point: PickHit | null;
@@ -64,7 +62,7 @@ export interface MarkLogEntry {
   /** Who: `developer`, `agent:<topic>`, … */
   by: string;
   text: string;
-  /** An after-picture of the mark's view, relative to the repository (`internal/marks/m0007-after-1.png`). */
+  /** An after-picture of the mark's view, a path as the store names it (`.marks/m0007-after-1.png`). */
   picture?: string;
   /** When the store wrote it (ISO), for reading only. */
   at?: string;
@@ -80,7 +78,8 @@ export interface Mark extends MarkDraft {
   seq: number;
   /** When the store wrote it (ISO), for reading only. */
   savedAt: string;
-  /** Path of its picture relative to the repository, or null when none could be made. */
+  /** Path of its picture as the store names it (relative to the dev server's working folder when it lies in it), or null
+   * when none could be made. */
   picture: string | null;
   /** Why there is no picture, when there is none. */
   pictureNote?: string;
@@ -112,45 +111,9 @@ export function lastLog(m: Pick<Mark, 'log'>): MarkLogEntry | null {
   return Array.isArray(m.log) && m.log.length ? m.log[m.log.length - 1]! : null;
 }
 
-/** The newest after-picture of a mark (a path relative to the repository), or null. */
+/** The newest after-picture of a mark (a path as the store names it), or null. */
 export function lastAfterPicture(m: Pick<Mark, 'log'>): string | null {
   const log = Array.isArray(m.log) ? m.log : [];
   for (let i = log.length - 1; i >= 0; i--) if (log[i]!.picture) return log[i]!.picture!;
   return null;
-}
-
-/** What the marks need of the page. */
-export interface MarkHost {
-  canvas: HTMLCanvasElement;
-  /** Whether marking is possible now (a free camera, say). Outside it the mode closes and the pins hide. */
-  allowed(): boolean;
-  /** The canvas's size in physical pixels, as the camera uses it. */
-  size(): [number, number];
-  /** The ray under a point of the canvas in physical pixels from the top-left corner, in world metres. */
-  ray(px: number, py: number): Ray;
-  /** Where a world point lands on the canvas in physical pixels, or null when it is behind the eye or hidden. */
-  toScreen(world: Vec3): [number, number] | null;
-  /** The point the ray meets, or null when it meets nothing. */
-  pick(ray: Ray): PickHit | null;
-  /** The camera now, with a hash that reproduces it. */
-  view(): MarkView;
-  /** What is known of the picked place (or, for a miss, of the view). */
-  facts(hit: PickHit | null, ray: Ray): Record<string, unknown>;
-  /** Renders one frame at once; the picture is read from the canvas right after it, in the same task. */
-  renderNow(): void;
-  /** Asks for a frame. */
-  invalidate(): void;
-  /** Calls `f` before every frame. */
-  onFrame(f: () => void): void;
-  /** Puts the camera at a mark's view. */
-  goto(view: MarkView): void;
-}
-
-export interface MarkingOptions {
-  /** The store's URL path (`${import.meta.env.BASE_URL}__marks` on the example server). */
-  endpoint: string;
-  /** The key (`KeyboardEvent.code`) that switches the mark mode. */
-  key: string;
-  /** Whether the pins are drawn. */
-  pins: boolean;
 }

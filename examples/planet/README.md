@@ -231,7 +231,7 @@ most 5 s). For a recording frame by frame, `window.__wh` has:
 | `src/movie.ts` | The movie: `MOVIE_SHOTS`, `planMovie`, `movieFrame(movie, t)` (pure) and the player behind key `M`. |
 | `src/flight-check.ts` | The flight run through the streaming manager without a browser; the streaming configuration shared with the page. |
 | `src/main.ts` | The page: engine, streaming, flight driver, line and panel, script interface `window.__wh`. |
-| `src/marks.ts` | The marks' host (dev server only): the pick against the height and the sea level with `marchRay`, the exact view, the facts of a place; installs `examples/shared/src/marks/` behind key `N` as `__wh.marks`. |
+| `src/marks.ts` | The marks' host (dev server only): the pick against the height and the sea level with `marchRay`, the exact view, the facts of a place; installs `installMarking` of `wallhammer-web/platform` behind key `N` as `__wh.marks`. The store is `marksStore` of `wallhammer-web/marks-store` in `vite.config.ts`, with the folder `internal/marks/`. |
 | `src/cell-worker.ts` | The worker that runs the generator. |
 | `src/strips.ts` | The strips: `planetStrips`, `generatePlanetStripCell`. |
 | `src/strip-cell-worker.ts` | The worker that runs the generator with the strips. |

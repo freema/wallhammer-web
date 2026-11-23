@@ -37,6 +37,9 @@
 //   [sim-headless]     the engine module `sim` imports anything but base, core and gen-core (it must run in plain Node)
 //   [sim-nondeterministic]  `sim` uses Math.random, the clock (Date, performance.now) or a transcendental Math
 //                      function, which IEEE 754 does not define exactly (determinism tier A)
+//   [node-only]        a Node built-in (`node:*`) is imported outside the Node-only engine modules (NODE_ONLY_MODULES:
+//                      marks-store), or a Node-only module is imported by another engine module, the root entry, or an
+//                      example file other than its vite.config.ts
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -65,6 +68,7 @@ export const LAYERS: Readonly<Record<string, number>> = {
   sim: 5,
   runtime: 6,
   tools: 7,
+  'marks-store': 8,
 };
 
 const ENGINE = 'wallhammer-web';
@@ -90,6 +94,17 @@ export const CONTENT_MAY_IMPORT: ReadonlySet<string> = new Set(['base', 'core', 
  * directly in the module folder (index.ts, build.ts) rank after all subfolders and may import every one of them.
  */
 export const SUBFOLDER_ORDER: Readonly<Record<string, readonly string[]>> = { 'gen-arch': ['structure', 'interior', 'damage'] };
+/**
+ * Engine modules that run only in Node (a dev server, a command-line tool), never in a page: the only ones that may
+ * import Node's built-ins. Nothing else in the engine imports them; an example imports them only in its vite.config.ts.
+ */
+export const NODE_ONLY_MODULES: ReadonlySet<string> = new Set(['marks-store']);
+/** Node's built-in modules by their bare names (the `node:` prefix is caught on its own). */
+const NODE_BUILTINS: ReadonlySet<string> = new Set([
+  'assert', 'buffer', 'child_process', 'cluster', 'crypto', 'dgram', 'dns', 'events', 'fs', 'fs/promises', 'http', 'http2',
+  'https', 'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'readline', 'stream', 'tls', 'url', 'util', 'v8', 'vm',
+  'worker_threads', 'zlib',
+]);
 /** Engine modules the simulation may import: no browser, no GPU, no image side. */
 export const SIM_MAY_IMPORT: ReadonlySet<string> = new Set(['base', 'core', 'gen-core']);
 
@@ -283,8 +298,23 @@ export function check(root: string): Violation[] {
       // Skip matches inside comments or strings: the keyword itself must be code.
       if (code.slice(m.index, m.index + 6) !== src.slice(m.index, m.index + 6)) continue;
       const spec = (m[1] ?? m[2])!;
+      const nodeOnlyFile = owner.kind === 'engine' && owner.module !== null && NODE_ONLY_MODULES.has(owner.module);
+      if (owner.kind === 'engine' && !nodeOnlyFile && (spec.startsWith('node:') || NODE_BUILTINS.has(spec))) {
+        add('node-only', m.index, `${owner.module ?? 'root entry'} imports the Node built-in "${spec}"; only ${[...NODE_ONLY_MODULES].join(', ')} may`);
+        continue;
+      }
       const target = targetOf(file, spec);
       if (!target) continue;
+      if (target.kind === 'engine' && target.module !== null && NODE_ONLY_MODULES.has(target.module)) {
+        if (owner.kind === 'engine' && owner.module !== target.module) {
+          add('node-only', m.index, `${owner.module ?? 'root entry'} imports the Node-only module ${target.module} ("${spec}"); nothing in the engine may`);
+          continue;
+        }
+        if (owner.kind === 'example' && path.basename(file) !== 'vite.config.ts') {
+          add('node-only', m.index, `example ${owner.pkg} imports the Node-only module ${target.module} ("${spec}") outside its vite.config.ts`);
+          continue;
+        }
+      }
       // Subfolder order: within the module, an import may point only to the file's own subfolder or an earlier one.
       if (ordered !== null && ownRank >= 0 && target.kind === 'engine' && target.module === ordered) {
         const parts = spec.split('/');

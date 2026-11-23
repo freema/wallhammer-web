@@ -54,7 +54,7 @@ Guides:
 - [Headless use](docs/headless.md): what runs in plain Node without a GPU.
 - [Bodies on rails and nested frames](docs/frames.md): reproducible trigonometry, orbits and spin from time, 64-bit frames and numbers relative to the eye for the GPU.
 - [Tools](docs/tools.md): the layer check, golden hashes, the docs check, screenshots, benchmarks.
-- [Marks](docs/marks.md): notes pinned to points of a scene from a dev page, a store on the dev server and command-line readers; the pick `marchRay` against a height function.
+- [Marks](docs/marks.md): notes pinned to points of a scene from a dev page (`installMarking` in `platform`), a store on the dev server (`wallhammer-web/marks-store`) and the command-line tool `wallhammer-marks`; the pick `marchRay` against a height function.
 
 Lookup:
 

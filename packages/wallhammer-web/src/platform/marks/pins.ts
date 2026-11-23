@@ -1,14 +1,15 @@
 // The pins: a small numbered label per saved mark, placed over the canvas where its point lands, every frame. Plain DOM
 // over the canvas (never in a mark's picture) that the pointer passes through. A pin is drawn whether or not something
 // stands between it and the eye: it shows where a mark is, not whether it is in sight (the host's `toScreen` may hide
-// it). Its colour is the mark's status (`STATUS_COLOUR`, shown as a legend in the panel); closed marks (accepted,
+// it). Its colour is the mark's status (`MARK_STATUS_COLOURS`, shown as a legend in the panel); closed marks (accepted,
 // wontfix) are dimmed.
 
-import { statusOf } from './types.ts';
-import type { Mark, MarkHost, MarkStatus } from './types.ts';
+import { statusOf } from '../../base/marks.ts';
+import type { Mark, MarkStatus } from '../../base/marks.ts';
+import type { MarkHost } from './host.ts';
 
 /** The colour of each status: background, and the text colour that reads on it. */
-export const STATUS_COLOUR: Record<MarkStatus, { bg: string; fg: string }> = {
+export const MARK_STATUS_COLOURS: Readonly<Record<MarkStatus, { bg: string; fg: string }>> = {
   new: { bg: '#d93025', fg: '#fff' },
   seen: { bg: '#e8710a', fg: '#fff' },
   working: { bg: '#f9ab00', fg: '#111' },
@@ -70,7 +71,7 @@ export class Pins {
       }
       // The note and the status may change after the pin was made (the panel, an agent through the store).
       const status = statusOf(m);
-      const c = STATUS_COLOUR[status];
+      const c = MARK_STATUS_COLOURS[status];
       el.style.setProperty('--mk-bg', c.bg);
       el.style.setProperty('--mk-fg', c.fg);
       el.classList.toggle('mk-closed', status === 'accepted' || status === 'wontfix');

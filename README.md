@@ -136,7 +136,7 @@ The repository is a pnpm workspace:
 
 - `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/).
 - `examples/`: the example pages above, each with its own `README.md`, and `examples/shared/`, code used by more than one example (not a page).
-- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`), host tools (`shot/shot.mjs`, `bench`) and the readers of the marks made in a dev page (`marks`).
+- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`), host tools (`shot/shot.mjs`, `bench`) and this repository's marks tools and the store's test (`marks`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
 - `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending, releasing).
 - `internal/`: internal working material, ignored by git (see [Internal notes](#internal-notes)).
@@ -191,6 +191,7 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'         # check:me
 docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'       # motion: N of N scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'         # walk: N of N scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:follow'       # N/N follow cases passed in … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm test:marks'         # marks: N of N cases ok
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the packed package installs, loads and type-checks
 docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'  # planet: all checks passed
 ```
@@ -200,7 +201,8 @@ docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'  # pla
 - `check:docs` type-checks the code samples in the documentation and checks the links.
 - `check:mesh` and `check:motion` test, in plain Node, the mesh builder with bare shapes (`gen-mesh`) and the motion module (`motion`).
 - `check:walk` tests, in plain Node, the collision world, the walker (including saving and restoring its state), the follow camera and the course of `examples/walk`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
-- `check:pack` checks the package in the shape it is published to npm (see below). It needs the network.
+- `test:marks` tests the marks' dev-server store and the command-line tool `wallhammer-marks` on a scratch folder.
+- `check:pack` checks the package in the shape it is published to npm (see below), its `bin` included. It needs the network.
 - `pnpm verify` in `examples/planet` is that example's own headless check (generator, flight, streaming, movie). `examples/endless` has one too (`pnpm verify --seed 7`), for its baked cells; it needs `pnpm bake` first and is not part of CI.
 
 ## Pictures
@@ -217,7 +219,7 @@ Pictures go to `tools/shot/out/` (ignored by git). The last line is `shot: N pic
 
 ### Marks
 
-In the dev server, key `N` in the free camera of the `planet` example switches a mark mode: a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). `tools/marks/list.mjs` lists the marks, `set.mjs` changes their status, `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
+In the dev server, key `N` in the free camera of the `planet` example switches a mark mode: a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). The panel, the store and the command-line tool `wallhammer-marks` are part of the package (`installMarking` in `platform`, `wallhammer-web/marks-store`). In this repository `tools/marks/list.mjs` lists the marks and `set.mjs` changes their status (the package's tool with this repository's folder and server), `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
 
 ## npm package
 

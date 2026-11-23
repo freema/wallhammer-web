@@ -1,5 +1,5 @@
-// Shared by the marks' command-line tools (list.mjs, set.mjs, shoot.mjs): where the store's files are, reading the
-// list, mark ids. No dependencies.
+// Shared by this repository's marks tools (list.mjs, set.mjs, shoot.mjs): where the store's files are in this
+// repository, reading the list, mark ids. list.mjs and set.mjs run the package's `wallhammer-marks` with these defaults.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -13,6 +13,14 @@ export const STATUSES = ['new', 'seen', 'working', 'fixed', 'accepted', 'reopene
 export const CATEGORIES = ['bug', 'look', 'idea'];
 /** The example server (docker compose up -d). */
 export const SERVER = 'http://127.0.0.1:5281';
+
+/** The arguments with `--dir` and `--url` added when not given: this repository's folder and example server. */
+export function withRepoDefaults(args) {
+  const out = [...args];
+  if (!out.includes('--dir')) out.push('--dir', DIR);
+  if (!out.includes('--url')) out.push('--url', SERVER);
+  return out;
+}
 
 export const statusOf = (m) => (STATUSES.includes(m.status) ? m.status : 'new');
 

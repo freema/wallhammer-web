@@ -11,7 +11,7 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 - **No 3D or graphics library, no loaded images.** All graphics are made by code.
 - **Determinism.** Generators are pure functions (input and seed → data). Randomness only from named streams (`hashInts`), never `Math.random` or time.
 - **English only.** Every tracked file (code, comments, documentation, READMEs, skills, strings shown by the examples) and every commit message is English. Only the chat follows the user's language.
-- **Nothing project-specific in the engine.** The data of a concrete place, texts of a user interface and the content of one game belong in the project that uses the engine, or in an example. Only `packages/wallhammer-web` is published to npm; the examples are private workspace packages and are never published.
+- **Nothing project-specific in the engine.** The data of a concrete place, texts of a user interface and the content of one game belong in the project that uses the engine, or in an example. Generic developer tools of the engine (the marks panel) may carry their own English labels; a game's or a place's interface still may not. Only `packages/wallhammer-web` is published to npm; the examples are private workspace packages and are never published.
 - **Internal material stays out of git.** Notes, plans, research, reports and drafts go to `internal/` (gitignored, as is `*.local.md`), never into tracked files. Never stage them with `git add -f`.
 - **The copy in the Ústí repository is not edited from here.** The city model repository keeps a frozen hard copy of engine 0.4.0 in its `web/packages/wallhammer-web`. Do not edit a local checkout of that repository, wherever it lies on the machine. The two copies are synchronised by hand, deliberately, only on the user's instruction.
 - **Commit, push and npm publishing only on an explicit instruction.** The package version is the user's to change.
@@ -20,11 +20,11 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 
 - `packages/wallhammer-web/src/<module>/`: engine modules. `packages/wallhammer-web/docs/`: documentation (its samples are type-checked).
 - `examples/<name>/`: example pages (`minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`), served by `dev` at http://localhost:5281/<name>/.
-- `examples/shared/`: code used by more than one example (the pathfinder figure, the marks' page part), imported by relative path; not a page, not listed or built.
+- `examples/shared/`: code used by more than one example (the pathfinder figure), imported by relative path; not a page, not listed or built.
 - `tools/layers`, `tools/docs`, `tools/pack`, `tools/mesh`, `tools/motion`: checks of the engine.
 - `tools/golden/engine/` (engine recipes) and `tools/golden/` (recipes that need example code): golden hashes, each set with its own `hashes.json`.
 - `tools/walk`, `tools/follow-check`: checks of walking and the follow camera (`check:walk`, `check:follow`).
-- `tools/marks`: the marks made in a dev page (key `N` in `planet`; records in `internal/marks/`): `list.mjs`, `set.mjs`, `shoot.mjs` (after-pictures on the host GPU); the store is the dev-server plugin `tools/vite/marks-store.ts`.
+- Marks (notes pinned in a dev page, key `N` in `planet`; records in `internal/marks/`): record types in `base` (`src/base/marks.ts`), the panel in `platform` (`src/platform/marks/`), the dev-server store and the `bin` `wallhammer-marks` in the Node-only entry `wallhammer-web/marks-store` (`src/marks-store/`). `tools/marks`: `list.mjs` and `set.mjs` (the package's tool with this repository's defaults), `shoot.mjs` (after-pictures on the host GPU), `test.ts` (`pnpm test:marks`).
 - `tools/serve` (one server for all examples), `tools/vite` (dev-server plugins), `tools/shot` (pictures: `page-shot.mjs` in the `shot` service, `shot.mjs` on the host), `tools/bench` (performance, on the host).
 - `tools/pages`: the static build of the examples for the live demos (`pnpm build:examples`).
 - `examples/planet/scripts/verify.ts`, `examples/endless/scripts/verify.ts`: the examples' own headless checks (`pnpm verify` in the example's folder).

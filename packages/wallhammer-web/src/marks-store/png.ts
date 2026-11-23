@@ -1,6 +1,6 @@
-// A minimal PNG reader and writer for the dev tools, on node:zlib alone: 8-bit truecolour with or without alpha, not
-// interlaced (what a browser's canvas encoder writes). Used by the marks store (marks-store.ts) to circle a point in a
-// picture and to tell an empty read-back of a canvas from a picture.
+// A minimal PNG reader and writer on node:zlib alone: 8-bit truecolour with or without alpha, not interlaced (what a
+// browser's canvas encoder writes). Used by the marks store (store.ts) to circle a point in a picture and to tell an
+// empty read-back of a canvas from a picture. Not exported from the entry.
 
 import { deflateSync, inflateSync } from 'node:zlib';
 

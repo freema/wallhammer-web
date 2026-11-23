@@ -1,4 +1,5 @@
-// Layer 1, platform: the only place that touches the browser. Canvas size, raw input, the frame loop and real time.
+// Layer 1, platform: the only place that touches the browser. Canvas size, raw input, the frame loop and real time,
+// and the marks panel, a developer tool (marks/).
 
 export { canvasPixelRatio, observeCanvasSize, resizeCanvas, syncCanvasSize } from './canvas.ts';
 export type { Canvas, CanvasSizeTarget } from './canvas.ts';
@@ -18,3 +19,11 @@ export { watchContextLoss } from './context-loss.ts';
 export type { ContextLossHandlers } from './context-loss.ts';
 export { DEFAULT_WALK_KEYS, bindWalkInput } from './walk-input.ts';
 export type { WalkInput, WalkInputOptions, WalkInputState, WalkKeys, WalkView } from './walk-input.ts';
+export { installMarking } from './marks/ui.ts';
+export type { MarkingApi } from './marks/ui.ts';
+export type { MarkHost, MarkingOptions } from './marks/host.ts';
+export { MARK_STATUS_COLOURS } from './marks/pins.ts';
+export { captureCanvas } from './marks/capture.ts';
+export type { CanvasCapture } from './marks/capture.ts';
+export { markStore } from './marks/store.ts';
+export type { MarkStore } from './marks/store.ts';

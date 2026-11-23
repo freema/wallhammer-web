@@ -4,7 +4,7 @@ Every entry of the package, with its main names, checked against each `src/<modu
 
 ## `wallhammer-web` (root)
 
-Re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. Not `render`, `sim`, `sim/destruction`, `runtime`, `gen-arch`, `gen-ground`, `gen-vegetation`.
+Re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. Not `render`, `sim`, `sim/destruction`, `runtime`, `gen-arch`, `gen-ground`, `gen-vegetation`, nor the Node-only `marks-store`.
 
 ## `wallhammer-web/base` (layer 0)
 
@@ -32,6 +32,7 @@ Re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`,
 | `relativeMatrix`, `relativePoints` | 64-bit poses and points to 32-bit numbers relative to the eye, for the GPU. |
 | `tangentPose`, `directionFromDeg`, `directionToDeg` | A frame that touches a sphere (x east, y up, z south); unit direction from latitude and longitude and back. |
 | `quatIdentity`, `quatAxisTurns`, `quatMul`, `quatConj`, `quatNormalize`, `quatRotate`, `quatFromAxes`; type `Quat` | Rotations as unit quaternions `[x, y, z, w]`. |
+| `MARK_STATUSES`, `MARK_CATEGORIES`, `statusOf`, `lastLog`, `lastAfterPicture`; types `Mark`, `MarkDraft`, `MarkLogEntry`, `MarkPatch`, `MarkStatus`, `MarkCategory`, `MarkView`, `PickHit` | A mark as plain data: the record the store keeps, its statuses and categories, what a pick found and the camera of a mark; a record's status (`new` when missing), newest log entry and newest after-picture. See [Marks](marks.md#records). |
 | `radialUpAt`, `radialHeight`, `upFrame`, `toFramePlane`; types `RadialUp`, `UpFrame` | Up that points away from a centre: the unit up and the height of a point above a base radius; the frame of an upright object for an up (the shortest rotation from +y, the CPU twin of the shader's `localFrame`) and a direction as the (x, z) pair of that frame. See [Local up](rendering.md#local-up). |
 
 ## `wallhammer-web/platform` (layer 1)
@@ -51,6 +52,10 @@ Re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`,
 | `fetchBytes` | Fetch a URL as bytes (a `BytesFetcher` for `FileCellProvider`). |
 | `openByteStore`; type `ByteStore` | Byte arrays by key in the browser's storage (IndexedDB) that outlive the page: `get`, `put`, `keepOnly(prefix)`, `clear`, `usage`, `close`. Resolves to `null` where the browser gives no storage; reads and writes never reject. See [A cache in the browser's storage](streaming.md#a-cache-in-the-browsers-storage). |
 | `watchContextLoss`; type `ContextLossHandlers` | Calls `lost` and `restored` when a canvas loses its graphics context and gets a fresh one (and tells the browser that a restore is wanted). Returns a function that stops. See [Loss of the graphics context](rendering.md#loss-of-the-graphics-context). |
+| `installMarking(host, options)`; types `MarkHost`, `MarkingOptions`, `MarkingApi` | The marks, a developer tool: a key switches a mark mode over the canvas, a click picks a point, snapshots the canvas and saves a note through the store; numbered pins coloured by status, a panel to go to, edit, accept, reopen or delete marks and compare after-pictures. Returns the script interface. See [Marks](marks.md#in-a-page). |
+| `markStore(endpoint)`; type `MarkStore` | The page's client of the dev-server store: `list`, `save`, `update`, `remove`, `pictureUrl`. |
+| `captureCanvas(canvas, renderNow)`; type `CanvasCapture` | Renders a frame and snapshots the canvas in the same task (`toBlob`, no 2D context): a PNG as base64, or null and why. |
+| `MARK_STATUS_COLOURS` | The colour of each mark status (background and text), as the pins and the panel show it. |
 | types `Canvas`, `CanvasSizeTarget`, `CameraInputOptions`, `OrbitInputOptions`, `OrbitControl`, `ViewControl`, `ViewChangeKind`, `FrameLoopOptions`, `LoopClock`, `WorkerJob`, `WorkerAnswer`, `HeldKeys`, `FreeControl`, `FreeInput`, `FreeInputOptions`, `FreeKeys` | |
 
 ## `wallhammer-web/core` (layer 2)
@@ -386,3 +391,13 @@ See [The plan of a sphere](generators.md#gen-plan-the-plan-of-a-sphere).
 | `collisionLines(world, options?)`; type `CollisionLinesOptions` | The solids of a collision world as a wireframe (`LINE_LAYOUT` lines), filtered by `select`. See [Walking](walking.md#seeing-the-solids). |
 | `profileFrame(renderer, view, options?)`, `formatProfile(profile)`; types `FrameProfile`, `FrameTiming`, `LayerProfile`, `PassCost`, `ProfileOptions` | Frame profile on the graphics card at hand: target size, samples, shadow map size, GPU name; median frame time empty, with the shadow map kept, redrawn every frame and (with `step`) animated; per layer its passes, triangles, calls and cost in ms in the colour and the shadow pass. `formatProfile` makes a text table. See [Tools](tools.md#frame-profile). |
 | `meshParts`, `floatingParts`, `routeClearance`; types `MeshPart`, `MeshPartsOptions`, `FloatingOptions`, `RouteClearance`, `RouteClearanceOptions` | Checks of built geometry without a browser: connected parts of a mesh and those hanging in the air; the least distance of a route from the solids of a collision world. See [Mesh checks](tools.md#mesh-checks). |
+
+## `wallhammer-web/marks-store` (layer 8, Node only)
+
+Runs in a dev server, never in a page; nothing in the engine imports it and the root entry does not re-export it. The package's `bin` `wallhammer-marks` (`list`, `set`) belongs to it. See [Marks](marks.md#the-store-and-the-command-line).
+
+| Name | One line |
+| --- | --- |
+| `marksStore(options?)`; types `MarksStoreOptions`, `MarksStorePlugin` | The store of the marks as a Vite plugin (dev server only): one JSON line per mark and the pictures in a folder, routes under `<base>__marks`, same-origin requests from localhost only. Typed structurally, no dependency on Vite. |
+| `marksFolder(root, dir?, env?)`, `MARKS_DIR_ENV` | The store's folder: `WH_MARKS_DIR` when set, else `dir` relative to the root, else `.marks` in the root. |
+| types `MarksDevServer`, `MarksRequest`, `MarksResponse` | The parts of Vite's dev server and of Node's request and response the store uses. |

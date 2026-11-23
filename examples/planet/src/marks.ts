@@ -1,4 +1,4 @@
-// The planet's side of the marks (examples/shared/src/marks/): key N in the free camera, for the dev server only.
+// The planet's side of the marks (`installMarking` of wallhammer-web/platform): key N in the free camera, for the dev server only.
 // main.ts loads this file only when `import.meta.env.DEV` holds, so the static build of the live demos has none of it;
 // a page driven by a script (navigator.webdriver: the shot tools, the benchmarks) has none of it unless `#marks=1`.
 // `#marks=0` hides the pins. `window.__wh.marks` is the script interface (`MarkingApi`).
@@ -8,12 +8,11 @@
 // and its level seen from below. It does not see the plants and rocks, the waves, the clouds or the strips' own
 // meshes, and the drawn mesh of a coarser level may stand off the height function by its screen error.
 
-import type { Vec3 } from 'wallhammer-web/base';
+import type { MarkView, PickHit, Ray, Vec3 } from 'wallhammer-web/base';
 import type { FreeRig } from 'wallhammer-web/camera';
+import { installMarking } from 'wallhammer-web/platform';
+import type { MarkHost, MarkingApi } from 'wallhammer-web/platform';
 import { marchRay } from 'wallhammer-web/world';
-import type { MarkHost, MarkView, PickHit, Ray } from '../../shared/src/marks/types.ts';
-import { installMarking } from '../../shared/src/marks/ui.ts';
-import type { MarkingApi } from '../../shared/src/marks/ui.ts';
 import { RADIUS_M, SHAPE, latLonOf } from './world.ts';
 
 /** What the marks need of the page (main.ts). */

@@ -1,0 +1,10 @@
+{
+  // The Node-only entry `wallhammer-web/marks-store` (the dev-server store and the `wallhammer-marks` tool): Node's
+  // types, no DOM. It imports only `base` of the engine.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/marks-store"]
+}

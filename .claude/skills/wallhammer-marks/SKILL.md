@@ -7,13 +7,13 @@ description: Read, follow up and close the marks a developer pins to points of a
 
 A mark is a note the developer pinned to a point of an example page while moving through it: the picked point, the clicked pixel, a view that puts the camera back exactly, a picture of the canvas with the pick circled, and facts the page could say about the place. Marks are tracked with a status and an append-only log. Read [Marks](../../../packages/wallhammer-web/docs/marks.md) once for the parts and the record format.
 
-Where things are: the page's part in `examples/shared/src/marks/`, the store in `tools/vite/marks-store.ts`, the readers in `tools/marks/`, the records in `internal/marks/` (git ignores it), the planet's host in `examples/planet/src/marks.ts`.
+Where things are (all of it but the host and `shoot` ships in the npm package): the record types in `packages/wallhammer-web/src/base/marks.ts`, the page's part (`installMarking`) in `packages/wallhammer-web/src/platform/marks/`, the store (`marksStore`) and the command-line tool `wallhammer-marks` in the Node-only entry `packages/wallhammer-web/src/marks-store/`, this repository's wrappers and `shoot.mjs` in `tools/marks/`, the records in `internal/marks/` (git ignores it; the planet's `vite.config.ts` passes that folder), the planet's host in `examples/planet/src/marks.ts`.
 
 ## When to use
 
 - The developer says they marked something, or asks to work through the marks.
 - Before reporting a fault from a mark as fixed.
-- When the mark mode, the store or a reader misbehaves, or when another example should get marks (add a host like `examples/planet/src/marks.ts` and `marksStore()` in its `vite.config.ts`; keep it dev only).
+- When the mark mode, the store or a reader misbehaves, or when another example should get marks (add a host like `examples/planet/src/marks.ts` and `marksStore({ dir: <repo>/internal/marks })` from `wallhammer-web/marks-store` in its `vite.config.ts`; keep it dev only).
 
 ## The developer's workflow in the page
 
@@ -26,12 +26,15 @@ Where things are: the page's part in `examples/shared/src/marks/`, the store in 
 ## The agent's workflow
 
 ```sh
+# In this repository: the package's `wallhammer-marks` with internal/marks/ and the example server as defaults.
 node tools/marks/list.mjs --open                    # host or container: the open marks (fixed ones stay listed)
 node tools/marks/list.mjs --md                      # also internal/marks/marks.md with the links, the facts and the logs
 node tools/marks/set.mjs m0007 --status seen --by agent:<topic>
 node tools/marks/set.mjs m0007 --status working --by agent:<topic> --text "what I am changing"
 node tools/marks/shoot.mjs m0007 --attach --by agent:<topic> --status fixed --text "what changed"   # host GPU
 ```
+
+In another project that installed `wallhammer-web` the same commands are `npx wallhammer-marks list --open` and `npx wallhammer-marks set …` (folder `--dir`, `WH_MARKS_DIR` or `.marks/`; dev server `--url`, `WH_MARKS_URL` or `http://localhost:5173`); `shoot` is only in this repository.
 
 1. `list --open`; read each mark's note, its picture (`internal/marks/<id>.png`, the pick is circled) and its facts. Open its view: the link in `marks.md` (`http://127.0.0.1:5281/<page>#<hash>`) puts the camera back.
 2. Set `seen` when you have read a mark, `working` when you change something for it. `--by agent:<topic>` names you in the log.
@@ -43,7 +46,7 @@ node tools/marks/shoot.mjs m0007 --attach --by agent:<topic> --status fixed --te
 
 ## The record format
 
-One JSON line per mark in `internal/marks/marks.jsonl`: `id` (`m0007`), `seq`, `note`, `category`, `page` (`/planet/`), `point` (`world`, `distanceM`, `surface`, `place`, `accuracy`; null when the ray met nothing), `pixel` (physical canvas pixels), `canvas`, `view` (`hash` and what the host records), `facts`, `picture` / `pictureNote`, `savedAt`, `status` (missing = `new`), `log` (`{ seq, status, by, text, picture?, at, was? }`, append only). Pictures: `<id>.png`, `<id>-after-<n>.png`. The store's routes and checks are in the header of `tools/vite/marks-store.ts`. Never edit `marks.jsonl` by hand while the dev server runs; go through the store.
+One JSON line per mark in `internal/marks/marks.jsonl`: `id` (`m0007`), `seq`, `note`, `category`, `page` (`/planet/`), `point` (`world`, `distanceM`, `surface`, `place`, `accuracy`; null when the ray met nothing), `pixel` (physical canvas pixels), `canvas`, `view` (`hash` and what the host records), `facts`, `picture` / `pictureNote`, `savedAt`, `status` (missing = `new`), `log` (`{ seq, status, by, text, picture?, at, was? }`, append only). Pictures: `<id>.png`, `<id>-after-<n>.png`. The store's routes and checks are in the header of `packages/wallhammer-web/src/marks-store/store.ts`. Never edit `marks.jsonl` by hand while the dev server runs; go through the store.
 
 ## Limits
 
@@ -54,4 +57,4 @@ One JSON line per mark in `internal/marks/marks.jsonl`: `id` (`m0007`), `seq`, `
 
 ## Testing the tools
 
-Never test on a developer's real marks. Back up `internal/marks/` first (`cp -a internal/marks internal/marks.bak-<date>`), or point the tools at a scratch folder: `WH_MARKS_DIR=<scratch>` for the readers, and for the store `marksStore({ dir })` or `WH_MARKS_DIR` in the dev server's environment. A scratch mark made through the page (`__wh.marks.add(note)` with `#marks=1`) is removed with `__wh.marks.remove(id)` or `DELETE <page>__marks/<id>`; say in the report that you made and removed it. Run the checks afterwards (skill `wallhammer-verify`); the store and the readers have no check of their own.
+Never test on a developer's real marks. Back up `internal/marks/` first (`cp -a internal/marks internal/marks.bak-<date>`), or point the tools at a scratch folder: `WH_MARKS_DIR=<scratch>` for the readers, and for the store `WH_MARKS_DIR` in the dev server's environment (it wins over the `dir` the planet passes). A scratch mark made through the page (`__wh.marks.add(note)` with `#marks=1`) is removed with `__wh.marks.remove(id)` or `DELETE <page>__marks/<id>`; say in the report that you made and removed it. Run the checks afterwards (skill `wallhammer-verify`); `pnpm test:marks` checks the store and `wallhammer-marks` on a scratch folder of its own.

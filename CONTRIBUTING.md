@@ -34,6 +34,7 @@ docker compose exec -T dev sh -c 'cd /app && pnpm check:mesh'         # check:me
 docker compose exec -T dev sh -c 'cd /app && pnpm check:motion'       # motion: 26 of 26 scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'         # walk: N of N scenarios ok, … ms
 docker compose exec -T dev sh -c 'cd /app && pnpm check:follow'       # N/N follow cases passed in … ms
+docker compose exec -T dev sh -c 'cd /app && pnpm test:marks'         # marks: N of N cases ok
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the packed package installs, loads and type-checks
 ```
 

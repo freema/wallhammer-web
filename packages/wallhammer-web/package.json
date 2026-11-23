@@ -43,11 +43,18 @@
     "./sim": "./src/sim/index.ts",
     "./sim/destruction": "./src/sim/destruction/index.ts",
     "./runtime": "./src/runtime/index.ts",
-    "./tools": "./src/tools/index.ts"
+    "./tools": "./src/tools/index.ts",
+    "./marks-store": "./src/marks-store/index.ts"
+  },
+  "bin": {
+    "wallhammer-marks": "./src/marks-store/cli.ts"
   },
   "publishConfig": {
     "access": "public",
     "types": "./dist/index.d.ts",
+    "bin": {
+      "wallhammer-marks": "./dist/marks-store/cli.js"
+    },
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -132,6 +139,10 @@
       "./tools": {
         "types": "./dist/tools/index.d.ts",
         "default": "./dist/tools/index.js"
+      },
+      "./marks-store": {
+        "types": "./dist/marks-store/index.d.ts",
+        "default": "./dist/marks-store/index.js"
       }
     }
   },
@@ -142,8 +153,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc -p tsconfig.node.build.json && chmod +x dist/marks-store/cli.js",
     "prepack": "pnpm run build"
   },
   "engines": {
@@ -153,6 +164,7 @@
     "earcut": "^3.2.4"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "typescript": "^7.0.2"
   }
 }

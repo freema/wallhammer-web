@@ -17,6 +17,7 @@
     "check:motion": "node tools/motion/check.ts",
     "check:walk": "node tools/walk/check.ts",
     "check:follow": "node tools/follow-check/check.ts",
+    "test:marks": "node tools/marks/test.ts",
     "serve": "node tools/serve/serve.ts",
     "build": "pnpm --filter wallhammer-web build",
     "build:examples": "node tools/pages/build.ts",

@@ -133,7 +133,7 @@ Animation time is frozen at the given value, so the same input gives the same im
 
 ## Marks
 
-Notes a developer pins to points of a dev page (key `N` in the planet example), kept by a dev-server store in `internal/marks/` and read and updated by `tools/marks/list.mjs`, `set.mjs` and `shoot.mjs` (after-pictures on the host GPU). See [Marks](marks.md).
+Notes a developer pins to points of a dev page (key `N` in the planet example): the panel `installMarking` in `wallhammer-web/platform`, the dev-server store `marksStore` in `wallhammer-web/marks-store` (this repository keeps the records in `internal/marks/`) and the package's command-line tool `wallhammer-marks` (`list`, `set`); in this repository `tools/marks/list.mjs` and `set.mjs` run it with the repository's defaults, `shoot.mjs` takes after-pictures on the host GPU and `pnpm test:marks` checks the store and the tool on a scratch folder. See [Marks](marks.md).
 
 ## Benchmarks
 

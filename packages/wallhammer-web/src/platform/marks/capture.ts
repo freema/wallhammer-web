@@ -3,10 +3,10 @@
 // A WebGL canvas made without `preserveDrawingBuffer` keeps its picture only until the browser shows it; a read after
 // that gives an empty picture. So the frame is rendered and the canvas snapshotted in the same task: `renderNow()`,
 // then `toBlob`, which copies the canvas when it is called and encodes later. The page opens no 2D context of its own
-// (the examples keep every graphics context in the engine); the store circles the picked pixel and tells an empty
-// read-back from a picture (tools/vite/marks-store.ts).
+// (every graphics context stays in `gpu`); the store circles the picked pixel and tells an empty read-back from a
+// picture (wallhammer-web/marks-store).
 
-export interface Capture {
+export interface CanvasCapture {
   /** The PNG as base64 without the `data:` prefix, or null. */
   png: string | null;
   /** Why there is no picture, when there is none. */
@@ -14,7 +14,7 @@ export interface Capture {
 }
 
 /** Renders a frame and snapshots the canvas in the same task; the encoding finishes later. */
-export function captureCanvas(canvas: HTMLCanvasElement, renderNow: () => void): Promise<Capture> {
+export function captureCanvas(canvas: HTMLCanvasElement, renderNow: () => void): Promise<CanvasCapture> {
   return new Promise((resolve) => {
     try {
       renderNow();

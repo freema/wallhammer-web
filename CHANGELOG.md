@@ -8,7 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **A pick against a height function**: `marchRay(ray, gap, options)` (in `world`, types `RayMarchOptions`, `RayMarchHit`) marches a ray against a signed gap function, with steps of a share of the gap and a floor that grows with the distance, and halves the first step behind the surface to a tolerance. Pure. The workspace's marks (notes pinned to points of a dev page, not part of the package) pick with it. See [Marks](packages/wallhammer-web/docs/marks.md).
+- **A pick against a height function**: `marchRay(ray, gap, options)` (in `world`, types `RayMarchOptions`, `RayMarchHit`) marches a ray against a signed gap function, with steps of a share of the gap and a floor that grows with the distance, and halves the first step behind the surface to a tolerance. Pure. The marks pick with it. See [Marks](packages/wallhammer-web/docs/marks.md).
+- **Marks, a developer tool**: notes pinned to points of a scene from a dev page, tracked with a status and a log, now part of the package (they were workspace tooling). The record in `base` (`Mark`, `MarkDraft`, `MarkLogEntry`, `MarkPatch`, `MarkStatus`, `MarkCategory`, `MarkView`, `PickHit`, `MARK_STATUSES`, `MARK_CATEGORIES`, `statusOf`, `lastLog`, `lastAfterPicture`); the mark mode, pins and panel in `platform` (`installMarking`, `MarkHost`, `MarkingOptions`, `MarkingApi`, `markStore`, `MarkStore`, `captureCanvas`, `CanvasCapture`, `MARK_STATUS_COLOURS`). See [Marks](packages/wallhammer-web/docs/marks.md).
+- **A new Node-only entry `wallhammer-web/marks-store`**: `marksStore(options)`, the marks' store as a Vite dev-server plugin (typed structurally, the package gains no dependency on Vite), keeping the records in `.marks/` of Vite's root unless `dir` or `WH_MARKS_DIR` says otherwise; `marksFolder`, `MARKS_DIR_ENV`; types `MarksStoreOptions`, `MarksStorePlugin`, `MarksDevServer`, `MarksRequest`, `MarksResponse`. The root entry does not re-export it.
+- **A command-line tool**: the package's `bin` `wallhammer-marks` with `list` (`--open`, `--md`, `--json`) and `set` (status, category, a log entry, an after-picture), the folder from `--dir`, `WH_MARKS_DIR` or `.marks` in the working folder, the dev server from `--url`, `WH_MARKS_URL` or `http://localhost:5173`.
 
 ## 0.6.0
 

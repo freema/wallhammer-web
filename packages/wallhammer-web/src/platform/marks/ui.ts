@@ -7,14 +7,16 @@
 // while the mode is on, so a change an agent makes shows without a reload. The pins show the marks in the scene,
 // coloured by status.
 //
-// `installMarking` is the whole of it; it returns the script interface (`MarkingApi`).
+// `installMarking` is the whole of it; it returns the script interface (`MarkingApi`). A developer tool of the engine:
+// its labels are its own, in English; it shows nothing of the page it is installed in.
 
+import { MARK_CATEGORIES, MARK_STATUSES, lastAfterPicture, lastLog, statusOf } from '../../base/marks.ts';
+import type { Mark, MarkCategory, MarkDraft, MarkPatch, MarkStatus } from '../../base/marks.ts';
 import { captureCanvas } from './capture.ts';
-import type { Capture } from './capture.ts';
-import { Pins, STATUS_COLOUR } from './pins.ts';
+import type { CanvasCapture } from './capture.ts';
+import type { MarkHost, MarkingOptions } from './host.ts';
+import { MARK_STATUS_COLOURS, Pins } from './pins.ts';
 import { markStore } from './store.ts';
-import { MARK_CATEGORIES, MARK_STATUSES, lastAfterPicture, lastLog, statusOf } from './types.ts';
-import type { Mark, MarkCategory, MarkDraft, MarkHost, MarkPatch, MarkStatus, MarkingOptions } from './types.ts';
 
 const STYLE = `
 .mk-layer { position: fixed; inset: 0; z-index: 6; cursor: crosshair; display: none; }
@@ -65,7 +67,7 @@ const DEVELOPER = 'developer';
 /** A click being turned into a mark: everything but the note, and the picture being encoded. */
 interface Pending {
   draft: MarkDraft;
-  capture: Promise<Capture>;
+  capture: Promise<CanvasCapture>;
 }
 
 type Filter = 'open' | 'fixed' | 'all';
@@ -89,7 +91,7 @@ export interface MarkingApi {
   /** Loads the list from the store again; returns how many marks there are. */
   reload(): Promise<number>;
   /** Renders a frame and returns the canvas as a PNG, as a mark's picture is taken (no circle); for after-pictures. */
-  snapshot(): Promise<Capture>;
+  snapshot(): Promise<CanvasCapture>;
 }
 
 const fmtM = (m: number): string => (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(1)} m`);
@@ -190,7 +192,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
 
     const legend = document.createElement('div');
     legend.className = 'mk-legend';
-    for (const s of MARK_STATUSES) legend.append(chip(s, '', STATUS_COLOUR[s].bg, STATUS_COLOUR[s].fg));
+    for (const s of MARK_STATUSES) legend.append(chip(s, '', MARK_STATUS_COLOURS[s].bg, MARK_STATUS_COLOURS[s].fg));
     panel.append(legend);
 
     const counts: Record<Filter, number> = { open: 0, fixed: 0, all: marks.length };
@@ -229,7 +231,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     row.className = 'mk-row';
     const n = document.createElement('b');
     n.textContent = `#${m.seq}`;
-    row.append(n, chip(st, '', STATUS_COLOUR[st].bg, STATUS_COLOUR[st].fg));
+    row.append(n, chip(st, '', MARK_STATUS_COLOURS[st].bg, MARK_STATUS_COLOURS[st].fg));
     if (m.category) row.append(chip(m.category, 'mk-cat'));
     if (editing?.id === m.id) {
       const ed = document.createElement('input');

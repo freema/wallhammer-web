@@ -38,3 +38,5 @@ export { FRAME_NONE, FrameSet, directionFromDeg, directionToDeg, quatAxisTurns, 
 export type { FrameBearing, FramePose, FrameState, Quat } from './frames.ts';
 export { radialHeight, radialUpAt, toFramePlane, upFrame } from './up.ts';
 export type { RadialUp, UpFrame } from './up.ts';
+export { MARK_CATEGORIES, MARK_STATUSES, lastAfterPicture, lastLog, statusOf } from './marks.ts';
+export type { Mark, MarkCategory, MarkDraft, MarkLogEntry, MarkPatch, MarkStatus, MarkView, PickHit } from './marks.ts';

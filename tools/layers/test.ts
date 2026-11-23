@@ -42,6 +42,7 @@ const expected = [
   '[sim-nondeterministic]',
   '[use-case-word]',
   '[subfolder-order]',
+  '[node-only]',
 ];
 for (const e of expected) {
   if (!bad.out.includes(e)) {
@@ -68,7 +69,16 @@ for (const c of sharedCases) {
     console.log(`FAIL: the known-bad fixture did not report [example-imports] for examples/shared/src/${c}`);
   }
 }
-const findings = expected.length + subfolderCases.length + sharedCases.length;
+// Node-only modules: a Node built-in in a page module, the Node-only module imported by the engine and by an example's
+// page code; each case on its own.
+const nodeCases = ['packages/wallhammer-web/src/world/files.ts', 'packages/wallhammer-web/src/tools/store.ts', 'examples/demo/src/store.ts'];
+for (const c of nodeCases) {
+  if (!lines.some((l) => l.startsWith(`${c}:`) && l.includes('[node-only]'))) {
+    failed = true;
+    console.log(`FAIL: the known-bad fixture did not report [node-only] for ${c}`);
+  }
+}
+const findings = expected.length + subfolderCases.length + sharedCases.length + nodeCases.length;
 if (!failed) console.log(`ok: known-bad fixture fails with all ${findings} expected findings`);
 else console.log(bad.out);
 process.exit(failed ? 1 : 0);

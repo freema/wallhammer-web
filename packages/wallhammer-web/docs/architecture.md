@@ -8,8 +8,8 @@ A module may import only modules of a **lower** layer. It may not import a modul
 
 | Layer | Module | Contents |
 | --- | --- | --- |
-| 0 | `base` | Vector math, the `View` contract, plain-data contracts (`MeshData`, `InstanceData`, `TextureData`, `VertexLayout`, `MaterialDesc`, `BakeDesc`, `DrawState`, `UniformValue`), the `EnvSlot` contract, destructible structure types, reproducible trigonometry (`detSinCosTurns`), nested 64-bit frames (`FrameSet`). |
-| 1 | `platform` | The only place that touches the browser: canvas size, pointer, key and gamepad input (`bindWalkInput`), the frame loop, workers, `fetchBytes`. |
+| 0 | `base` | Vector math, the `View` contract, plain-data contracts (`MeshData`, `InstanceData`, `TextureData`, `VertexLayout`, `MaterialDesc`, `BakeDesc`, `DrawState`, `UniformValue`), the `EnvSlot` contract, destructible structure types, reproducible trigonometry (`detSinCosTurns`), nested 64-bit frames (`FrameSet`), the record of a mark (`Mark`, `MARK_STATUSES`, `statusOf`). |
+| 1 | `platform` | The only place that touches the browser: canvas size, pointer, key and gamepad input (`bindWalkInput`), the frame loop, workers, `fetchBytes`, and the marks panel, a developer tool (`installMarking`: mark mode, pins, panel, canvas snapshot, store client; [Marks](marks.md)). |
 | 2 | `core` | `Clock`, the palette (`definePalette`), closed-form ballistic tracks for falling pieces, orbits and spin as functions of time (`BodySystem`), and small shared arithmetic with GLSL twins: fades between levels of detail and of a cover (`LevelFade`, `coverFade`), a clear medium below a level (`mediumPath`, `MEDIUM_GLSL`). |
 | 2 | `gen-core` | Hash-based randomness with named streams, value noise, polygon geometry, spatial fields (`HeightField`, `SegmentField`, `OutlineField`, `Occupancy`), instance cells (`splitInstanceCells`), cell ids and the flat world shape for streaming. |
 | 2 | `motion` | Skeletons and poses as data (`Skeleton`, `Pose`, `boneMask`), blend and additive operations, world matrices (`solvePose`), a motion graph of states, transitions, layers, parameters, triggers and events at marks over motions the game writes (`MotionGraph`), a two-bone reach and ends kept on the ground. No motion of its own. See [Motion](motion.md). |
@@ -27,8 +27,11 @@ A module may import only modules of a **lower** layer. It may not import a modul
 | 5 | `sim` | Deterministic fixed-step simulation that runs in plain Node. Submodule `sim/destruction`. |
 | 6 | `runtime` | `createEngine`, `createHeadlessEngine`, `EnvironmentLink`, `SkyLayer`, `AtmosphereLayer`, `PrecipitationLayer`, `CloudShellLayer`, `CloudShadowLayer`, `CloudWeatherMap`, `CloudVolumeLayer`, `StreamedWorld`. |
 | 7 | `tools` | Debugging aids: the data view, the frame profile. |
+| 8 | `marks-store` | Node only, never in a page: the dev-server store of the marks (`marksStore`, a Vite plugin typed structurally) and the command-line tool `wallhammer-marks` (the package's `bin`). Imports only `base` and Node's built-ins; nothing in the engine imports it. |
 
-The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. It does **not** re-export `motion`, `render`, `sim`, `runtime`, `gen-arch`, `gen-ground`, `gen-vegetation` or `gen-plan`. Import those from their own entries.
+The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, `gpu`, `camera`, `env`, `world` and `tools`. It does **not** re-export `motion`, `render`, `sim`, `runtime`, `gen-arch`, `gen-ground`, `gen-vegetation`, `gen-plan` or the Node-only `marks-store`. Import those from their own entries. Through `base` and `platform` the root entry carries the marks' record and panel, never their store.
+
+`marks-store` is the only Node-only module. It is type-checked and built in a program of its own with Node's types and without the DOM (`tsconfig.node.json`), the rest of the package without Node's types. It may import Node's built-ins (`node:*`), no other module may; nothing else in the engine imports it, and an example imports it only in its `vite.config.ts` (layer check rule `node-only`).
 
 `sim/destruction` is a folder inside `sim`. The layer check treats it as part of `sim`.
 
@@ -76,6 +79,7 @@ So a renderer feature is described in neutral terms ("instances", "surface class
 | `use-case-word` | A use-case word (list above) in a non-content engine module. |
 | `sim-headless` | `sim` imports anything but `base`, `core` and `gen-core`. |
 | `sim-nondeterministic` | `sim` uses `Math.random`, `Date`, `performance.now` or a transcendental `Math` function (`sin`, `cos`, `atan2`, `exp`, `pow`, `hypot` and others). |
+| `node-only` | A Node built-in (`node:*`) imported outside the Node-only modules (`NODE_ONLY_MODULES`: `marks-store`), or a Node-only module imported by another engine module, the root entry, or an example file other than its `vite.config.ts`. |
 
 `pnpm check:layers:test` runs the check against a valid fixture and a known-bad fixture in `tools/layers/fixtures`.
 

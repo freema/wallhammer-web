@@ -1,5 +1,5 @@
-// Dev-server plugin: the store of the marks a developer makes in a page (examples/shared/src/marks/). Only in the dev
-// server (`apply: 'serve'`), never in a build. The routes answer under the page's base, `/<example>/__marks`:
+// Dev-server plugin: the store of the marks a developer makes in a page (`installMarking` of wallhammer-web/platform).
+// Only in the dev server (`apply: 'serve'`), never in a build. The routes answer under the page's base, `<base>__marks`:
 //
 //   GET    …/__marks                     the marks, oldest first (JSON array)
 //   GET    …/__marks/<id>.png            a mark's picture
@@ -10,16 +10,17 @@
 //   PATCH  …/__marks/<id>                { by, note?, category?, status?, text?, png?, afterFile? }: changes the note,
 //                                        the category (null removes it) or the status and appends one entry to the
 //                                        mark's log; `png` (base64) is saved as <id>-after-<n>.png, `afterFile` names
-//                                        such a file already written there (tools/marks/shoot.mjs). Status `fixed`
-//                                        needs an after-picture in the same request. Answers with the mark
+//                                        such a file already written there. Status `fixed` needs an after-picture in
+//                                        the same request. Answers with the mark
 //   DELETE …/__marks/<id>                removes the mark from the list, its picture and its after-pictures
 //
-// The files live in `internal/marks/` of the repository (git ignores `internal/`), or in `options.dir`, or in the
-// folder the environment variable WH_MARKS_DIR names (a scratch folder for a test; never test on a developer's marks).
+// The folder (`marksFolder`): the environment variable WH_MARKS_DIR when set (a scratch folder for a test; never test on
+// a developer's marks), else `options.dir` (relative to Vite's root), else `.marks/` in Vite's root. Paths in the
+// records are relative to the dev server's working folder when the store's folder lies in it, else absolute.
 //
-// Tracking: a mark's `status` is one of STATUSES (a mark without one is `new`), `category` one of CATEGORIES, and `log`
-// an append-only list of { seq, status, by, text, picture?, at, was? } (`was`: the note or category before a change).
-// The store stamps `at` like it stamps `savedAt`.
+// Tracking: a mark's `status` is one of MARK_STATUSES (a mark without one is `new`), `category` one of MARK_CATEGORIES,
+// and `log` an append-only list of { seq, status, by, text, picture?, at, was? } (`was`: the note or category before a
+// change). The store stamps `at` like it stamps `savedAt`.
 //
 // Only requests from a page of this server on localhost are taken: the Host must be localhost (or 127.0.0.1, [::1]),
 // an Origin, when sent, must be that same origin, and a request that changes something must carry `x-marks: 1` (a
@@ -27,25 +28,52 @@
 // written only inside the store's folder, under names the store makes itself. Changes run one at a time; a change to
 // one mark rewrites the list through a temporary file and a rename, every other line kept exactly as it was (a line
 // that is not JSON included).
+//
+// The plugin types the few parts of Vite's plugin and dev-server API it uses itself, so the package does not depend on
+// Vite.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { MARK_CATEGORIES, MARK_STATUSES } from '../base/marks.ts';
 import { PNG_SIGNATURE, isBlank, readPng, ring, writePng } from './png.ts';
 
-// The part of Vite's plugin and dev-server API used here, typed locally (as in new-files.ts).
-interface DevServer {
-  middlewares: { use(fn: (req: IncomingMessage, res: ServerResponse, next: () => void) => void): unknown };
-}
-interface Plugin {
-  name: string;
-  apply: 'serve';
-  configureServer(server: DevServer): void;
+/** The part of an incoming request the store reads (Node's `IncomingMessage` has it). */
+export interface MarksRequest {
+  url?: string;
+  method?: string;
+  headers: Record<string, string | string[] | undefined>;
+  on(event: string, listener: (...args: never[]) => void): unknown;
+  destroy(): unknown;
 }
 
-/** The repository root: the store names its files relative to it. */
-const REPO = fileURLToPath(new URL('../..', import.meta.url));
+/** The part of a response the store writes (Node's `ServerResponse` has it). */
+export interface MarksResponse {
+  statusCode: number;
+  setHeader(name: string, value: string): unknown;
+  end(data: Uint8Array): unknown;
+}
+
+/** The part of Vite's dev server the store uses: its middleware stack. */
+export interface MarksDevServer {
+  middlewares: { use(fn: (req: MarksRequest, res: MarksResponse, next: () => void) => void): unknown };
+}
+
+/** A Vite plugin, typed structurally: `plugins: [marksStore()]` in `vite.config.ts`. */
+export interface MarksStorePlugin {
+  name: string;
+  apply: 'serve';
+  configResolved(config: { root: string }): void;
+  configureServer(server: MarksDevServer): void;
+}
+
+export interface MarksStoreOptions {
+  /** The store's folder; a relative path resolves against Vite's root. Default `.marks` in Vite's root. */
+  dir?: string;
+}
+
+/** The environment variable that names the store's folder; it wins over the option and the default. */
+export const MARKS_DIR_ENV = 'WH_MARKS_DIR';
+
 const SEGMENT = '/__marks';
 const MAX_BODY = 48 * 1024 * 1024;
 const MAX_NOTE = 2000;
@@ -53,8 +81,8 @@ const MAX_BY = 80;
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 const ID = /^m\d{4,9}$/;
 const PICTURE = /^(m\d{4,9})(-after-\d{1,6})?\.png$/;
-const STATUSES = ['new', 'seen', 'working', 'fixed', 'accepted', 'reopened', 'wontfix'];
-const CATEGORIES = ['bug', 'look', 'idea'];
+const STATUSES: readonly string[] = MARK_STATUSES;
+const CATEGORIES: readonly string[] = MARK_CATEGORIES;
 
 type Rec = Record<string, unknown>;
 
@@ -72,10 +100,11 @@ function hostName(host: string): string {
 }
 
 /** Whether the request comes from a page of this server on localhost; `changes`: it writes or deletes. */
-function allowed(req: IncomingMessage, changes: boolean): boolean {
-  const host = req.headers.host ?? '';
+function allowed(req: MarksRequest, changes: boolean): boolean {
+  const host = String(req.headers.host ?? '');
   if (!LOCAL.has(hostName(host))) return false;
   const origin = req.headers.origin;
+  if (Array.isArray(origin)) return false;
   if (origin !== undefined) {
     let u: URL;
     try {
@@ -90,7 +119,7 @@ function allowed(req: IncomingMessage, changes: boolean): boolean {
   return !changes || req.headers['x-marks'] === '1';
 }
 
-function send(res: ServerResponse, status: number, body: unknown, type = 'application/json'): void {
+function send(res: MarksResponse, status: number, body: unknown, type = 'application/json'): void {
   const data = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   res.statusCode = status;
   res.setHeader('content-type', type);
@@ -98,7 +127,7 @@ function send(res: ServerResponse, status: number, body: unknown, type = 'applic
   res.end(data);
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer | null> {
+function readBody(req: MarksRequest): Promise<Buffer | null> {
   return new Promise((done, fail) => {
     if (Number(req.headers['content-length'] ?? 0) > MAX_BODY) return done(null);
     const parts: Buffer[] = [];
@@ -118,7 +147,7 @@ function readBody(req: IncomingMessage): Promise<Buffer | null> {
 }
 
 /** The JSON object of a body, or a refusal. */
-async function jsonBody(req: IncomingMessage): Promise<Rec> {
+async function jsonBody(req: MarksRequest): Promise<Rec> {
   const body = await readBody(req);
   if (!body) throw new Refused(413, `body over ${MAX_BODY} bytes`);
   let data: unknown;
@@ -159,11 +188,11 @@ function markPicture(png: Buffer, pixel: unknown): { png: Buffer | null; note: s
 }
 
 /** The store's files: the list (one JSON line per mark), the pictures and the last sequence number given. */
-function files(dir: string) {
+function files(dir: string, cwd: string) {
   const list = join(dir, 'marks.jsonl');
   const seqFile = join(dir, 'seq');
-  // Paths in the records: relative to the repository when the folder is in it.
-  const rel = relative(REPO, dir);
+  // Paths in the records: relative to the working folder when the store's folder is in it.
+  const rel = relative(cwd, dir);
   const named = (name: string): string => (rel && !rel.startsWith('..') && !isAbsolute(rel) ? `${rel.split('\\').join('/')}/${name}` : join(dir, name));
   const ensure = (): void => void mkdirSync(dir, { recursive: true });
   /** The lines of the list as they are in the file (without the line breaks), empty ones dropped. */
@@ -304,18 +333,27 @@ function applyPatch(id: string, p: Patch, f: Files): Rec {
   return mark;
 }
 
-/** The store's folder: `options.dir`, else WH_MARKS_DIR, else `internal/marks/` of the repository. */
-function storeDir(options: { dir?: string }): string {
-  const d = options.dir ?? process.env.WH_MARKS_DIR;
-  return d ? resolve(d) : join(REPO, 'internal', 'marks');
+/**
+ * The store's folder: WH_MARKS_DIR when set, else `dir` (relative to `root`), else `.marks` in `root`. `root` is Vite's
+ * root for the plugin.
+ */
+export function marksFolder(root: string, dir?: string, env: Record<string, string | undefined> = process.env): string {
+  const fromEnv = env[MARKS_DIR_ENV];
+  if (fromEnv) return resolve(fromEnv);
+  return resolve(root, dir ?? '.marks');
 }
 
-export function marksStore(options: { dir?: string } = {}): Plugin {
+/** The dev-server store of the marks, a Vite plugin (dev server only). */
+export function marksStore(options: MarksStoreOptions = {}): MarksStorePlugin {
+  let root = process.cwd();
   return {
-    name: 'wh-marks-store',
+    name: 'wallhammer-marks-store',
     apply: 'serve',
+    configResolved(config) {
+      root = config.root;
+    },
     configureServer(server) {
-      const f = files(storeDir(options));
+      const f = files(marksFolder(root, options.dir), process.cwd());
       // One change at a time: appends, rewrites and the sequence number never interleave.
       let queue: Promise<unknown> = Promise.resolve();
       const serial = <T>(job: () => T | Promise<T>): Promise<T> => {
@@ -323,7 +361,7 @@ export function marksStore(options: { dir?: string } = {}): Plugin {
         queue = run.catch(() => undefined);
         return run;
       };
-      const fail = (res: ServerResponse) => (e: unknown) => (e instanceof Refused ? send(res, e.status, { error: e.message }) : send(res, 500, { error: String(e) }));
+      const fail = (res: MarksResponse) => (e: unknown) => (e instanceof Refused ? send(res, e.status, { error: e.message }) : send(res, 500, { error: String(e) }));
 
       server.middlewares.use((req, res, next) => {
         // The page's base comes first (`/planet/__marks`); only the part from `/__marks` on is read.

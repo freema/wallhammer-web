@@ -22,19 +22,3 @@ The pathfinder, a walking figure built from code, and what it is built with:
 - `glyphs.ts`: the six painted signs as flat polygons and `glyphFaces`, which lays a sign into a plane.
 
 Each example keeps its own layer that draws the figures (its `cast.ts`), because the worlds they stand in differ.
-
-## `src/marks/`
-
-The page's part of the marks: notes a developer pins to points of a dev page (see
-[Marks](../../packages/wallhammer-web/docs/marks.md)). DOM only, no WebGL context; the store is the dev-server plugin
-`tools/vite/marks-store.ts`.
-
-- `types.ts`: the record (`Mark`, `MarkDraft`, `MarkLogEntry`, the statuses and categories) and what a page hands over
-  (`MarkHost`, `MarkingOptions`).
-- `ui.ts`: `installMarking(host, options)`: the mark mode, the note box, the panel and the script interface
-  (`MarkingApi`).
-- `pins.ts`: the numbered pins over the canvas, coloured by status.
-- `capture.ts`: the picture of the canvas (a render and `toBlob` in the same task).
-- `store.ts`: the client of the store.
-
-Each page keeps its own host (`examples/planet/src/marks.ts`): the pick, the view hash and the facts depend on its world.

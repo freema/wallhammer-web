@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { marksStore } from '../../tools/vite/marks-store.ts';
 import { newFiles } from '../../tools/vite/new-files.ts';
 import { workerUrls } from '../../tools/vite/worker-urls.ts';
 
@@ -9,8 +10,9 @@ const poll = process.env.WH_POLL === '1';
 export default defineConfig({
   // New files are reported by a folder scan; see tools/vite/new-files.ts for why polling alone misses them.
   // A build bundles the workers handed to the engine as `new URL('./x.ts', import.meta.url)`, see
-  // tools/vite/worker-urls.ts.
-  plugins: [newFiles({ enabled: poll }), workerUrls()],
+  // tools/vite/worker-urls.ts. The marks' store (key N in the page) answers at /planet/__marks in the dev server only,
+  // see tools/vite/marks-store.ts.
+  plugins: [newFiles({ enabled: poll }), workerUrls(), marksStore()],
   server: {
     port: 5284,
     strictPort: true,

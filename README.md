@@ -136,7 +136,7 @@ The repository is a pnpm workspace:
 
 - `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/).
 - `examples/`: the example pages above, each with its own `README.md`, and `examples/shared/`, code used by more than one example (not a page).
-- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`) and host tools (`shot/shot.mjs`, `bench`).
+- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`), host tools (`shot/shot.mjs`, `bench`) and the readers of the marks made in a dev page (`marks`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
 - `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent (running, checks, extending, releasing).
 - `internal/`: internal working material, ignored by git (see [Internal notes](#internal-notes)).
@@ -214,6 +214,10 @@ docker compose run --rm shot --url http://dev:5281/planet/ --presets @hash --siz
 Pictures go to `tools/shot/out/` (ignored by git). The last line is `shot: N pictures, M page errors`. The software renderer is slow: one picture per page and a `--timeout` are enough. The options are in the header of `tools/shot/page-shot.mjs`, the image is built from `tools/shot/Dockerfile`.
 
 `tools/shot/shot.mjs` and `tools/bench/` run on the host instead, because the real graphics card decides the picture and the frame times. See [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
+
+### Marks
+
+In the dev server, key `N` in the free camera of the `planet` example switches a mark mode: a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). `tools/marks/list.mjs` lists the marks, `set.mjs` changes their status, `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
 
 ## npm package
 

@@ -131,6 +131,10 @@ Pictures in Docker, on the software renderer and independent of the host's graph
 
 Animation time is frozen at the given value, so the same input gives the same image. Pages expose a small script interface on `window.__wh` (views, time, weather, stats, benchmark) that the tool uses.
 
+## Marks
+
+Notes a developer pins to points of a dev page (key `N` in the planet example), kept by a dev-server store in `internal/marks/` and read and updated by `tools/marks/list.mjs`, `set.mjs` and `shoot.mjs` (after-pictures on the host GPU). See [Marks](marks.md).
+
 ## Benchmarks
 
 `tools/bench/` measures cost per frame, startup, hitches, memory and streaming. Like the screenshot tool it runs on the host and reuses its `puppeteer-core` and Chrome. `bench.mjs` has the commands (`frames`, `counts`, `startup`, `hitches`, `memory`, `scale`, `shadow`, `hit`, `flight`, `profile`); `run-all.sh` runs the whole set one after another. Results go to `tools/bench/out/`, which git ignores. Headless Chrome caps presentation at 30 fps, so results are cost per frame from synchronous renders, never fps.

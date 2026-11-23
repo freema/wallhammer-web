@@ -1,9 +1,11 @@
-// Layer 5, world: spatial queries over a built scene (picking against height fields and prisms, the collision world and a walker over it)
+// Layer 5, world: spatial queries over a built scene (picking against height fields, prisms and gap functions, the collision world and a walker over it)
 // and world streaming: the streaming manager (cell states, tickets, epochs, levels of detail, budgets), the provider port with a generator
 // and a file implementation, and the binary cell format they share.
 
 export { raycastHeightField, raycastPrisms } from './pick.ts';
 export type { Prism } from './pick.ts';
+export { marchRay } from './march.ts';
+export type { RayMarchHit, RayMarchOptions } from './march.ts';
 export { CollisionWorld, newRayHit, newSlideResult } from './collide.ts';
 export type { CollisionWorldOptions, RayHit, SlideResult, SolidInfo, SolidOptions } from './collide.ts';
 export { addMeshSolid, convexHullXZ, meshCylinderFootprint, meshPrismFootprint } from './mesh-solids.ts';

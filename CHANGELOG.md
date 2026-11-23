@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+### Added
+
+- **A pick against a height function**: `marchRay(ray, gap, options)` (in `world`, types `RayMarchOptions`, `RayMarchHit`) marches a ray against a signed gap function, with steps of a share of the gap and a floor that grows with the distance, and halves the first step behind the surface to a tolerance. Pure. The workspace's marks (notes pinned to points of a dev page, not part of the package) pick with it. See [Marks](packages/wallhammer-web/docs/marks.md).
+
 ## 0.6.0
 
 ### Added

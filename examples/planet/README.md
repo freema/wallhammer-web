@@ -30,6 +30,9 @@ Then open <http://127.0.0.1:5281/planet/>. Another port: `EXAMPLES_PORT=5291 doc
   compare the two pictures and their frame times.
 - `C` hides and shows the clouds (and with them the rain and their shadows).
 - `M` plays the movie and stops it (see [Movie mode](#movie-mode)).
+- `N` (dev server only, free camera) switches the mark mode: a click pins a note to the point under the cursor, kept
+  with the view, a picture and facts of the place in `internal/marks/` (see
+  [Marks](../../packages/wallhammer-web/docs/marks.md)).
 - The line at the bottom always shows the height, the speed, the patches drawn, the time of a frame and the GPU
   memory.
 
@@ -59,6 +62,8 @@ URL hash (kept up to date while flying by hand):
 | `cover` | none | `0`–`1`: one cloud cover over the whole planet in place of the profile and its patches (rain from 0.6). |
 | `movie` | 0 | `1` plays the movie from the start as soon as the page has loaded. |
 | `bars` | 1 | `0` plays the movie without the letterbox bars. |
+| `time` | running | Seconds of animation time to start at, frozen (the exact view of a mark carries it). |
+| `marks` | 1 | Dev server only. `0` hides the marks' pins; `1` turns the marks on in a page driven by a script, which has none otherwise. |
 
 ## Strips
 
@@ -226,6 +231,7 @@ most 5 s). For a recording frame by frame, `window.__wh` has:
 | `src/movie.ts` | The movie: `MOVIE_SHOTS`, `planMovie`, `movieFrame(movie, t)` (pure) and the player behind key `M`. |
 | `src/flight-check.ts` | The flight run through the streaming manager without a browser; the streaming configuration shared with the page. |
 | `src/main.ts` | The page: engine, streaming, flight driver, line and panel, script interface `window.__wh`. |
+| `src/marks.ts` | The marks' host (dev server only): the pick against the height and the sea level with `marchRay`, the exact view, the facts of a place; installs `examples/shared/src/marks/` behind key `N` as `__wh.marks`. |
 | `src/cell-worker.ts` | The worker that runs the generator. |
 | `src/strips.ts` | The strips: `planetStrips`, `generatePlanetStripCell`. |
 | `src/strip-cell-worker.ts` | The worker that runs the generator with the strips. |

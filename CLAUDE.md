@@ -20,14 +20,15 @@ A web 3D engine on plain WebGL2 (`packages/wallhammer-web`, npm package `wallham
 
 - `packages/wallhammer-web/src/<module>/`: engine modules. `packages/wallhammer-web/docs/`: documentation (its samples are type-checked).
 - `examples/<name>/`: example pages (`minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`), served by `dev` at http://localhost:5281/<name>/.
-- `examples/shared/`: code used by more than one example (the pathfinder figure), imported by relative path; not a page, not listed or built.
+- `examples/shared/`: code used by more than one example (the pathfinder figure, the marks' page part), imported by relative path; not a page, not listed or built.
 - `tools/layers`, `tools/docs`, `tools/pack`, `tools/mesh`, `tools/motion`: checks of the engine.
 - `tools/golden/engine/` (engine recipes) and `tools/golden/` (recipes that need example code): golden hashes, each set with its own `hashes.json`.
 - `tools/walk`, `tools/follow-check`: checks of walking and the follow camera (`check:walk`, `check:follow`).
-- `tools/serve` (one server for all examples), `tools/vite` (dev-server plugin), `tools/shot` (pictures: `page-shot.mjs` in the `shot` service, `shot.mjs` on the host), `tools/bench` (performance, on the host).
+- `tools/marks`: the marks made in a dev page (key `N` in `planet`; records in `internal/marks/`): `list.mjs`, `set.mjs`, `shoot.mjs` (after-pictures on the host GPU); the store is the dev-server plugin `tools/vite/marks-store.ts`.
+- `tools/serve` (one server for all examples), `tools/vite` (dev-server plugins), `tools/shot` (pictures: `page-shot.mjs` in the `shot` service, `shot.mjs` on the host), `tools/bench` (performance, on the host).
 - `tools/pages`: the static build of the examples for the live demos (`pnpm build:examples`).
 - `examples/planet/scripts/verify.ts`, `examples/endless/scripts/verify.ts`: the examples' own headless checks (`pnpm verify` in the example's folder).
-- `.claude/skills/`: `wallhammer-run` (running), `wallhammer-verify` (checks), `wallhammer-extend` (where things go when extending), `wallhammer-release` (releasing a version).
+- `.claude/skills/`: `wallhammer-run` (running), `wallhammer-verify` (checks), `wallhammer-extend` (where things go when extending), `wallhammer-release` (releasing a version), `wallhammer-marks` (reading and updating the marks made in a dev page).
 - `internal/`: internal working material, never committed.
 - `.github/workflows/`: `checks.yml` (all checks on push and pull request), `publish.yml` (npm publish when a GitHub release is published), `pages.yml` (live demos: the examples built to GitHub Pages on push to `main`).
 - `README.md`: running, checks, pictures, npm publishing and release, origin, the copy in the city repository.

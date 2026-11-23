@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "description": "Code used by more than one example of wallhammer-web: the pathfinder figure, its mesh builder, its kind of figure and its signs. Not a page.",
+  "description": "Code used by more than one example of wallhammer-web: the pathfinder figure, its mesh builder, its kind of figure and its signs; the page's part of the marks (notes pinned to points of a dev page). Not a page.",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

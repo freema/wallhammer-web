@@ -28,10 +28,14 @@
 //   clouds=0 builds the page without clouds, rain and their shadows; vol=0 keeps only the cloud shell (no volumetric
 //   clouds); cover=0..1 puts one cloud cover over the whole planet in place of the profile and its patches.
 //   movie=1 plays the movie (movie.ts) once the page has loaded; bars=0 leaves out its letterbox bars.
+//   time: the animation time in seconds, held there (it places the clouds).
+//   marks=0 hides the pins of the marks (dev server only, marks.ts); marks=1 turns the marks on in a page driven by a
+//   script, which otherwise has none.
 // Controls: F starts and stops the flight. W A S D fly along the view, E / Q up and down, Shift faster, drag looks
 // around, the wheel changes the speed, 1 jumps to the top, 2 down to the surface, [ ] move the hour, L shows cell
 // levels, B measures a frame with the graphics work finished, R switches the air between its tables and the reference
-// quality, C hides and shows the clouds, H hides the panel, M plays and stops the movie.
+// quality, C hides and shows the clouds, H hides the panel, M plays and stops the movie, N switches the mark mode (dev
+// server only).
 
 import { definePalette } from 'wallhammer-web';
 import type { DepthMode, Vec3 } from 'wallhammer-web/base';
@@ -212,6 +216,8 @@ const engine = createEngine({
 });
 const { renderer, env } = engine;
 env.day.pause();
+// `time=`: the animation time held at a value (a mark's view puts the clouds back where they were).
+if (q.has('time')) (env.time.pause(), env.time.set(Math.max(0, num('time', 0))));
 // With radial up the fog layer is given as heights above the base sphere.
 env.fogLayer = { bottomY: 0, topY: 1500 };
 
@@ -678,12 +684,16 @@ function panelText(): string {
   ].join('\n');
 }
 
-/** The URL hash of the current view. */
-function viewHash(): string {
+/**
+ * The URL hash of the current view. `exact` writes the place and the angles to the millimetre and adds the animation
+ * time (`time=`), so the hash puts back the very picture (the marks' views).
+ */
+function viewHash(exact = false): string {
   const [lat, lon] = latLonOf(SHAPE.directionOf(rig.position));
   const v = rig.state();
   const keep = ['flyS', 'top', 'air', 'px', 'cells', 'gpu', 'clouds', 'vol', 'cover'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
-  return `seed=${seed}&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&alt=${aboveSurface(rig.position).toFixed(1)}&yaw=${v.yawDeg.toFixed(1)}&pitch=${v.pitchDeg.toFixed(1)}&hour=${env.day.time.toFixed(2)}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${q.has('depth') ? `&depth=${depth}` : ''}${horizonOn ? '' : '&horizon=0'}${atmOn ? (air?.reference ? '&atm=ref' : '') : '&atm=0'}${stripOn ? '' : '&strip=0'}${keep}`;
+  const [dp, da, dv, dh] = exact ? [6, 2, 3, 4] : [4, 1, 1, 2];
+  return `seed=${seed}&lat=${lat.toFixed(dp)}&lon=${lon.toFixed(dp)}&alt=${aboveSurface(rig.position).toFixed(da)}&yaw=${v.yawDeg.toFixed(dv)}&pitch=${v.pitchDeg.toFixed(dv)}&hour=${env.day.time.toFixed(dh)}${exact ? `&time=${env.time.time.toFixed(2)}` : ''}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${q.has('depth') ? `&depth=${depth}` : ''}${horizonOn ? '' : '&horizon=0'}${atmOn ? (air?.reference ? '&atm=ref' : '') : '&atm=0'}${stripOn ? '' : '&strip=0'}${keep}`;
 }
 
 let lastHash = '';
@@ -907,4 +917,33 @@ async function settle(limit = 6000): Promise<boolean> {
 // `view=<name>`: start in a view of the presets.
 const startView = q.has('view') ? [...stripPresets(), ...cloudPresets(), ...seaPresets()].find((v) => v.name === q.get('view')) : undefined;
 if (startView) applyView(startView);
+// Marks (marks.ts, key N): notes pinned to points of the planet, kept by the dev server's store. Only in the dev server:
+// the static build drops this branch and the module with it.
+if (import.meta.env.DEV) {
+  void import('./marks.ts').then(({ installMarks }) =>
+    installMarks({
+      canvas: engine.canvas,
+      rig,
+      seed,
+      params: q,
+      endpoint: `${import.meta.env.BASE_URL}__marks`,
+      groundAt,
+      floorAt,
+      free: () => !flight && !moviePlayer.active,
+      exactHash: () => viewHash(true),
+      hour: () => env.day.time,
+      timeS: () => env.time.time,
+      gotoHash: (hash) => {
+        const h = new URLSearchParams(hash);
+        const n = (k: string): number | undefined => (h.has(k) && Number.isFinite(Number(h.get(k))) ? Number(h.get(k)) : undefined);
+        stopFlight(false);
+        if (moviePlayer.active) moviePlayer.stop();
+        applyView({ lat: n('lat'), lon: n('lon'), height: n('alt'), yawDeg: n('yaw'), pitchDeg: n('pitch'), hour: n('hour'), time: n('time') });
+      },
+      renderNow: () => engine.renderNow(),
+      invalidate: () => engine.invalidate(),
+      onFrame: (f) => void renderer.beforeFrame.push(f),
+    }),
+  );
+}
 engine.start();

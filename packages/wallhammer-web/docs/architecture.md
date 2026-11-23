@@ -23,7 +23,7 @@ A module may import only modules of a **lower** layer. It may not import a modul
 | 5 | `render` | `Renderer`, passes, the shadow map, `MeshLayer`, `PieceLayer`, `InstancedLayer`, `InstanceCellLayer`, `InstanceSetLayer`, `NearInstanceLayer`, `ParticleLayer`, `TransientLayer`, `RigLayer`, the value layers, point lights (`PointLightSet`), noise volumes on the GPU (`NoiseVolumes`), shader includes. |
 | 5 | `camera` | `SteppedOrthoRig`, `PerspectiveOrbitRig`, `FreeRig`, `FollowRig` and keyframed orbit paths (`OrbitPath`). |
 | 5 | `env` | `Environment` (clocks, sun, light, weather, wind, clouds), the `lighting` and sky GLSL, `assembleFrameBlock`, and the models of the atmosphere, the cloud cover by place, the cloud shadow texture, the cloud weather, the cloud volume and the precipitation (drops, landing marks), each on the CPU and in GLSL, and `weatherGround`. |
-| 5 | `world` | Picking (`raycastHeightField`, `raycastPrisms`), the collision world (`CollisionWorld`) and a walker over it (`Walker`) and streaming without the GPU: `StreamingManager`, cell providers, the WHC1 cell file format. |
+| 5 | `world` | Picking (`raycastHeightField`, `raycastPrisms`, `marchRay`), the collision world (`CollisionWorld`) and a walker over it (`Walker`) and streaming without the GPU: `StreamingManager`, cell providers, the WHC1 cell file format. |
 | 5 | `sim` | Deterministic fixed-step simulation that runs in plain Node. Submodule `sim/destruction`. |
 | 6 | `runtime` | `createEngine`, `createHeadlessEngine`, `EnvironmentLink`, `SkyLayer`, `AtmosphereLayer`, `PrecipitationLayer`, `CloudShellLayer`, `CloudShadowLayer`, `CloudWeatherMap`, `CloudVolumeLayer`, `StreamedWorld`. |
 | 7 | `tools` | Debugging aids: the data view, the frame profile. |

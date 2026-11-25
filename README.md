@@ -279,7 +279,7 @@ Only `packages/wallhammer-web` is published. The examples are private workspace 
 Publishing runs on GitHub ([`publish.yml`](.github/workflows/publish.yml)) when a release is published:
 
 1. Set the version in `packages/wallhammer-web/package.json`, commit and push to `main`.
-2. Publish a GitHub release with the tag `v<version>`, e.g. `gh release create v0.7.0 --generate-notes`.
+2. Publish a GitHub release with the tag `v<version>`, e.g. `gh release create v0.8.0 --generate-notes`.
 3. The workflow runs all checks ([`checks.yml`](.github/workflows/checks.yml), the same ones that run on every push and pull request), compares the tag with the package version, packs with `pnpm pack` and publishes the tarball with `npm publish`. A prerelease version (`1.2.3-beta.1`) goes under the `beta` dist-tag.
 
 It signs in through npm trusted publishing (OIDC), so there is no token and no secret. This is set once on npmjs.com, in the settings of the package under "Trusted Publisher": GitHub Actions, owner `freema`, repository `wallhammer-web`, workflow `publish.yml`. npm offers that setting only for a package that exists, so the very first version is published by hand (below).
@@ -295,7 +295,7 @@ docker compose exec dev sh -c 'cd /app/packages/wallhammer-web && pnpm publish -
 ```
 
 - Publish with `pnpm publish`, not `npm publish`: only pnpm applies `publishConfig.exports`. A package from `npm publish` would point to `src/`, which it does not contain.
-- Set the version beforehand in `packages/wallhammer-web/package.json` (now `0.7.0`). A version once published cannot be overwritten on npm.
+- Set the version beforehand in `packages/wallhammer-web/package.json` (now `0.8.0`). A version once published cannot be overwritten on npm.
 - `--no-git-checks`: the container has no git, so pnpm cannot check the branch there. Check on the host beforehand that the working tree is clean and on `main` (`git status`).
 - A new entry `wallhammer-web/<module>` is written twice: in `exports` and in `publishConfig.exports`. `check:pack` finds a missing twin.
 

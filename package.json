@@ -1,7 +1,7 @@
 {
   "name": "wallhammer-web-workspace",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "license": "MIT",
   "description": "Workspace of the wallhammer-web engine (packages/wallhammer-web), its checks (tools/) and its examples (examples/).",

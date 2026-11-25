@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+## 0.8.0
+
 ### Added
 
 - **Momentum of the walker**: `WalkerSetup.deceleration` (braking on the ground: a body at `runSpeed` v stops in v² / (2 deceleration) metres in the continuous limit, v · dt / 2 less in fixed steps; in the air every change is `airControl × acceleration`), `runAcceleration` (a slower run-up) and `turnSpeedAtRun` (the turn rate falls from `turnSpeed` at `walkSpeed` to this at `runSpeed`, and on the ground the velocity's direction turns no faster, so a runner turns in an arc). All three default to 0, and the default setup steps bit for bit as before. `Walker.retune(tuning)` and `ChartWalker.retune` change the speeds, rates and jump while the body lives (type `WalkerTuning`, `WALKER_TUNING_KEYS`). `pnpm check:walk` measures stop distances, the run-up and the turn's width. See [Momentum](packages/wallhammer-web/docs/walking.md#momentum).

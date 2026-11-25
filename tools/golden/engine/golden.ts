@@ -45,7 +45,8 @@ import { stripNetScript, stripPlaneScript, stripSphereScript } from './strip-sce
 import { cellStatesScript, refreshScript } from './cell-states-scenario.ts';
 import { DEFAULT_ATMOSPHERE_MEDIUM, atmosphereFor, atmosphereSlot, atmosphereTables, sphereSunDirection, sunPosition } from '../../../packages/wallhammer-web/src/env/index.ts';
 import { COVER_FADE_GLSL, coverFade, coverKeep } from '../../../packages/wallhammer-web/src/core/index.ts';
-import { SPHERE_PATCH_COVER_LAYOUT, SPHERE_PATCH_LAYOUT, spherePatchMesh, valueNoise3 } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
+import { SPHERE_PATCH_COVER_LAYOUT, SPHERE_PATCH_LAYOUT, cubeDirection, cubeGrid, spherePatchMesh, spherePatchRadius, valueNoise3 } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
+import { sphereGroundDepthVs, sphereGroundVs } from '../../../packages/wallhammer-web/src/env/index.ts';
 import { NOISE_VOLUME_DETAIL, NOISE_VOLUME_SHAPE, detailNoiseAt, noiseVolumeData, perlinTile, shapeNoiseAt, worleyTile } from '../../../packages/wallhammer-web/src/gen-tex/index.ts';
 import { NOISE_VOLUME_GLSL } from '../../../packages/wallhammer-web/src/render/noise-volumes.ts';
 import { cloudFieldSun, cloudShadowProjection, cloudShadowSlot } from '../../../packages/wallhammer-web/src/env/index.ts';
@@ -56,7 +57,7 @@ import type { NearFade, NearRecords } from '../../../packages/wallhammer-web/src
 import { BUILDING_LAYOUT, ROOF_COVER, WALL_FINISH } from '../../../packages/wallhammer-web/src/gen-arch/index.ts';
 import { RIG_BEND_AXIS, RIG_MOTION, RIG_VERTEX_FLOATS, rigExtended } from '../../../packages/wallhammer-web/src/base/index.ts';
 import type { MeshData, RigDesc, RigPart } from '../../../packages/wallhammer-web/src/base/index.ts';
-import { drainageScript, gridWeightsScript, lineTilesScript, planHorizonScript, planGridScript, routesScript } from './plan-scenario.ts';
+import { channelClassesScript, drainageScript, gridWeightsScript, lineTilesScript, planHorizonScript, planGridScript, routesScript } from './plan-scenario.ts';
 import { plotsScript, sitesScript } from './sites-scenario.ts';
 import { precipitationScript } from './precipitation-scenario.ts';
 import { MEDIUM_GLSL, mediumClearDistance, mediumFresnel, mediumPath, mediumThrough } from '../../../packages/wallhammer-web/src/core/index.ts';
@@ -512,6 +513,7 @@ const RECIPES: Record<string, () => string> = {
   'streaming refresh (cells of one coarse cell refreshed while RESIDENT, MESHED and in flight, and once settled: drawn throughout and swapped, late results stale, no hole; an empty refresh changes no decision)': () => hash(refreshScript()),
   'gen-plan grid (levels 3 and 5: symmetric neighbours, 7 at the 24 corner nodes, node at its direction, areas sum to the sphere; gridSample exact at the middles, in range, continuous over all edges and corners)': () => hash(planGridScript()),
   'gen-plan drainage (filled over heights, to never climbs, every node reaches a base node, order, flow at the base = supply, pools meet both limits with the sill outside, no base node = lowest node; channels follow to and agree with into; fallingGrade, smoothLine)': () => hash(drainageScript()),
+  'gen-plan channel order and classes (Strahler order by brute force over the inflows, flow along every channel never falls and out is the entry before the end, classes by thresholds by brute force with NaN and edge values, a decreasing list and an upstream into throw; a hand-built tree; channels of a drainage made by hand over a plane grid)': () => hash(channelClassesScript()),
   'gen-plan line tiles (lines over an edge and beside a corner, tiles of level 4: every point within reach finds its line; tileLinesOfCell = brute force at levels 0, 2, 4, 6)': () => hash(lineTilesScript()),
   'gen-plan grid weights (reproduce gridSample bit for bit inside a face, across an edge, at a corner)': () => hash(gridWeightsScript()),
   'gen-plan routes (steps are neighbour steps, cost = brute force, over an edge and a corner, ties stable, null when capped or closed; regions and links; limitGrade, lineAt)': () => hash(routesScript()),
@@ -519,6 +521,8 @@ const RECIPES: Record<string, () => string> = {
   'gen-plan plots (straight, bent, three lines at a node, a blocked disc: gap, setback, no line too near, none blocked; same seed same, other seed differs)': () => hash(plotsScript()),
   'gen-plan horizon (flat = 0 and lit; one block raises only the axes toward it within reach; raising never lowers; table size and order change nothing; smooth light over an edge, a corner and the axes)': () => hash(planHorizonScript()),
   'gen-core sphere patch extra channel (without the extra bytes = the mesh without extraAt, plain and cover; neighbours agree on shared border vertices, also over an edge of the cube; a child\'s coarse extra = the parent\'s extra; skirt = border)': () => hash(extraChannelScript()),
+  'gen-core sphere patch split shorter (quads cut along the diagonal whose ends differ less in height, inside a face and on an edge of the cube, a child and its parent; spherePatchRadius on both levels; invariants in check:mesh)': () => hash(splitShorterScript()),
+  'env sphere ground extra channel (vertex shaders with the channel handed on and with a vertex hook, both passes; gen-core coarse extra from the nearest parent vertex, both splits)': () => hash(groundExtraScript()),
   'gen-core ring round a line (straight, bent, mitre limit; null cases)': () => hash(lineRingScript()),
   'gen-arch finishes (wall finish, roof cover, shutters, band underside: mesh bytes)': () => hash(finishesScript()),
   'gen-arch raised member (entrances and bands under it are kept; without the flag they differ)': () => hash(raisedMemberScript()),
@@ -958,6 +962,56 @@ function cloudVolumeHistoryScript(): unknown[] {
   const keep = [cloudVolumeKeepHistory(0, 0, 1), cloudVolumeKeepHistory(99, 0, 1), cloudVolumeKeepHistory(101, 0, 1), cloudVolumeKeepHistory(1000, 6000, 1), cloudVolumeKeepHistory(2000, 6000, 1), cloudVolumeKeepHistory(0, 0, Math.cos((31 * Math.PI) / 180)), cloudVolumeKeepHistory(0, 0, Math.cos((29 * Math.PI) / 180))];
   if (keep.join(',') !== 'true,true,false,true,false,false,true') throw new Error(`cloud volume history: kept ${keep.join(',')}`);
   out.push(keep);
+  return out;
+}
+
+/** Rolling ground with walls of 120 m, for the split of the quads (the same as tools/mesh/sphere-patch-cases.ts). */
+const wallHeight = (px: number, py: number, pz: number): number => 400 * valueNoise3(px, py, pz, 5000, 7) + (valueNoise3(px, py, pz, 700, 9) > 0.5 ? 120 : 0);
+
+/**
+ * `split: 'shorter'`: the bytes of cells inside a face, on an edge of the cube and a child of the first, and where
+ * `spherePatchRadius` meets their triangles and those of the level above (rounded to 0.1 mm).
+ */
+function splitShorterScript(): unknown[] {
+  const out: unknown[] = [];
+  const cells: [number, number, number, number][] = [[2, 6, 13, 40], [0, 6, 63, 20], [2, 7, 26, 80]];
+  for (const [face, level, x, y] of cells) {
+    const o = { radiusM: 100_000, face, level, x, y, quads: 16, heightAt: wallHeight, skirtDepth: 20, split: 'shorter' as const };
+    const p = spherePatchMesh(o);
+    out.push(p.mesh.vertices, p.mesh.indices, p.error, p.minHeight, p.maxHeight);
+    const N = 2 ** level;
+    const radii: number[] = [];
+    for (let k = 0; k < 64; k++) {
+      const d = cubeDirection(face, cubeGrid(x + (k % 8 + 0.5) / 8, N), cubeGrid(y + (Math.floor(k / 8) + 0.37) / 8, N));
+      radii.push(Math.round(spherePatchRadius(o, d, 1) * 1e4), Math.round(spherePatchRadius(o, d, 2) * 1e4));
+    }
+    out.push(radii);
+  }
+  return out;
+}
+
+/**
+ * The extra channel of the ground's vertex shaders (`SphereGroundOptions.extra` of env): the texts handed on and with
+ * a vertex hook, both passes; and the bytes of patches whose coarse extra comes from the nearest parent vertex, with
+ * both splits.
+ */
+function groundExtraScript(): unknown[] {
+  const base = { thinRank: [0.12, 0.25, 0.5, 1], thinFrom: [0.75, 0.6, 0.55, 0.5], lift: 'float coverLift(float a, float b, float c) { return 0.0; }' };
+  const vertex = 'vec3 groundVertex(vec3 p, vec4 extra) { return p + localUp(p) * extra.g; }';
+  const out: unknown[] = [
+    sphereGroundVs({ ...base, extra: {} }),
+    sphereGroundVs({ ...base, waterline: true, extra: {} }),
+    sphereGroundVs({ ...base, extra: { vertex } }),
+    sphereGroundDepthVs({ ...base, extra: {} }),
+    sphereGroundDepthVs({ ...base, extra: { vertex } }),
+  ];
+  const extraAt = (px: number, py: number, pz: number, h: number): [number, number, number, number] => [85 * Math.min(3, Math.floor(4 * valueNoise3(px, py, pz, 900, 31))), Math.max(0, Math.min(255, Math.round(h / 2))), 0, 255];
+  for (const split of ['fixed', 'shorter'] as const) {
+    for (const [face, x, y] of [[2, 13, 40], [0, 63, 20]] as const) {
+      const p = spherePatchMesh({ radiusM: 100_000, face, level: 6, x, y, quads: 16, heightAt: wallHeight, skirtDepth: 20, extraAt, coarseExtra: 'nearest', split });
+      out.push(p.mesh.vertices, p.mesh.indices);
+    }
+  }
   return out;
 }
 

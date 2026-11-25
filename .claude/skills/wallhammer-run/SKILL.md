@@ -59,6 +59,8 @@ docker compose run --rm shot --url http://dev:5281/planet/ --presets @hash --siz
 
 Pictures go to `tools/shot/out/` (ignored by git). Last line: `shot: N pictures, M page errors`. One picture per page and a `--timeout` are enough. Options: header of `tools/shot/page-shot.mjs`.
 
+The one-off `shaders` service (same image and profile) compiles and links every program the pages make instead of taking pictures: `docker compose run --rm shaders [--pages planet,walk] [--url …]`, last line `shaders: N programs on M pages, K failed, E page errors` (skill `wallhammer-verify`).
+
 ## Real GPU on the host: pictures and frame cost
 
 The look and the frame times are judged only on the real GPU: the host's headless Chrome with `--enable-gpu --ignore-gpu-blocklist --use-angle=metal`, driven through `puppeteer-core` from `tools/shot/node_modules` (outside git, already installed; if it is missing, ask the user rather than installing on the host). Write the script in the scratchpad (or `internal/`), never in a tracked folder:

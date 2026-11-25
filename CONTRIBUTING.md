@@ -38,7 +38,7 @@ docker compose exec -T dev sh -c 'cd /app && pnpm test:marks'         # marks: N
 docker compose exec -T dev sh -c 'cd /app && pnpm check:pack'         # ok: the packed package installs, loads and type-checks
 ```
 
-`check:pack` needs the network. No check compiles the GLSL shaders. If you changed a shader, use the one-off `shot` service to check that a page starts in a browser without a WebGL error ([Pictures](README.md#pictures) in the README).
+`check:pack` needs the network. If you changed a shader, run the one-off `shaders` service, which compiles and links every program the example pages make (`docker compose run --rm shaders --pages <names>`, a `#hash` for a program made only in a mode; [Shader check](README.md#shader-check) in the README), and use the `shot` service to see that a page starts without a WebGL error.
 
 [Tools](packages/wallhammer-web/docs/tools.md) explains each check.
 

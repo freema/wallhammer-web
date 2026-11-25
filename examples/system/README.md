@@ -44,6 +44,14 @@ Then open <http://127.0.0.1:5281/system/>. Another port: `EXAMPLES_PORT=5291 doc
 - `V` is the movie mode, a clean screen for filming: the panel, the bottom line, the names and the cursor are
   hidden and the tour flies on from stop to stop. `V` or `Escape` brings them back. `#movie=1` starts in it.
 - `B` measures a frame of the current view with the graphics work finished. `H` hides the panel.
+- `K` switches the mark mode (dev server only, not in the live demo; `N` stays the names): a click pins a note to the
+  surface of the body the camera is near, kept in `internal/marks/` by the dev server's store (see
+  [Marks](../../packages/wallhammer-web/docs/marks.md)). The mode opens only while a body's surface is streamed round
+  the camera and no flight or movie runs. The point is picked against the height of that body's surface in its turning
+  frame (`gapPick`), so a pin stays on the ground as the body turns; trees, rocks, details, structures, creatures and
+  clouds are not in the pick. A mark's view is the page's hash with the exact time `t`, `rate=0`, `flow=` and the
+  camera's exact state (`mkview=`): opening it shows the same view at the same moment, the time stopped. Damage done
+  with `X` is not in it. `marks=1` turns the marks on in a page driven by a script, `marks=0` hides the pins.
 - The line at the bottom always shows the body the camera is kept by, the height, the speed, the rate of the time,
   the patches drawn, the time of a frame and the GPU memory.
 
@@ -74,6 +82,8 @@ URL hash (kept up to date while flying by hand):
 | `map` | 0 | `1` draws the marks of the plan (as `M`). |
 | `details` | 1 | `0` leaves out the details near the camera (tufts, stones, flowers; stage 2). |
 | `life` | 1 | `0` leaves out the creatures near the camera (villagers, beasts, skeletons, grazers; stage 3). |
+| `flow` | 0 | Seconds of the clock of the water's flow at the start (a mark's view writes it). |
+| `marks` | 1 | Dev server only. `0` hides the marks' pins; `1` turns the marks on in a page driven by a script, which has none otherwise. `mkview=` in a mark's hash is the camera's exact state. |
 
 ## Files
 
@@ -111,6 +121,7 @@ URL hash (kept up to date while flying by hand):
 | `src/creatures.ts` | The four kinds of creatures as rig descriptions (`creatureRigs`), their ceilings (`CREATURE_CAP`) and the look of one from its seed (`creatureLook`). Pure. |
 | `src/life.ts` | Who walks where: the walks of the lanes and roads and the grazers that stand (`siteWalks`, `routeWalks`, `siteStands`), the pose at a time as a closed form (`walkPose`), the near set and the poses round the eye (`lifeSet`, `lifeNear`). Pure. |
 | `src/life-layer.ts` | The creatures on the page: the `RigLayer` of the four kinds, the records per frame in render space, the panel line and the views (`createLife`, `lifeLine`, `lifeViews`). |
+| `src/marks.ts` | The marks' host (dev server only): the engine's host for a `FreeRig` (`engineMarkHost`) with the pick against the surface of the body near in its turning frame, the page's exact hash and time, the pins of that body alone; installs `installMarking` behind key `K` as `__wh.marks`. The store is `marksStore` of `wallhammer-web/marks-store` in `vite.config.ts`, with the folder `internal/marks/`. |
 
 ## Stage 1: water in the cells
 

@@ -30,11 +30,15 @@ Then open <http://127.0.0.1:5281/planet/>. Another port: `EXAMPLES_PORT=5291 doc
   compare the two pictures and their frame times.
 - `C` hides and shows the clouds (and with them the rain and their shadows).
 - `M` plays the movie and stops it (see [Movie mode](#movie-mode)).
+- `G` drops to the ground under the camera and walks there, and back to the free camera (see
+  [Walk mode](#walk-mode)). While walking, `E` greets the figure near the start and passes it the box, `T` waves,
+  `J` reads and `X` sits (see [Acts](#acts)), `P` switches the movement profile (`default`, `heavy`, `light`).
 - `N` (dev server only, free camera) switches the mark mode: a click pins a note to the point under the cursor, kept
   with the view, a picture and facts of the place in `internal/marks/` (see
   [Marks](../../packages/wallhammer-web/docs/marks.md)).
 - The line at the bottom always shows the height, the speed, the patches drawn, the time of a frame and the GPU
-  memory.
+  memory; while walking, the figure's state and speed, whether it stands on the ground and the solids within 10 m in
+  place of the height and the speed.
 
 URL hash (kept up to date while flying by hand):
 `#seed=2611&lat=..&lon=..&alt=3&yaw=..&pitch=3&hour=..`
@@ -56,12 +60,16 @@ URL hash (kept up to date while flying by hand):
 | `gpu` | 560 | Ceiling of GPU memory in MB; `0` for none. |
 | `levels` | 0 | `1` tints the cells by level. |
 | `strip` | 1 | `0` switches the strips off: the page without them (its generator, worker and materials). |
+| `split` | `fixed` | `shorter` cuts every quad of the surface along its diagonal whose ends differ less in height (`SpherePatchOptions.split`); objects and strips stand on the triangles drawn so. |
+| `extra` | none | `slope`: the cells carry the slope and a cliff category in the surface's extra channel (`extraAt`, `coarseExtra: 'nearest'`), tinted amber and red; `lift` also raises the cliffs 6 m by the ground's vertex hook in both passes (a sample of the hook: the objects on a cliff do not follow it). |
 | `view` | none | Starts in one of the strip, cloud or sea views of `__wh.presets()`, for example `strip-node`, `clouds-rain` or `underwater`. |
 | `clouds` | 1 | `0` builds the page without clouds, rain and cloud shadows. |
 | `vol` | 1 | `0` keeps only the cloud shell: no volumetric clouds near the ground. |
 | `cover` | none | `0`–`1`: one cloud cover over the whole planet in place of the profile and its patches (rain from 0.6). |
 | `movie` | 0 | `1` plays the movie from the start as soon as the page has loaded. |
 | `bars` | 1 | `0` plays the movie without the letterbox bars. |
+| `walk` | 0 | `1` starts walking on the ground under the start place; `pitch` is then the following view's and `dist` its boom. Without `lat` and `lon` the place, the heading and the hour are the walk's own start (see [Walk mode](#walk-mode)). |
+| `profile` | default | The walker's movement profile: `default`, `heavy` or `light` (see [Walk mode](#walk-mode)). |
 | `time` | running | Seconds of animation time to start at, frozen (the exact view of a mark carries it). |
 | `marks` | 1 | Dev server only. `0` hides the marks' pins; `1` turns the marks on in a page driven by a script, which has none otherwise. |
 
@@ -188,6 +196,65 @@ holds the depth of the floor under it (`waterDepthByte`) for the foam of the sho
   `underwater-deep` (8 m over the deep floor), each at the local late morning; `#view=underwater` opens one. The
   panel shows the eye's height above the waves while the near surface is on.
 
+## Walk mode
+
+`G` or `#walk=1` (`src/walk.ts`): the engine's `ChartWalker` on the ground the cells draw, trees and rocks in its way,
+seen from behind through a `ChartFollowView`. `W` `A` `S` `D` walk, `Shift` runs, `Space`
+jumps, a drag turns the view, the wheel sets the boom.
+
+The body is the shared pathfinder figure (`examples/shared/src/figures/`), 1.75 m tall, walking at 1.4 m/s and
+running at 4.6 m/s, the speeds its strides of 1.0 and 2.3 m a pass belong to. How it carries its weight is a movement
+profile (`examples/shared/src/figures/profiles.ts`, `profile=`, key `P`): the walker's run-up, braking and running
+turn (the engine's `deceleration`, `runAcceleration`, `turnSpeedAtRun`; `default` runs up in 0.67 s, stops from a run
+in 0.84 m and turns at a run with a radius of about 1.8 m, `heavy` and `light` are slower and quicker), the stride
+and a lean into the run-up and back against braking (additive `push` and `brace` layers on the smoothed
+acceleration). Its ponytail lags behind the motion (the engine's `ChainLag`, its velocity kept in the world's frame,
+so a rechart does not jerk it). The second figure walks with the `heavy` profile. A `FigureGait` (shared) drives the
+engine's `MotionGraph`: stand, walk and run cross-fade on the smoothed ground speed; a state in the air (`leap`)
+follows 0.15 s off the ground or at once on a jump, and on landing the speed picks the state again. Walk and run take
+their phase from the distance travelled (`drive`), so the feet do not slide at any speed. The pose is solved in the
+walker's chart, where +y is up: `fitToGround` keeps the feet on its collision world (the drawn ground and the tops of
+rocks), lowers the pelvis and tilts the soles with the slope (`align`), faded out in the air. The bones are then
+stood on the sphere with the chart's frame at the feet. The parts are lit as the planet's objects are and cast
+shadows; while walking the shadow map covers only the near 60 m with a 0.12 m penumbra
+(`renderer.setShadowFit`), so the figure's shadow is sharp, and leaving the walk puts the page's own back.
+
+### Acts
+
+A second figure of the same kind stands 3.2 m ahead of the walk's start and 0.9 m to the right, facing back (from
+`meetPlace` in `src/walk-scene.ts`); it is solid for the walker. Within 8 m its head follows the walker and the
+walker's head glances back (the engine's `ChainAim`, within its limits and faded out behind). The walker holds a box
+in its right hand and a book in a pocket of its pack.
+
+- `E` within 4 m of the other figure: the walker steps to 0.95 m from it (feet to feet), both turn to face each other and wave, then
+  the box passes from hand to hand: both right arms reach (`TwoBoneReach`) for one meeting point between them, at the
+  mark the box blends from the giver's hand socket to the taker's in a quarter second (`SocketBlend`), and the arms go
+  back. `E` again passes it back (without the greeting). A key that moves ends the meeting.
+- `T` waves once (four passes) with the right arm, also while walking or running: a layer masked to that arm.
+- `J` takes the book out (the right hand to the pocket, the box to the belt), lifts it, the left hand takes the other
+  edge, the book opens and the head looks at it; `J` again closes it and puts it back. Walking keeps the book open;
+  running or a jump puts it away.
+- `X` sits down where the walker stands (C is the clouds' key): the pelvis drops to the ground under it, the feet
+  are fitted to the slope; `X` again or a key that moves stands it up, and it walks on once it stands.
+
+A bare `#walk=1` (no `lat` and `lon`) starts at a place found from the seed (`findWalkStart` in `src/world.ts`):
+land 30–800 m high on gentle ground at 18–42° north, away from the strips, 20–200 m of relief within 250 m, three
+or more trees and a rock within 50 m and nothing within 2 m, facing the bearing where the ground rises most within
+3 km with nothing in the first 10 m. The hour is the first of the day (in quarter hours) with the sun 35–55° high
+behind or beside the walker; the view behind is 8° down from 6.5 m round a pivot 2.1 m above the feet, the figure
+in the lower third and the horizon in the picture. The same start is the view `walk` of
+`__wh.presets()` (`#view=walk`).
+
+For scripts, `window.__wh` has `setWalk(on, pitch, dist)`, `walkFor(seconds, forward, right, run, dt = 1/60)` (fixed
+frames of the walker and of the figure's motion, so the pose after a script is a function of the script alone),
+`walkState()` (the walker, the view, `figure`: the graph's state and weights, the speed, the stride, the fit and
+the gap of the lower sole to the ground, the profile, the smoothed acceleration, the `push` and `brace` weights and the
+ponytail's largest angle `tailDeg`, and `acts`: the meeting's and the reading's phase, seated or not, the
+layers' states, who holds the box and the book, the hinge, the distance to the other figure, the gazes' and reaches'
+weights), `walkAct('wave' | 'greet' | 'give' | 'read' | 'sit')` (an act as its key asks for it, returning what came
+of it; `walkFor` plays it; 'greet' is the first `E`, greeting and passing the box), `walkProfile(name?)` (the
+movement profile, switched first when named) and `solidsNear(radius)`.
+
 ## Movie mode
 
 A hands-off show of the planet in seven shots, about 90 s, looping (`src/movie.ts`). `M` or `#movie=1` plays it; the
@@ -230,6 +297,8 @@ most 5 s). For a recording frame by frame, `window.__wh` has:
 | `src/flight.ts` | The flight: `flightPose(plan, radius, t)`, a pure function of time. |
 | `src/movie.ts` | The movie: `MOVIE_SHOTS`, `planMovie`, `movieFrame(movie, t)` (pure) and the player behind key `M`. |
 | `src/flight-check.ts` | The flight run through the streaming manager without a browser; the streaming configuration shared with the page. |
+| `src/walk.ts` | The walk mode: the walker on the drawn ground (`drawnGroundRadius`), the solids fed into its chart, the following view, the figures' and the props' parts and material. |
+| `src/walk-scene.ts` | The figures without the GPU: `WalkBody` (the gait, gaze and arms, the pose in the chart, the bones on the sphere), `WalkScene` (the second figure, the box and the book, the acts), `meetPlace`. |
 | `src/main.ts` | The page: engine, streaming, flight driver, line and panel, script interface `window.__wh`. |
 | `src/marks.ts` | The marks' host (dev server only): the pick against the height and the sea level with `marchRay`, the exact view, the facts of a place; installs `installMarking` of `wallhammer-web/platform` behind key `N` as `__wh.marks`. The store is `marksStore` of `wallhammer-web/marks-store` in `vite.config.ts`, with the folder `internal/marks/`. |
 | `src/cell-worker.ts` | The worker that runs the generator. |
@@ -259,7 +328,12 @@ object in exactly one child cell, the thinned trees of levels 7 to 9 too), the f
 changes by less than 2 % per frame at 60 Hz, the way down mirrors the way up) and the streaming along the flight with
 the real generator (the sphere covered exactly once at every step, the budget of cells held, an estimate of the GPU
 memory against 600 MB) and the movie (every shot keeps at least 3 m above the ground with the strips, under the sea
-at least 1 m above the floor and 1.5 m under the level, and the eye never jumps inside a shot). It ends with
+at least 1 m above the floor and 1.5 m under the level, and the eye never jumps inside a shot), walking (feet on the
+drawn ground, the eye above it) and the walking figure from the walk's start (stand → walk → run → … → stand, the
+standing or walking sole within 3 cm of the ground, none 3 cm into it, the same bones from the same drive) and its
+acts (greet and give: the box moves no faster than a hand by more than 3 cm a frame, both hands within 4 cm of the
+meeting point at the hand-over, the box in the other's hand; give back; a wave while walking; reading and putting the
+book away; sit, stand and walk on; the gazes within their limits; the same bones and props twice). It ends with
 `planet: all checks passed`; a problem prints a line `FAILED: …` and the exit code is 1. CI runs it after the other
 checks.
 

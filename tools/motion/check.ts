@@ -6,8 +6,16 @@
 //   node tools/motion/check.ts marks      only scenarios whose name contains "marks"
 
 import {
+  ChainAim,
+  ChainLag,
   MotionGraph,
   Pose,
+  SocketBlend,
+  TwoBoneReach,
+  WeightFade,
+  aimAngles,
+  aimChain,
+  blendTransform,
   Skeleton,
   addPose,
   blendPose,
@@ -17,11 +25,12 @@ import {
   reachTwoBone,
   setBoneAxisAngle,
   setBoneEuler,
+  socketTransform,
   solvePose,
   speedWeights,
   subtractPose,
 } from '../../packages/wallhammer-web/src/motion/index.ts';
-import type { MotionGraphDesc, MotionSource, TwoBoneChain } from '../../packages/wallhammer-web/src/motion/index.ts';
+import type { AimAngles, AimChain, LagChain, MotionGraphDesc, MotionSource, Socket, TwoBoneChain } from '../../packages/wallhammer-web/src/motion/index.ts';
 
 interface Result {
   ok: boolean;
@@ -541,6 +550,408 @@ const REACH: Scenario[] = [
       return { ok, detail: `ends from ${f(restL, 3)} / ${f(restR, 3)} to ${f(yl, 3)} / ${f(yr, 3)} m, hub lowered ${f(hub, 3)} m` };
     },
   },
+  {
+    name: 'ground-fit-align',
+    run() {
+      // One made-up chain over a slope rising 0.3 m per metre along x and 0.1 along z: with `align` the end bone's axes
+      // are those of the plain fit turned by the rotation that takes +y to the ground's normal, the end's joint stays
+      // where the fit put it, and `maxAlign` caps the tilt.
+      const sk = new Skeleton([
+        { name: 'hub', parent: -1, joint: [0, 1, 0] },
+        { name: 'l1', parent: 0, joint: [0, 0, 0] },
+        { name: 'l2', parent: 1, joint: [0, -0.5, 0] },
+        { name: 'l3', parent: 2, joint: [0, -0.45, 0] },
+      ]);
+      const chains: TwoBoneChain[] = [{ upper: 1, lower: 2, end: 3 }];
+      const heightAt = (x: number, z: number): number => 0.3 * x + 0.1 * z;
+      const run = (o: { align?: number; maxAlign?: number }): { w: Float64Array; p: Pose } => {
+        const p = new Pose(sk);
+        setBoneAxisAngle(p, 2, 1, 0, 0, 0.2);
+        const w = new Float64Array(sk.count * 12);
+        solvePose(sk, p, ID, w);
+        fitToGround(sk, p, ID, w, chains, { heightAt, planeY: 0, ...o });
+        return { w, p };
+      };
+      /** Column `c` of the end bone's matrix. */
+      const axis = (w: Float64Array, c: number): number[] => [w[36 + c * 3]!, w[36 + c * 3 + 1]!, w[36 + c * 3 + 2]!];
+      /** `v` turned by `angle` about the unit axis `k` (Rodrigues). */
+      const turned = (v: number[], k: number[], angle: number): number[] => {
+        const c = Math.cos(angle), s = Math.sin(angle);
+        const d = k[0]! * v[0]! + k[1]! * v[1]! + k[2]! * v[2]!;
+        const x = [k[1]! * v[2]! - k[2]! * v[1]!, k[2]! * v[0]! - k[0]! * v[2]!, k[0]! * v[1]! - k[1]! * v[0]!];
+        return [0, 1, 2].map((i) => v[i]! * c + x[i]! * s + k[i]! * d * (1 - c));
+      };
+      // The tilt: about (−0.1, 0, 0.3) normalised (up × normal), by atan of the slope's length.
+      const kl = Math.hypot(0.1, 0.3);
+      const k = [-0.1 / kl, 0, 0.3 / kl];
+      const slope = Math.atan(Math.hypot(0.3, 0.1));
+      const plain = run({});
+      const tilted = run({ align: 1 });
+      const capped = run({ align: 1, maxAlign: 0.1 });
+      let err = 0;
+      for (let c = 0; c < 3; c++) {
+        const want = turned(axis(plain.w, c), k, slope);
+        const wantCap = turned(axis(plain.w, c), k, 0.1);
+        const got = axis(tilted.w, c);
+        const gotCap = axis(capped.w, c);
+        for (let i = 0; i < 3; i++) err = Math.max(err, Math.abs(got[i]! - want[i]!), Math.abs(gotCap[i]! - wantCap[i]!));
+      }
+      const moved = Math.hypot(tilted.w[45]! - plain.w[45]!, tilted.w[46]! - plain.w[46]!, tilted.w[47]! - plain.w[47]!);
+      const ok = err < 1e-6 && moved < 1e-9 && slope > 0.2;
+      return { ok, detail: `end turned by the ground's tilt (${f(slope, 4)} rad; capped 0.1) within ${err.toExponential(1)}, its joint moved ${moved.toExponential(1)} m` };
+    },
+  },
+];
+
+// --- Eased weights, reaching for a moving target, aiming, sockets -----------------------------------------------------
+
+/** A root frame turned about z by `tilt` and about its own y by `yaw`, at (x, y, z): a figure on a curved world. */
+function tiltedRoot(tilt: number, yaw: number, x: number, y: number, z: number): Float64Array {
+  const ct = Math.cos(tilt), st = Math.sin(tilt), cy = Math.cos(yaw), sy = Math.sin(yaw);
+  // Columns of Rz(tilt) · Ry(yaw).
+  return new Float64Array([ct * cy, st * cy, -sy, -st, ct, 0, ct * sy, st * sy, cy, x, y, z]);
+}
+
+/** A point given in a root frame's own axes, in the frame the pose is solved in. */
+function inRoot(r: ArrayLike<number>, x: number, y: number, z: number): number[] {
+  return [r[0]! * x + r[3]! * y + r[6]! * z + r[9]!, r[1]! * x + r[4]! * y + r[7]! * z + r[10]!, r[2]! * x + r[5]! * y + r[8]! * z + r[11]!];
+}
+
+/** A made-up trunk with a top link: a hub on the root, a trunk link and a top link above it. */
+function trunk(): Skeleton {
+  return new Skeleton([
+    { name: 'hub', parent: -1, joint: [0, 0, 0] },
+    { name: 'trunk', parent: 0, joint: [0, 1, 0] },
+    { name: 'top', parent: 1, joint: [0, 0.5, 0] },
+  ]);
+}
+
+const AIM: AimChain = { bones: [1, 2], shares: [0.4, 0.6], maxYaw: 70 * DEG, maxUp: 30 * DEG, maxDown: 40 * DEG, eye: [0, 0.1, 0] };
+
+const POST: Scenario[] = [
+  {
+    name: 'fade-eased',
+    run() {
+      const fd = new WeightFade(0);
+      fd.to(1, 0.4);
+      const v: number[] = [];
+      for (let i = 0; i < 8; i++) v.push(fd.update(0.05));
+      let mono = true;
+      for (let i = 1; i < v.length; i++) if (v[i]! < v[i - 1]!) mono = false;
+      // Turning back half way starts from where it is, without a jump.
+      const g = new WeightFade(0);
+      g.to(1, 1);
+      g.update(0.5);
+      const mid = g.value;
+      g.to(0, 1);
+      const afterTurn = g.value;
+      g.update(0.01);
+      const jump = Math.abs(g.value - mid);
+      const z = new WeightFade(0.3);
+      z.to(0.8, 0);
+      const ok = mono && v[0]! < 0.05 && v[3]! === 0.5 && v[7]! === 1 && fd.done && afterTurn === mid && jump < 1e-3 && z.value === 0.8;
+      return { ok, detail: `0→1 in 0.4 s by 0.05 s: ${v.map((x) => f(x, 3)).join(' ')}; turned back at ${f(mid, 3)}: first step ${jump.toExponential(1)}; 0 s jumps (${z.value})` };
+    },
+  },
+  {
+    name: 'reach-soft-continuous',
+    run() {
+      // The target moves along a line from 0.5 m to 1.6 m from the upper joint (the chain is 1 m) and back: the end
+      // never moves much farther than the target did, and a far target is never quite reached (no straight snap).
+      const sk = chain3();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const r = new TwoBoneReach({ upper: 0, lower: 1, end: 2 }, { soft: 0.9 });
+      r.fade.set(1);
+      let worst = 0;
+      let prev: number[] | null = null;
+      let near = 0;
+      let far = 0;
+      const steps = 400;
+      for (let i = 0; i <= steps; i++) {
+        const s = i <= steps / 2 ? i / (steps / 2) : 2 - i / (steps / 2);
+        const d = 0.5 + 1.1 * s;
+        p.reset();
+        setBoneAxisAngle(p, 1, 1, 0, 0, 0.3);
+        solvePose(sk, p, ID, w);
+        r.setTarget(0, 1 - 0.6 * d, 0.8 * d);
+        const left = r.apply(sk, p, ID, w);
+        const e = [w[24 + 9]!, w[24 + 10]!, w[24 + 11]!];
+        if (prev) worst = Math.max(worst, Math.hypot(e[0]! - prev[0]!, e[1]! - prev[1]!, e[2]! - prev[2]!) / (1.1 / (steps / 2)));
+        prev = e;
+        if (i === 0) near = left;
+        if (i === steps / 2) far = Math.hypot(e[0]!, e[1]! - 1, e[2]!);
+      }
+      const ok = near < 1e-4 && worst < 1.2 && far < 1 && far > 0.97;
+      return { ok, detail: `near target reached (${near.toExponential(1)}); end moves at most ${f(worst, 2)}× the target's step; 1.6 m out the end is ${f(far, 4)} m from the upper joint (chain 1 m)` };
+    },
+  },
+  {
+    name: 'reach-eased-weight',
+    run() {
+      // In over 0.3 s, out over 0.3 s: the end slides from its pose to the target and back without a jump.
+      const sk = chain3();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const r = new TwoBoneReach({ upper: 0, lower: 1, end: 2 });
+      r.setTarget(0.3, 0.4, 0.2);
+      r.on(0.3);
+      let prev: number[] | null = null;
+      let worst = 0;
+      let reached = Infinity;
+      let back = Infinity;
+      for (let i = 0; i < 60; i++) {
+        if (i === 30) r.off(0.3);
+        r.update(1 / 60);
+        p.reset();
+        setBoneAxisAngle(p, 1, 1, 0, 0, 0.3);
+        solvePose(sk, p, ID, w);
+        const rest = [w[24 + 9]!, w[24 + 10]!, w[24 + 11]!];
+        const left = r.apply(sk, p, ID, w);
+        const e = [w[24 + 9]!, w[24 + 10]!, w[24 + 11]!];
+        if (prev) worst = Math.max(worst, Math.hypot(e[0]! - prev[0]!, e[1]! - prev[1]!, e[2]! - prev[2]!));
+        prev = e;
+        if (i === 25) reached = left;
+        if (i === 59) back = Math.hypot(e[0]! - rest[0]!, e[1]! - rest[1]!, e[2]! - rest[2]!);
+      }
+      const ok = reached < 1e-4 && back < 1e-9 && worst < 0.06;
+      return { ok, detail: `reached after the fade in (${reached.toExponential(1)}), back on the pose after the fade out (${back.toExponential(1)}); largest step of the end ${f(worst, 3)} m a frame` };
+    },
+  },
+  {
+    name: 'reach-end-rotation',
+    run() {
+      const sk = chain3();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const root = tiltedRoot(0.5, 0.3, 2, 3, 4);
+      solvePose(sk, p, root, w);
+      const r = new TwoBoneReach({ upper: 0, lower: 1, end: 2 });
+      r.fade.set(1);
+      const t = inRoot(root, 0.2, 0.5, 0.4);
+      r.setTarget(t[0]!, t[1]!, t[2]!);
+      // Wanted: the end turned 0.7 rad about the solved frame's z.
+      r.endRotation.set([0, 0, Math.sin(0.35), Math.cos(0.35)]);
+      r.useEndRotation = true;
+      const left = r.apply(sk, p, root, w);
+      // Its x axis should be (cos 0.7, sin 0.7, 0).
+      const err = Math.hypot(w[24]! - Math.cos(0.7), w[25]! - Math.sin(0.7), w[26]!);
+      const ok = left < 1e-4 && err < 1e-5;
+      return { ok, detail: `reached on a tilted root (${left.toExponential(1)}), end's x axis off the wanted turn by ${err.toExponential(1)}` };
+    },
+  },
+  {
+    name: 'aim-limits-and-behind',
+    run() {
+      // A point circles the trunk at the height of the top link, on a root tilted 0.6 rad (a curved world): the facing
+      // stays within ±70°, follows the point in front, fades back to straight ahead behind it and never flips.
+      const sk = trunk();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const root = tiltedRoot(0.6, 0.2, 5, -2, 1);
+      const a: AimAngles = { yaw: 0, pitch: 0, goalYaw: 0, goalPitch: 0, faceYaw: 0, facePitch: 0 };
+      let maxYaw = 0;
+      let maxStep = 0;
+      let prev = 0;
+      let frontLeft = 0;
+      let behind = 1;
+      const steps = 720;
+      for (let i = 0; i <= steps; i++) {
+        const ang = (2 * Math.PI * i) / steps;
+        p.reset();
+        solvePose(sk, p, root, w);
+        const t = inRoot(root, 3 * Math.sin(ang), 1.6, 3 * Math.cos(ang));
+        const left = aimChain(sk, p, root, w, AIM, t, 1);
+        aimAngles(w, root, AIM, t, a);
+        maxYaw = Math.max(maxYaw, Math.abs(a.faceYaw));
+        if (i > 0) maxStep = Math.max(maxStep, Math.abs(a.faceYaw - prev));
+        prev = a.faceYaw;
+        if (i === steps / 12) frontLeft = left; // 30° to the side
+        if (i === steps / 2) behind = Math.abs(a.faceYaw);
+      }
+      // A point high above: the pitch stops at the limit.
+      p.reset();
+      solvePose(sk, p, root, w);
+      const up = inRoot(root, 0, 9, 1);
+      aimChain(sk, p, root, w, AIM, up, 1);
+      aimAngles(w, root, AIM, up, a);
+      const ok = maxYaw <= 70 * DEG + 1e-6 && frontLeft < 1e-3 && behind < 1e-6 && maxStep < 2 * DEG && a.facePitch <= 30 * DEG + 1e-6 && a.facePitch > 29 * DEG;
+      return { ok, detail: `facing within ${f(maxYaw / DEG, 2)}° (limit 70°), 30° to the side reached (${frontLeft.toExponential(1)} rad left), straight behind ${f(behind / DEG, 4)}°, largest step ${f(maxStep / DEG, 2)}° per 0.5° of the point; point above: pitch ${f(a.facePitch / DEG, 2)}° (limit 30°)` };
+    },
+  },
+  {
+    name: 'aim-shares-and-weight',
+    run() {
+      // A point 40° to the side: the trunk takes 0.4 of the turn, the top link the rest; at weight 0.5 half of it.
+      const sk = trunk();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const t = [Math.sin(40 * DEG) * 4, 1.6, Math.cos(40 * DEG) * 4];
+      solvePose(sk, p, ID, w);
+      aimChain(sk, p, ID, w, AIM, t, 1);
+      const trunkYaw = Math.atan2(w[12 + 6]!, w[12 + 8]!);
+      const topYaw = Math.atan2(w[24 + 6]!, w[24 + 8]!);
+      p.reset();
+      solvePose(sk, p, ID, w);
+      const c = new ChainAim(AIM);
+      c.setTarget(t[0]!, t[1]!, t[2]!);
+      c.on(0.2);
+      c.update(0.1);
+      c.apply(sk, p, ID, w);
+      const halfYaw = Math.atan2(w[24 + 6]!, w[24 + 8]!);
+      const tYaw = Math.atan2(t[0]!, t[2]!);
+      const ok = Math.abs(trunkYaw - 0.4 * tYaw) < 0.5 * DEG && Math.abs(topYaw - tYaw) < 0.5 * DEG && Math.abs(halfYaw - 0.5 * tYaw) < 0.5 * DEG;
+      return { ok, detail: `trunk ${f(trunkYaw / DEG, 2)}°, top ${f(topYaw / DEG, 2)}° of ${f(tYaw / DEG, 2)}°; at weight ${f(c.weight, 2)}: ${f(halfYaw / DEG, 2)}°` };
+    },
+  },
+  {
+    name: 'socket-blend',
+    run() {
+      // A thing passes from a socket on the tip of one chain to a socket on the root of another over 1 s: it starts
+      // and ends exactly on the sockets, moves without a jump, and stays a rigid turn on the way.
+      const sk = chain3();
+      const pa = new Pose(sk);
+      const pb = new Pose(sk);
+      setBoneAxisAngle(pa, 1, 1, 0, 0, 0.6);
+      setBoneAxisAngle(pb, 0, 0, 1, 0, 2.5);
+      const wa = new Float64Array(sk.count * 12);
+      const wb = new Float64Array(sk.count * 12);
+      solvePose(sk, pa, tiltedRoot(0.3, 0, 0, 0, 0), wa);
+      solvePose(sk, pb, tiltedRoot(-0.2, 1, 1.5, 0, 0.5), wb);
+      const sa: Socket = { bone: 2, local: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0.05] };
+      const sb: Socket = { bone: 0, local: [0, 1, 0, -1, 0, 0, 0, 0, 1, 0.2, 0, 0] };
+      const at0 = socketTransform(wa, sa, new Float64Array(12));
+      const at1 = socketTransform(wb, sb, new Float64Array(12));
+      const out = new Float64Array(12);
+      const bl = new SocketBlend();
+      bl.write(wa, sa, wb, sb, out);
+      let start = 0;
+      for (let i = 0; i < 12; i++) start = Math.max(start, Math.abs(out[i]! - at0[i]!));
+      bl.to(1, 1);
+      let prev = [out[9]!, out[10]!, out[11]!];
+      let worst = 0;
+      let rigid = 0;
+      for (let i = 0; i < 60; i++) {
+        bl.update(1 / 50);
+        bl.write(wa, sa, wb, sb, out);
+        worst = Math.max(worst, Math.hypot(out[9]! - prev[0]!, out[10]! - prev[1]!, out[11]! - prev[2]!));
+        prev = [out[9]!, out[10]!, out[11]!];
+        rigid = Math.max(rigid, Math.abs(Math.hypot(out[0]!, out[1]!, out[2]!) - 1), Math.abs(out[0]! * out[3]! + out[1]! * out[4]! + out[2]! * out[5]!));
+      }
+      let end = 0;
+      for (let i = 0; i < 12; i++) end = Math.max(end, Math.abs(out[i]! - at1[i]!));
+      const gap = Math.hypot(at1[9]! - at0[9]!, at1[10]! - at0[10]!, at1[11]! - at0[11]!);
+      // The socket on the solved tip: its point is the tip's matrix times the local point (0, −0.1, 0.05).
+      let pointErr = 0;
+      for (let c = 0; c < 3; c++) pointErr = Math.max(pointErr, Math.abs(at0[9 + c]! - (wa[24 + 3 + c]! * -0.1 + wa[24 + 6 + c]! * 0.05 + wa[24 + 9 + c]!)));
+      const half = blendTransform(at0, at1, 0.5, new Float64Array(12));
+      const midOk = Math.abs(half[9]! - 0.5 * (at0[9]! + at1[9]!)) < 1e-12;
+      const ok = start < 1e-12 && end < 1e-12 && worst < 1.6 * (gap / 50) && rigid < 1e-9 && midOk && pointErr < 1e-12;
+      return { ok, detail: `starts on the first socket (${start.toExponential(1)}), ends on the second (${end.toExponential(1)}); ${f(gap, 3)} m in 1 s, largest step ${f(worst, 4)} m per 0.02 s; rigid within ${rigid.toExponential(1)}` };
+    },
+  },
+  {
+    name: 'socket-blend-mirrored',
+    run() {
+      // Two mirrored transforms (determinant −1) stay mirrored all the way: the same one blended with itself is itself
+      // at every weight, two turned ones keep a determinant of −1. Ends of different handedness take the first's up to
+      // 0.5 and the second's from there.
+      const det = (m: ArrayLike<number>): number => m[0]! * (m[4]! * m[8]! - m[5]! * m[7]!) - m[3]! * (m[1]! * m[8]! - m[2]! * m[7]!) + m[6]! * (m[1]! * m[5]! - m[2]! * m[4]!);
+      const mirror = new Float64Array([-1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 0, 0]);
+      const out = new Float64Array(12);
+      let selfErr = 0;
+      let detErr = 0;
+      // A mirror about x, turned 0.4 rad about y and then 2 rad about z, both scaled by 2 along the second axis.
+      const turned = (a: number, axis: 'y' | 'z'): Float64Array => {
+        const c = Math.cos(a), s = Math.sin(a);
+        const r = axis === 'y' ? [c, 0, -s, 0, 1, 0, s, 0, c] : [c, s, 0, -s, c, 0, 0, 0, 1];
+        const m = new Float64Array(12);
+        // r · diag(−1, 2, 1)
+        for (let col = 0; col < 3; col++) {
+          const k = col === 0 ? -1 : col === 1 ? 2 : 1;
+          for (let row = 0; row < 3; row++) m[col * 3 + row] = r[col * 3 + row]! * k;
+        }
+        return m;
+      };
+      const ma = turned(0.4, 'y');
+      const mb = turned(2, 'z');
+      for (let i = 0; i <= 20; i++) {
+        const t = i / 20;
+        blendTransform(mirror, mirror, t, out);
+        for (let k = 0; k < 12; k++) selfErr = Math.max(selfErr, Math.abs(out[k]! - mirror[k]!));
+        blendTransform(ma, mb, t, out);
+        detErr = Math.max(detErr, Math.abs(det(out) + 2));
+      }
+      const before = det(blendTransform(mirror, ID, 0.49, out));
+      const after = det(blendTransform(mirror, ID, 0.5, out));
+      const ok = selfErr < 1e-12 && detErr < 1e-9 && before < 0 && after > 0;
+      return { ok, detail: `a mirror blended with itself off by ${selfErr.toExponential(1)}; two turned mirrors keep det −2 within ${detErr.toExponential(1)}; mirror to identity: det ${f(before, 3)} at 0.49, ${f(after, 3)} at 0.5` };
+    },
+  },
+  {
+    name: 'aim-weight-zero-reports-left',
+    run() {
+      // A point 40° to the side with the weight at 0: `ChainAim.apply` reports the angle left as `aimChain(…, 0)` does
+      // (the whole 40°), and turns nothing.
+      const sk = trunk();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const t = [Math.sin(40 * DEG) * 4, 1.6, Math.cos(40 * DEG) * 4];
+      solvePose(sk, p, ID, w);
+      const direct = aimChain(sk, p, ID, w, AIM, t, 0);
+      const before = w.slice();
+      const c = new ChainAim(AIM);
+      c.setTarget(t[0]!, t[1]!, t[2]!);
+      const got = c.apply(sk, p, ID, w);
+      let moved = 0;
+      for (let i = 0; i < w.length; i++) moved = Math.max(moved, Math.abs(w[i]! - before[i]!));
+      const ok = direct > 30 * DEG && got === direct && c.left === direct && moved === 0;
+      return { ok, detail: `weight 0: aimChain reports ${f(direct / DEG, 2)}° left, ChainAim.apply ${f(got / DEG, 2)}° (left ${f(c.left / DEG, 2)}°); bones moved ${moved}` };
+    },
+  },
+  {
+    name: 'post-determinism',
+    run() {
+      // The post steps in the documented order, twice over the same 600 frames: the same poses.
+      const run = (): number => {
+        const sk = trunk();
+        const arm = chain3();
+        const p = new Pose(sk);
+        const pa = new Pose(arm);
+        const w = new Float64Array(sk.count * 12);
+        const wa = new Float64Array(arm.count * 12);
+        const aim = new ChainAim(AIM);
+        const reach = new TwoBoneReach({ upper: 0, lower: 1, end: 2 });
+        const out = new Float64Array(12);
+        let h = 2166136261;
+        for (let i = 0; i < 600; i++) {
+          const t = i / 60;
+          if (i % 120 === 0) aim.on(0.4);
+          if (i % 120 === 60) aim.off(0.4);
+          if (i % 90 === 0) reach.on(0.3);
+          if (i % 90 === 45) reach.off(0.3);
+          aim.update(1 / 60);
+          reach.update(1 / 60);
+          aim.setTarget(3 * Math.sin(t), 1.5, 3 * Math.cos(0.7 * t));
+          reach.setTarget(0.3 * Math.sin(t), 0.5, 0.4);
+          p.reset();
+          pa.reset();
+          solvePose(sk, p, ID, w);
+          solvePose(arm, pa, ID, wa);
+          aim.apply(sk, p, ID, w);
+          reach.apply(arm, pa, ID, wa);
+          socketTransform(wa, { bone: 2, local: ID }, out);
+          h = fingerprint(pa, fingerprint(p, h));
+          const u = new Uint32Array(new Float64Array(out).buffer);
+          for (let k = 0; k < u.length; k++) h = Math.imul(h ^ u[k]!, 16777619) >>> 0;
+        }
+        return h;
+      };
+      const a = run();
+      const b = run();
+      return { ok: a === b, detail: `600 frames of aim, reach and a socket: ${a.toString(16)} / ${b.toString(16)}` };
+    },
+  },
 ];
 
 // --- Save, restore, determinism and many figures -------------------------------------------------------------------
@@ -803,6 +1214,234 @@ const STACKS: Scenario[] = [
   },
 ];
 
+// --- A chain that lags behind (ChainLag) -----------------------------------------------------------------------------
+
+/** A made-up body: a hub, a top 1.6 m above it, and a chain of three links hung behind the top. */
+function lagBody(): Skeleton {
+  return new Skeleton([
+    { name: 'hub', parent: -1, joint: [0, 0, 0] },
+    { name: 'top', parent: 0, joint: [0, 1.6, 0] },
+    { name: 'link1', parent: 1, joint: [0, 0, -0.1] },
+    { name: 'link2', parent: 2, joint: [0, -0.12, -0.06] },
+    { name: 'link3', parent: 3, joint: [0, -0.14, -0.02] },
+  ]);
+}
+const LAG: LagChain = { bones: [2, 3, 4], end: [0, -0.14, 0], stiffness: 60, damping: 8, gravity: 0, maxAngle: 50 * DEG };
+
+/** A root at (x, y, z) turned by `yaw` about y. */
+function yawRoot(yaw: number, x: number, y: number, z: number, out = new Float64Array(12)): Float64Array {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  out.set([c, 0, -s, 0, 1, 0, s, 0, c, x, y, z]);
+  return out;
+}
+
+/**
+ * Frames of 1/60 s of a figure placed by `at(frame, root)`: the pose is the rest pose, solved, then the chain applied.
+ * `each` sees the angles (and the solved world) after every frame. Returns the pose's rotations at the end.
+ */
+function lagRun(frames: number, at: (i: number, root: Float64Array) => number | void, chain: LagChain = LAG, each?: (i: number, lag: ChainLag, world: Float64Array, most: number) => void, motionAt?: (i: number, m: Float64Array) => void): Float32Array {
+  const sk = lagBody();
+  const pose = new Pose(sk);
+  const world = new Float64Array(sk.count * 12);
+  const root = new Float64Array(12);
+  const motion = new Float64Array(12);
+  const lag = new ChainLag(sk, chain);
+  for (let i = 0; i < frames; i++) {
+    const dt = at(i, root);
+    pose.reset();
+    solvePose(sk, pose, root, world);
+    motionAt?.(i, motion);
+    const most = lag.apply(typeof dt === 'number' ? dt : 1 / 60, sk, pose, root, world, motionAt ? motion : root);
+    each?.(i, lag, world, most);
+  }
+  return pose.rot.slice();
+}
+
+/** The free end of the chain in the solved world. */
+function lagTip(world: Float64Array): number[] {
+  const b = 4 * 12;
+  return [world[b + 3]! * -0.14 + world[b + 9]!, world[b + 4]! * -0.14 + world[b + 10]!, world[b + 5]! * -0.14 + world[b + 11]!];
+}
+
+const LAGS: Scenario[] = [
+  {
+    name: 'lag-rest-stays',
+    run() {
+      // Standing still (and moving at a steady speed): nothing swings. With a share of gravity it sags once and stays.
+      let still = 0;
+      lagRun(300, (_, r) => void yawRoot(0.3, 2, 0, 1, r), LAG, (_, __, ___, m) => (still = Math.max(still, m)));
+      let steady = 0;
+      lagRun(300, (i, r) => void yawRoot(0, 0, 0, i * 0.05, r), LAG, (i, _, __, m) => void (i > 0 && (steady = Math.max(steady, m))));
+      let sag = 0;
+      let drift = 0;
+      const tips: number[][] = [];
+      lagRun(420, (_, r) => void yawRoot(0, 0, 0, 0, r), { ...LAG, gravity: 0.5 }, (i, _, w, m) => {
+        if (i === 359) sag = m;
+        if (i >= 360) tips.push(lagTip(w));
+      });
+      for (const t of tips) drift = Math.max(drift, Math.hypot(t[0]! - tips[0]![0]!, t[1]! - tips[0]![1]!, t[2]! - tips[0]![2]!));
+      const ok = still === 0 && steady < 1e-6 && sag > 2 * DEG && drift < 1e-4;
+      return { ok, detail: `still 5 s: largest angle ${still}; steady 3 m/s: ${(steady / DEG).toExponential(1)}°; half gravity: sags ${f(sag / DEG, 1)}°, then moves ${f(drift * 1000, 3)} mm over 1 s` };
+    },
+  },
+  {
+    name: 'lag-stop-swings-and-settles',
+    run() {
+      // 3 m/s along +z for 2 s (the chain hangs behind, at −z), then a stop in one frame: the end swings forward past
+      // its posed place, and the swing dies away.
+      const v = 3;
+      let posed: number[] = [];
+      let fwd = 0;
+      let late = 0;
+      let lateAngle = 0;
+      const sk = lagBody();
+      lagRun(360, (i, r) => void yawRoot(0, 0, 0, Math.min(i, 120) * (v / 60), r), LAG, (i, _, w, m) => {
+        if (i < 120) return;
+        if (!posed.length) {
+          const p = new Pose(sk);
+          const ww = new Float64Array(sk.count * 12);
+          solvePose(sk, p, yawRoot(0, 0, 0, 2 * v), ww);
+          posed = lagTip(ww);
+        }
+        const dz = lagTip(w)[2]! - posed[2]!;
+        if (i < 180) fwd = Math.max(fwd, dz);
+        if (i >= 300) {
+          late = Math.max(late, Math.abs(dz));
+          lateAngle = Math.max(lateAngle, m);
+        }
+      });
+      const ok = fwd > 0.05 && late < 0.002 && lateAngle < 1 * DEG;
+      return { ok, detail: `a stop from ${v} m/s: the end swings ${f(fwd * 100, 1)} cm forward of its posed place within 1 s; 3–4 s after: within ${f(late * 1000, 2)} mm, ${f(lateAngle / DEG, 2)}°` };
+    },
+  },
+  {
+    name: 'lag-angle-limit',
+    run() {
+      // A violent shake (0.4 m at 3 Hz, spinning a turn a second, bouncing): no link leaves its limit.
+      const lim = 35 * DEG;
+      let most = 0;
+      let each = 0;
+      lagRun(600, (i, r) => {
+        const t = i / 60;
+        void yawRoot(t * 2 * Math.PI, Math.sin(t * 6 * Math.PI) * 0.4, Math.abs(Math.sin(t * 5 * Math.PI)) * 0.8, Math.cos(t * 6 * Math.PI) * 0.4, r);
+      }, { ...LAG, maxAngle: lim, gravity: 1 }, (_, lag, __, m) => {
+        most = Math.max(most, m);
+        for (const a of lag.angles) each = Math.max(each, a);
+      });
+      return { ok: most <= lim + 1e-4 && most > lim - 2 * DEG && each === most, detail: `limit ${f(lim / DEG, 1)}°: largest angle over 10 s of shaking ${f(most / DEG, 3)}°` };
+    },
+  },
+  {
+    name: 'lag-same-inputs-same-bits',
+    run() {
+      const script = (i: number, r: Float64Array): number => {
+        const t = i / 60;
+        yawRoot(Math.sin(t) * 2, Math.sin(t * 1.3) * 3, 0, t * 2 + Math.sin(t * 4), r);
+        // Uneven frames: the fixed steps carry the rest.
+        return 1 / 60 + Math.sin(i * 0.7) * 0.006;
+      };
+      const a = lagRun(500, script, { ...LAG, gravity: 0.4 });
+      const b = lagRun(500, script, { ...LAG, gravity: 0.4 });
+      let same = 0;
+      for (let i = 0; i < a.length; i++) if (Object.is(a[i], b[i])) same++;
+      return { ok: same === a.length, detail: `two runs of 500 uneven frames: ${same} of ${a.length} rotation numbers equal` };
+    },
+  },
+  {
+    name: 'lag-teleport-and-long-frame',
+    run() {
+      // A jump of 200 m puts the chain back on its posed shape; a frame of 5 s or a NaN frame takes at most maxSteps
+      // steps and stays finite.
+      let afterJump = -1;
+      let finite = true;
+      let most = 0;
+      lagRun(240, (i, r) => {
+        yawRoot(0, i >= 120 ? 200 : 0, 0, (Math.min(i, 119) * 3) / 60, r);
+        return i === 60 ? 5 : i === 90 ? Number.NaN : 1 / 60;
+      }, LAG, (i, lag, w, m) => {
+        if (i === 120) afterJump = m;
+        for (const x of lagTip(w)) if (!Number.isFinite(x)) finite = false;
+        most = Math.max(most, m);
+        void lag;
+      });
+      return { ok: afterJump === 0 && finite && most <= LAG.maxAngle + 1e-4, detail: `the frame after a 200 m jump: angle ${afterJump}; a 5 s and a NaN frame: finite ${finite}, largest angle ${f(most / DEG, 2)}° (limit ${f(LAG.maxAngle / DEG, 0)}°)` };
+    },
+  },
+  {
+    name: 'lag-stall-keeps-speed',
+    run() {
+      // Standing, then one frame of 2.5 s (a stall, far more than maxSteps steps) in which the body starts a steady run
+      // of 4.6 m/s: the chain is carried over the dropped steps and leaves them moving with its joint, so after the
+      // stall it hangs as in a steady run instead of flying to its limit.
+      let t = 0;
+      let afterStall = -1;
+      lagRun(180, (i, r) => {
+        const dt = i === 120 ? 2.5 : 1 / 60;
+        if (i > 120) t += dt;
+        else if (i === 120) t = 2.5;
+        yawRoot(0, 0, 0, 4.6 * t, r);
+        return dt;
+      }, LAG, (i, _, __, m) => {
+        if (i === 120) afterStall = m;
+      });
+      return { ok: afterStall < 0.5 * DEG, detail: `angle after a 2.5 s frame that starts a run from standing ${f(afterStall / DEG, 4)}° (a run of 1/60 s frames: 0°)` };
+    },
+  },
+  {
+    name: 'lag-steady-motion-frame',
+    run() {
+      // The frame the pose is solved in jumps every half second (a new chart), the motion frame does not: the chain
+      // swings exactly as with the steady frame alone.
+      const pathAt = (i: number, r: Float64Array): Float64Array => yawRoot(Math.sin(i / 50), Math.sin(i / 30), 0, i / 20, r);
+      const ref: number[] = [];
+      lagRun(300, (i, r) => void pathAt(i, r), LAG, (_, __, ___, m) => void ref.push(m));
+      let apart = 0;
+      const shift = new Float64Array(12);
+      lagRun(300, (i, r) => {
+        pathAt(i, shift);
+        // The same placement seen from a frame moved by (k · 37 m, 0, −k · 11 m) and turned by k · 0.4 rad about y.
+        const k = Math.floor(i / 30);
+        const c = Math.cos(k * 0.4), sn = Math.sin(k * 0.4);
+        for (let col = 0; col < 4; col++) {
+          const x = shift[col * 3]!, y = shift[col * 3 + 1]!, z = shift[col * 3 + 2]!;
+          const tx = col === 3 ? k * 37 : 0, tz = col === 3 ? -k * 11 : 0;
+          r[col * 3] = c * x + sn * z + tx;
+          r[col * 3 + 1] = y;
+          r[col * 3 + 2] = -sn * x + c * z + tz;
+        }
+      }, LAG, (i, _, __, m) => void (apart = Math.max(apart, Math.abs(m - ref[i]!))), (i, m) => void pathAt(i, m));
+      return { ok: apart < 1e-6 && Math.max(...ref) > 1 * DEG, detail: `10 jumps of the solve frame: angles differ from the steady run by at most ${apart.toExponential(1)} rad (largest swing ${f(Math.max(...ref) / DEG, 1)}°)` };
+    },
+  },
+  {
+    name: 'lag-sub-step-frames',
+    run() {
+      // Frames shorter than a step (1/120 s, one step every second frame): after every step the chain is where it is
+      // with frames of 1/60 s (a run of 3 m/s for 2 s, then a stop), so no motion of the joint is lost; and with a limit
+      // of 0 no frame, with a step or without, draws a link off its posed direction (frames of 1/144 s).
+      const zAt = (t: number): number => 3 * Math.min(t, 2);
+      const ref: number[] = [];
+      lagRun(240, (i, r) => void yawRoot(0, 0, 0, zAt(i / 60), r), LAG, (_, __, ___, m) => void ref.push(m));
+      let apart = 0;
+      lagRun(480, (i, r) => {
+        yawRoot(0, 0, 0, zAt(i / 120), r);
+        return 1 / 120;
+      }, LAG, (i, _, __, m) => {
+        // Frame i is at i / 120 s; every second one ends on a step of the reference run and is compared with it.
+        if (i % 2 === 0) apart = Math.max(apart, Math.abs(m - ref[i / 2]!));
+      });
+      let worst = 0;
+      lagRun(600, (i, r) => {
+        const t = i / 144;
+        yawRoot(Math.sin(t * 3), Math.sin(t * 5) * 0.5, 0, 4 * t, r);
+        return 1 / 144;
+      }, { ...LAG, maxAngle: 0 }, (_, __, ___, m) => void (worst = Math.max(worst, m)));
+      const ok = apart < 1e-9 && Math.max(...ref) > 1 * DEG && worst < 1e-6;
+      return { ok, detail: `frames of 1/120 s against 1/60 s: angles after each step differ by ${apart.toExponential(1)} rad (swing ${f(Math.max(...ref) / DEG, 1)}°); limit 0 with frames of 1/144 s: largest drawn angle ${f(worst / DEG, 4)}°` };
+    },
+  },
+];
+
 // --- Run -------------------------------------------------------------------------------------------------------------
 
 const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
@@ -811,8 +1450,10 @@ const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
   { label: 'transitions', scenarios: TRANSITIONS },
   { label: 'marks and events', scenarios: MARKS },
   { label: 'reach and ground', scenarios: REACH },
+  { label: 'eased reach, aim, sockets', scenarios: POST },
   { label: 'state, determinism, many figures', scenarios: STATE },
   { label: 'layer stacks', scenarios: STACKS },
+  { label: 'lagging chain', scenarios: LAGS },
 ];
 
 const LIMIT_MS = 5000;

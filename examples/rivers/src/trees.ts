@@ -24,6 +24,8 @@ const DAMP_NEAR = 1.5;
 const DAMP_FAR = 7;
 /** Spacing of the grid a tree may stand on, metres. */
 const SPACING_M = 8;
+/** No tree stands nearer than this to a brook's strip, metres. */
+const BROOK_CLEAR_M = 1.5;
 /** No tree stands lower than this over the water beside it, metres. */
 const DRY_M = 0.7;
 
@@ -113,7 +115,7 @@ const unit = (seed: number, a: number, b: number): number => (hashInts(seed, a, 
 const PATH_CLEAR_M = 2.6;
 
 /** The trees of the square, in chunks of the ground's size. With paths, none stands on one. */
-export function treePieces(f: Field, cover: Cover, seed: number, paths?: PathPlan): GroundPiece[] {
+export function treePieces(f: Field, cover: Cover, seed: number, paths?: PathPlan, brookEdge?: Float32Array): GroundPiece[] {
   const hit: PathHit = { d: 0, ox: 0, oz: 0, y: 0, ford: 0, path: 0, i: 0, t: 0 };
   const size = (f.n - 1) * f.step;
   const chunkM = CHUNK_CELLS * f.step;
@@ -149,6 +151,8 @@ export function treePieces(f: Field, cover: Cover, seed: number, paths?: PathPla
           if (f.body[k] !== 0 && f.ground[k]! < f.water[k]! + DRY_M) dry = false;
         }
       if (!dry) continue;
+      // Not in a brook or on its bank (`brookEdge` of brooks.ts: metres from a brook's strip).
+      if (brookEdge && brookEdge[Math.min(f.n - 1, Math.max(0, j)) * f.n + Math.min(f.n - 1, Math.max(0, i))]! < BROOK_CLEAR_M) continue;
       const c = Math.min(across - 1, Math.floor((z - f.z0) / chunkM)) * across + Math.min(across - 1, Math.floor((x - f.x0) / chunkM));
       (lists[c] ??= []).push(x, y, z, id);
     }

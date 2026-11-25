@@ -100,5 +100,5 @@ export type { SunPosition, SunSite } from './sun.ts';
 export { LIQUID_RIPPLES, LIQUID_SIMPLEX_SKEW, LiquidSurface, liquidClearDistance, liquidGlsl, liquidRipplesGlsl, liquidShaftsGlsl } from './liquid.ts';
 export type { LiquidLook, LiquidOptics, LiquidRipples, LiquidShaftsOptions, LiquidState, LiquidSurfaceOptions } from './liquid.ts';
 export { DEPTH_ONLY_FS, SPHERE_GROUND_WATERLINE_GLSL, sphereCoverThinGlsl, sphereGroundDepthVs, sphereGroundVs } from './sphere-ground.ts';
-export type { SphereGroundOptions, SphereGroundVsOptions } from './sphere-ground.ts';
+export type { SphereGroundExtra, SphereGroundOptions, SphereGroundVsOptions } from './sphere-ground.ts';
 export { loopClock, loopFade, loopTurns, loopWrap } from './loop.ts';

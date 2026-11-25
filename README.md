@@ -167,7 +167,7 @@ The repository is a pnpm workspace:
 
 - `packages/wallhammer-web/`: the engine, npm package `wallhammer-web`. Its [`README.md`](packages/wallhammer-web/README.md) describes it, the documentation is in [`docs/`](packages/wallhammer-web/docs/).
 - `examples/`: the example pages above, each with its own `README.md`, and `examples/shared/`, code used by more than one example (not a page).
-- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`), host tools (`shot/shot.mjs`, `bench`) and this repository's marks tools and the store's test (`marks`).
+- `tools/`: checks (`layers`, `golden`, `docs`, `pack`, `mesh`, `motion`, `walk`, `follow-check`), the example server (`serve`) with its Vite plugins (`vite`), the static build of the examples (`pages`), pictures in Docker (`shot/page-shot.mjs`), the shader check in Docker (`shot/shader-check.mjs`), host tools (`shot/shot.mjs`, `bench`) and this repository's marks tools and the store's test (`marks`).
 - `docker-compose.yml`, `Dockerfile.dev`, `scripts/dev-entrypoint.sh`: the dev container.
 - `.claude/skills/` and `CLAUDE.md`: rules and procedures for working with an agent on this repository (running, checks, extending, releasing).
 - `.claude-plugin/marketplace.json` and `plugins/wallhammer/`: the Claude Code plugin for projects built on the package (see [Building with an AI agent](#building-with-an-ai-agent)); its version follows the package's.
@@ -239,7 +239,22 @@ docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'  # pla
 
 ## Pictures
 
-No check compiles the GLSL shaders. The one-off `shot` service shows whether a page starts in a browser without a WebGL error. It runs headless Chromium on the software renderer (profile `tools`, so `up` does not start it; it starts `dev` first when that does not run):
+### Shader check
+
+The one-off `shaders` service compiles and links the shaders of the example pages in headless Chromium on the software renderer (`tools/shot/shader-check.mjs`, the image of `shot`, profile `tools`; it starts `dev` first when that does not run). It wraps the WebGL2 calls that make programs before a page's scripts run and, after the load, asks for the compile and link status of every program the page made, drawn or not:
+
+```sh
+docker compose run --rm shaders                                # every example page, about 2 min (system alone about 90 s)
+docker compose run --rm shaders --pages planet,walk            # only these
+docker compose run --rm shaders --pages 'planet#extra=lift'    # a page with a hash (another set of programs)
+docker compose run --rm shaders --url http://host:port/page/   # any page, not only an example
+```
+
+The last line is `shaders: N programs on M pages, K failed, E page errors`; a failed program prints its info log and source lines, and the exit code is 1 when K or E is not 0. Limits: a program a page makes only in a mode (a key, a later view) is seen only with a `#hash` that turns that mode on; contexts made in workers are not seen; and the GLSL is validated by Chromium's translator, so a fault of one graphics driver's own compiler cannot show. Options are in the header of the script. It is not part of CI.
+
+### Pictures in Docker
+
+The one-off `shot` service shows whether a page starts in a browser without a WebGL error and how it looks on the software renderer. It runs headless Chromium on the software renderer (profile `tools`, so `up` does not start it; it starts `dev` first when that does not run):
 
 ```sh
 docker compose run --rm shot --url http://dev:5281/planet/ --presets @hash --size 960x540 --timeout 120000
@@ -251,7 +266,7 @@ Pictures go to `tools/shot/out/` (ignored by git). The last line is `shot: N pic
 
 ### Marks
 
-In the dev server, key `N` in the free camera of the `planet` example switches a mark mode: a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). The panel, the store and the command-line tool `wallhammer-marks` are part of the package (`installMarking` in `platform`, `wallhammer-web/marks-store`). In this repository `tools/marks/list.mjs` lists the marks and `set.mjs` changes their status (the package's tool with this repository's folder and server), `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
+In the dev server, key `N` switches a mark mode in the `planet` (free camera), `endless` (free camera), `walk`, `minimal-3d`, `destruction`, `outpost`, `fantasy-village` (orbit view) and `rivers` examples, and key `K` in `system` near a body (N toggles the names there): a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). The panel, the store and the command-line tool `wallhammer-marks` are part of the package (`installMarking` in `platform`, `wallhammer-web/marks-store`). In this repository `tools/marks/list.mjs` lists the marks and `set.mjs` changes their status (the package's tool with this repository's folder and server), `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
 
 ## npm package
 

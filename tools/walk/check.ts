@@ -10,6 +10,8 @@
 import { COLLIDE_SCENARIOS } from './collide-scenarios.ts';
 import { COURSE_SCENARIOS } from './course-scenarios.ts';
 import type { Scenario } from './scenario.ts';
+import { SOLID_SCENARIOS } from './solid-scenarios.ts';
+import { SPHERE_SCENARIOS } from './sphere-scenarios.ts';
 import { STREAMING_SCENARIOS } from './streaming-scenarios.ts';
 import { WALKER_SCENARIOS } from './walker-scenarios.ts';
 
@@ -18,6 +20,8 @@ const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
   { label: 'walker', scenarios: WALKER_SCENARIOS },
   { label: 'test course (examples/walk)', scenarios: COURSE_SCENARIOS },
   { label: 'streaming preload along a path', scenarios: STREAMING_SCENARIOS },
+  { label: 'walking on a sphere (moving chart)', scenarios: SPHERE_SCENARIOS },
+  { label: 'solids of loaded cells (index and feed)', scenarios: SOLID_SCENARIOS },
 ];
 
 const LIMIT_MS = 5000;

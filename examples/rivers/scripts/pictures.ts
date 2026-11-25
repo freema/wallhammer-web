@@ -9,6 +9,10 @@
 // include the `path` and `path-above` views. The close-up maps are sampled afresh, without the paths.
 //
 //   node examples/rivers/scripts/pictures.ts [seed] [outDir]
+//   node examples/rivers/scripts/pictures.ts --stats     (the numbers of the first seeds' plans, no pictures)
+//   node examples/rivers/scripts/pictures.ts --brooks    (the brooks of seeds 1 to 4 at the default flow: junctions,
+//                                                         mouths, crowded mouths and twins; fails on a twin longer
+//                                                         than 8 m or more than two crowded mouths)
 //
 // The pictures go to tools/shot/out/rivers/ (ignored by git) unless another folder is given.
 
@@ -17,6 +21,7 @@ import { deflateSync } from 'node:zlib';
 import { groundColour, mix, sat, type V3 } from '../src/colours.ts';
 import { fieldOf, type Field } from '../src/field.ts';
 import { STEP_M } from '../src/ground-mesh.ts';
+import { DEFAULT_BROOK_FLOW, brookCrowding, brookPlan, brookStats } from '../src/brooks.ts';
 import { HALF_M, SIZE_M } from '../src/land.ts';
 import { layPaths } from '../src/path-ground.ts';
 import { pathAt, pathPlan, pathStats, type PathHit, type PathPlan } from '../src/paths.ts';
@@ -34,6 +39,19 @@ if (process.argv[2] === '--stats') {
     console.log(`seed ${s}: ${p.lines.length} lines, ${p.lines.filter((l) => l.into >= 0).length} joining another, ${falls} falls (highest ${top.toFixed(0)} m), lakes: ${lakes || 'none'}`);
   }
   process.exit(0);
+}
+if (process.argv[2] === '--brooks') {
+  let bad = 0;
+  for (let s = 1; s <= 4; s++) {
+    const p = waterPlan(s);
+    const bp = brookPlan(p, fieldOf(p, -HALF_M, -HALF_M, SIZE_M, STEP_M), DEFAULT_BROOK_FLOW);
+    const st = brookStats(bp);
+    const cr = brookCrowding(bp);
+    const fail = cr.longestTwinM > 8 || cr.crowdedMouths > 2;
+    if (fail) bad++;
+    console.log(`seed ${s}: ${st.brooks + st.streams} brooks, ${st.junctions} junctions, ${st.intoWater} mouths; crowded mouths ${cr.crowdedMouths}, twins ${cr.twins} (longest ${cr.longestTwinM.toFixed(1)} m)${fail ? ' FAIL' : ''}`);
+  }
+  process.exit(bad ? 1 : 0);
 }
 const seed = Number(process.argv[2] ?? 1);
 const outDir = process.argv[3] ?? new URL('../../../tools/shot/out/rivers/', import.meta.url).pathname;

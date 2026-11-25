@@ -27,6 +27,12 @@ Then open <http://localhost:5281/minimal-3d/>. Another port: `EXAMPLES_PORT=5291
 - Drag to orbit, use the wheel to zoom.
 - `[` and `]` move the hour by half an hour, space runs the day.
 - `P` pauses the figures, `.` steps one tick, `-` and `=` halve and double their speed, `C` calls the wanderers to the gap in the ring.
+- `N` switches the mark mode (dev server only, not in the live demo): a click pins a note to the island, picked against
+  its height field with the sea over it (`heightPick`; the stones, figures and the cart are not in the pick), kept in
+  `internal/marks/` by the dev server's store; one call to the engine's `installEngineMarking` in `src/main.ts` (Marks
+  in the engine's docs). While the mode is on, the drag and the wheel do not orbit; `N` or Escape leaves it. A mark's
+  view comes back exactly from its hash (`mkview=`), with the figures frozen at the tick they had (`tick=`). `marks=1`
+  turns the marks on in a page driven by a script, `marks=0` hides the pins.
 - URL hash: `#seed=7&tick=900&hour=18.5&day=250&yaw=35&pitch=24&dist=105&w=rain` (`w` is `clear`, `clouds`, `rain`, `snow` or `fog`; `tick` freezes the simulation at that tick). `ground=follow` starts the ground dry and bare and lets it follow the weather (`weatherGround`): snow whitens it over a few minutes, rain wets it within half a minute, and it dries when nothing falls.
 
 Screenshots (on the host, against the running container):

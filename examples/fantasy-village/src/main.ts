@@ -14,10 +14,12 @@
 // M movie mode (a looping tour, src/movie.ts), Escape (or a drag, the wheel) leaves it.
 // G walk mode (src/walk/): a figure on the square, W A S D or the arrows walk, Shift runs, Space jumps, a drag turns,
 // the wheel moves the camera, F first person; G or Escape back to the orbit view above the figure.
+// N in the orbit view switches the mark mode (dev server only: a click pins a note to the ground of the village;
+// marks=1 turns the marks on in a page driven by a script, marks=0 hides the pins).
 
 import { PerspectiveOrbitRig, definePalette } from 'wallhammer-web';
 import type { FollowRig } from 'wallhammer-web/camera';
-import { createEngine } from 'wallhammer-web/runtime';
+import { createEngine, heightPick, installEngineMarking } from 'wallhammer-web/runtime';
 import { formatProfile, profileFrame } from 'wallhammer-web/tools';
 import type { FrameProfile } from 'wallhammer-web/tools';
 import { Simulation } from 'wallhammer-web/sim';
@@ -532,6 +534,18 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
   },
 };
 
+// Marks (key N in the orbit view; not while walking or during the movie): notes pinned to points of the ground,
+// picked against the terrain's height function (buildings, trees, props, villagers and the water's surface are not in
+// it). A mark's hash is the page's own (`hash()`) with the exact view. Only in the dev server (the live demos have
+// none); `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  const marks = installEngineMarking(engine, {
+    pick: heightPick((x, z) => (source ? source.heightAt(x, z) : 0), { maxDistanceM: 2000, surface: 'terrain' }),
+    hash,
+    allowed: () => !walk.active && !movie.active && scene !== null,
+  });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
 // Build once the loading screen has painted and its animations have started, then start. A hidden tab gets no
 // animation frames, so there the build starts from the task queue.
 function begin(): void {

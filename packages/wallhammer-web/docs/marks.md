@@ -10,7 +10,8 @@ and update them from the command line.
 
 Fly or walk through a generated world, press N, click what looks wrong and type a note. The mark keeps the point, the
 exact view and a picture; you (or an agent) list the marks later, open each at its view and close them when fixed.
-It takes two lines in a project on Vite whose engine draws through a `FreeRig` or a `FollowRig`.
+It takes two lines in a project on Vite whose engine draws through a `FreeRig`, a `FollowRig` or a
+`PerspectiveOrbitRig`.
 
 1. The store, a dev-server plugin (Node only, never in a build):
 
@@ -83,7 +84,11 @@ the animation time are recorded too. The mark's hash is the page's own hash plus
   that was trailing a moving point comes back as it was, and the next `update` closes the gap as before. The following
   view's space is the world's (no render origin).
 - **`FreeRig`**: the position, heading, pitch and roll come back; the render origin is the page's, as before.
-- **Other views** (`PerspectiveOrbitRig`, `SteppedOrthoRig`): marking is off while the engine draws through one. A page
+- **`PerspectiveOrbitRig`**: the target, the yaw and the pitch (in radians, the rig's own fields) and the distance come
+  back as they were, past the clamps of `setState`; the field of view is the page's (put it in its `hash` if the page
+  changes it). In the mark mode the layer over the canvas takes the pointer, so the drag and the wheel of the orbit
+  wait until the mode is left; a page whose click does something (a blast, say) gets the pick instead while it is on.
+- **Other views** (`SteppedOrthoRig`, a page's own camera): marking is off while the engine draws through one. A page
   with another camera writes its own `MarkHost`.
 - **The pick** sees only its surface: `heightPick` a height function over a flat world (+y up), `gapPick` any signed
   gap function, `collisionPick` the base surface and the solids that block sight of a `CollisionWorld`. Instances and
@@ -102,8 +107,8 @@ Marks ship in the package, split by where each part runs:
 | The page's part | `wallhammer-web/platform` (`installMarking`, `MarkHost`, `MarkingOptions`, `MarkingApi`, `markStore`, `captureCanvas`, `MARK_STATUS_COLOURS`) | The mark mode, the pins, the panel, the picture and the store client (DOM). |
 | The store | `marksStore` in `wallhammer-web/marks-store` (Node only) | A Vite dev-server plugin that keeps the marks in a folder. |
 | The command line | the package's `bin` `wallhammer-marks` (`list`, `set`) | List the marks, change a status. |
-| The ready host | `wallhammer-web/runtime` (`installEngineMarking`, `engineMarkHost`, `heightPick`, `gapPick`, `collisionPick`, `rigViewText`, `restoreRigView`) | The marks for an engine that draws through a `FreeRig` or a `FollowRig`, in one call. |
-| Pages that use it | `examples/endless`, `examples/walk` (the ready host), `examples/planet/src/marks.ts` (a host of its own) (in the repository, not in the package) | Key `N` in each. |
+| The ready host | `wallhammer-web/runtime` (`installEngineMarking`, `engineMarkHost`, `heightPick`, `gapPick`, `collisionPick`, `rigViewText`, `restoreRigView`) | The marks for an engine that draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`, in one call. |
+| Pages that use it | `examples/endless`, `examples/walk`, `examples/minimal-3d`, `examples/destruction`, `examples/fantasy-village`, `examples/outpost`, `examples/rivers` (the ready host), `examples/planet/src/marks.ts` (a host of its own), `examples/system/src/marks.ts` (the ready host's `engineMarkHost` with a pick, a view and pins of its own) (in the repository, not in the package) | Key `N` in each; `K` in `system`, whose N toggles the names. |
 
 The record types are plain data in `base`, so every layer may read them. `MarkHost` holds the page's canvas
 (`HTMLCanvasElement`) and `MarkingOptions` a key of the keyboard, so they sit in `platform` with the panel, the only
@@ -151,12 +156,16 @@ interface `MarkingApi` back (`list`, `add`, `update`, `remove`, `goto`, `compare
 (`KeyboardEvent.code`) and whether the pins are drawn. The `MarkHost` it hands over is small: the canvas and its size,
 the ray under a pixel, where a world point lands on the canvas, the pick, the current view as a URL hash that restores
 it, the facts of a place, a synchronous render, a frame hook and a way to put the camera at a view.
-For an engine that draws through a `FreeRig` or a `FollowRig`, `installEngineMarking` of `runtime` makes it (Quick
-start above). `examples/planet/src/marks.ts` in the repository is a complete host of its own in under 200 lines: a free
-camera over a sphere, a pick under the sea and latitude and longitude in its records.
+For an engine that draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`, `installEngineMarking` of
+`runtime` makes it (Quick start above). `examples/planet/src/marks.ts` in the repository is a complete host of its own in under 200 lines: a free
+camera over a sphere, a pick under the sea and latitude and longitude in its records. `examples/system/src/marks.ts`
+builds on `engineMarkHost` instead and changes what a page with several bodies and a clock of its own needs: the pick
+against the body the camera is near in its turning frame (the pins stay on the ground as it turns, and only that
+body's pins are drawn), `clocks: false` with the page's exact time and `rate=0` in its own hash, and a `goto` that puts
+the page on the mark's body and moment before the rig is restored.
 
-The examples (`planet`, `endless`, `walk`) load their marks only when `import.meta.env.DEV` holds, so the static build of the live demos has
-none of them, and a page driven by a script (`navigator.webdriver`: the picture and benchmark tools) has none unless
+The examples with marks (`planet`, `endless`, `walk`, `minimal-3d`, `destruction`, `fantasy-village`, `outpost`,
+`rivers`, `system`) load them only when `import.meta.env.DEV` holds, so the static build of the live demos has none of them, and a page driven by a script (`navigator.webdriver`: the picture and benchmark tools) has none unless
 its hash says `marks=1`. Pictures and golden hashes are therefore unchanged.
 
 The picture of a mark is the canvas alone: the page renders a frame and calls `toBlob` in the same task (a WebGL canvas
@@ -197,8 +206,8 @@ export default defineConfig({ plugins: [marksStore()] });
 
 Its folder is the environment variable `WH_MARKS_DIR` when set (a scratch folder for a test), else the option `dir`
 (relative to Vite's root), else `.marks/` in Vite's root (`marksFolder`). This repository passes `internal/marks/`
-(ignored by git) in the `vite.config.ts` of the `planet`, `endless` and `walk` examples; their marks share the folder,
-each page showing its own. The store answers under the page's base (`/planet/__marks`):
+(ignored by git) in the `vite.config.ts` of every example with marks; their marks share the folder, each page showing
+its own. The store answers under the page's base (`/planet/__marks`):
 `GET` lists, `POST` saves, `PATCH /<id>` changes a mark and appends to its log (`fixed` needs an after-picture in the
 same request), `DELETE /<id>` removes a mark and its pictures. It takes only same-origin requests on localhost, and a
 change needs the header `x-marks: 1`.

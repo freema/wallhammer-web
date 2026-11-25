@@ -62,6 +62,7 @@ world.remove(block); // other ids stay valid
 | `slide(x, z, radius, minY, maxY, dx, dz, out)` | Moves a circle against the sides of the solids whose height span overlaps `minY`..`maxY` (touching does not count; the base is not a side). It slides along a side, stops in a corner, never ends inside a solid: a circle that starts inside is pushed out the shortest way first. The move is split into sub-steps of at most half the radius, so it does not pass a side thinner than that. `out.hit`, `out.nx`, `out.nz`, `out.solid` tell the last contact. |
 | `raycast(ox, oy, oz, dx, dy, dz, maxT, out)` | The first hit with the base and the solids that block sight, for t in 0..`maxT` (t in lengths of the direction). The normal is unit and turned against the ray; `solid` and `tag` are −1 for the base. |
 | `clearance(ox, oy, oz, dx, dy, dz, maxDist, radius)` | How far a sphere gets along the direction, in metres, at most `maxDist`: the centre line is cast as a ray first, then the sphere is tested every `radius` metres and the contact refined by bisection. 0 when the sphere overlaps something at the origin. Pass it to `FollowRig` as the boom clearance. |
+| `query(x, z, radius, visit)` | Every solid whose outline comes within `radius` of the point horizontally, whatever its height span and options: `visit(id, tag, distance)` with the signed horizontal distance (negative inside). Returns the count; allocates nothing; `visit` must not query the same world. |
 | `forEachSolid(fn)`, type `SolidInfo` | Every solid with its shape and options, for debug drawing (allocates). |
 | `newRayHit()`, `newSlideResult()` | Result objects to allocate once and reuse. |
 
@@ -81,11 +82,13 @@ while the machine was busy), a `slide` of one step 1–3 µs, `groundAt` under 1
 `position`, that moves over a `CollisionWorld` in fixed steps of `1 / stepHz` seconds. Each step:
 
 1. The wanted velocity is the intent's direction (clamped to length 1) times `walkSpeed` or `runSpeed`. The horizontal
-   velocity moves toward it by at most `acceleration` per second (braking the same way); in the air only
+   velocity moves toward it by at most `acceleration` per second (by default braking the same way; see
+   [Momentum](#momentum) for a separate braking, a slower run-up and a turn that widens with speed); in the air only
    `airControl` of it. The default `airControl` is 0: once off the ground (a jump or a fall from an edge) the body keeps
    the horizontal velocity it left with until it lands, whatever is asked in the air; only a side it touches takes
    away the velocity into it. A small share (0.05–0.1) allows a slight correction, at most `airControl × acceleration`
-   per second. A step counts as in the air when it starts with the feet above the ground, so the step of a take-off
+   per second, whether it speeds up, brakes or turns (`deceleration` and `runAcceleration` are the grip of the feet
+   and apply only on the ground). A step counts as in the air when it starts with the feet above the ground, so the step of a take-off
    still steers as on the ground and the step of a landing does not.
 2. A jump (`intent.jump`) starts only from the ground, not from a slope too steep to stand on: the vertical speed
    becomes `jumpSpeed`.
@@ -102,8 +105,8 @@ while the machine was busy), a `slide` of one step 1–3 µs, `groundAt` under 1
    along the incline); the intent steers it across and may speed it downhill but not brake or climb. The slope is
    steep only when the base rises steeply on both sides of the feet (over 5 cm each way along the gradient): at the
    flat lip of a cliff or a pit the central slope straddles the kink, and the body must still be able to walk away.
-6. `yaw` turns toward the wanted direction (or, without an intent, the direction moved) at most `turnSpeed` rad/s on
-   the ground and `airTurnSpeed` rad/s in the air. The default `airTurnSpeed` is 0: the body keeps the heading it took
+6. `yaw` turns toward the wanted direction (or, without an intent, the direction moved) at most `turnSpeed` rad/s
+   (with `turnSpeedAtRun`, the turn rate at the current speed) on the ground and `airTurnSpeed` rad/s in the air. The default `airTurnSpeed` is 0: the body keeps the heading it took
    off with until it lands, so a figure drawn with `renderYaw` does not spin in the air (a camera may still orbit it).
 
 `advance(dt, intent)` takes real seconds, runs the steps due and carries the rest to the next call, so the path does not
@@ -148,7 +151,8 @@ console.log(body.position, body.velocity, body.grounded, body.steep, body.yaw, b
 
 | Member | Meaning |
 | --- | --- |
-| `new Walker(world, setup?)`, `setup` | `WalkerSetup` over `DEFAULT_WALKER`: `radius` 0.3, `height` 1.7, `walkSpeed` 1.6, `runSpeed` 4.5 m/s, `acceleration` 20 m/s², `airControl` 0 (no steering in the air), `airTurnSpeed` 0 rad/s (no turning in the air), `jumpSpeed` 4.2 m/s (0: no jumps; a jump 0.9 m high, 0.86 s in the air), `gravity` 9.81, `maxStepUp` 0.35 m, `maxSlopeDeg` 45, `stepHz` 60, `turnSpeed` 12 rad/s, `stepSmoothing` 0.1 s, `maxStepsPerAdvance` 15. |
+| `new Walker(world, setup?)`, `setup` | `WalkerSetup` over `DEFAULT_WALKER`: `radius` 0.3, `height` 1.7, `walkSpeed` 1.6, `runSpeed` 4.5 m/s, `acceleration` 20 m/s², `airControl` 0 (no steering in the air), `airTurnSpeed` 0 rad/s (no turning in the air), `jumpSpeed` 4.2 m/s (0: no jumps; a jump 0.9 m high, 0.86 s in the air), `gravity` 9.81, `maxStepUp` 0.35 m, `maxSlopeDeg` 45, `stepHz` 60, `turnSpeed` 12 rad/s, `stepSmoothing` 0.1 s, `maxStepsPerAdvance` 15; `deceleration`, `runAcceleration`, `turnSpeedAtRun` 0 (off, see [Momentum](#momentum)). |
+| `retune(tuning)`; type `WalkerTuning`, `WALKER_TUNING_KEYS` | Changes the speeds, rates and jump (`walkSpeed`, `runSpeed`, `acceleration`, `deceleration`, `runAcceleration`, `turnSpeed`, `turnSpeedAtRun`, `airControl`, `airTurnSpeed`, `jumpSpeed`) from the next step on, keeping the state; a field left out keeps its value. The size, step rate and ground limits are fixed at construction. `ChartWalker.retune` does the same and keeps it over recharts. |
 | `position`, `velocity` | Feet and velocity (x, y, z), `Float64Array`s; read them, change them through `teleport`. |
 | `yaw`, `grounded`, `steep` | Heading in radians; standing on ground; standing on a base too steep to climb (sliding). |
 | `travelled`, `steps` | Horizontal metres moved (for the stride of an animation); fixed steps since the last `teleport`. |
@@ -158,6 +162,34 @@ console.log(body.position, body.velocity, body.grounded, body.steep, body.yaw, b
 | `renderPosition(out)`, `renderYaw()`, `alpha` | The pose between the last two steps for drawing; the share of the way to the next step. |
 | `teleport(x, y, z, yaw?)` | Puts the feet at a point with no velocity; the body settles onto the ground in the next step. |
 | `WalkIntent`, `newWalkIntent()` | `moveX`, `moveZ` (world direction, length at most 1), `run`, `jump` (true in the step a jump is asked). |
+
+### Momentum
+
+Three options of `WalkerSetup` give a body weight. Each is 0 by default, and with all three at 0 a step is the same,
+bit for bit, as without them (`pnpm check:walk`, `walker-momentum-defaults-unchanged`).
+
+| Option | Effect |
+| --- | --- |
+| `deceleration` | The rate, m/s², at which the velocity changes when the wanted speed is lower than the current one (letting go, slowing from a run to a walk). A body at `runSpeed` v stops in v² / (2 deceleration) metres in the continuous limit; in fixed steps of dt a little sooner, in v² / (2 deceleration) − v · dt / 2 (exactly when v / (deceleration · dt) is a whole number of steps, otherwise at most deceleration · dt² / 8 more). Only on the ground. 0: `acceleration`. |
+| `runAcceleration` | The rate while running and speeding up: a run-up slower than a start to a walk. Only on the ground. 0: `acceleration`. |
+| `turnSpeedAtRun` | The fastest turn on the ground at `runSpeed`, rad/s. The turn rate falls linearly from `turnSpeed` at `walkSpeed` (and below) to this at `runSpeed` (and above), and on the ground the direction of the velocity turns no faster than that, so a runner turns in an arc of radius speed / rate instead of on the spot. The yaw turns at the same rate. At an unchanged speed the velocity changes by the larger of `acceleration` and `deceleration`, so the arc is no tighter than speed² / that. 0: `turnSpeed` at every speed, and the velocity moves straight toward the wanted one. |
+
+Measured on flat ground at 60 steps per second (`pnpm check:walk`): from 4.5 m/s the default setup stops in 0.47 m,
+`deceleration` 9 in 1.09 m, `deceleration` 5 in 1.99 m (v²/2d is 2.025 m; less half a step's travel, v · dt / 2,
+1.9875 m, which a whole number of steps gives exactly); in the air every option but `airControl` is set aside and the
+velocity changes at `airControl × acceleration` (`walker-air-control-rate-is-acceleration`); with `turnSpeedAtRun` 3 a run reversed from 4.5 m/s swings
+3.0 m sideways (2 × speed / rate). The examples' movement profiles (`examples/shared/src/figures/profiles.ts`) are
+worked sets of these numbers; switch them while walking with `retune`.
+
+```ts
+import { CollisionWorld, Walker } from 'wallhammer-web/world';
+
+const world = new CollisionWorld({ heightAt: () => 0 });
+// A loaded body: a slow run-up, a long stop, wide turns at a run.
+const body = new Walker(world, { walkSpeed: 1.2, runSpeed: 3.8, acceleration: 6, runAcceleration: 3.5, deceleration: 6, turnSpeed: 5, turnSpeedAtRun: 1.5 });
+// Lighter after putting the load down; the state is kept.
+body.retune({ runSpeed: 4.6, acceleration: 12, runAcceleration: 7, deceleration: 12, turnSpeed: 8, turnSpeedAtRun: 2.5 });
+```
 
 CPU time of one step in plain Node in the development container, in a world of 2,000 solids, mean of 10,000 steps
 (`pnpm check:walk` prints it each run): 3–4 µs, up to 15 µs measured while the machine was heavily loaded (target 20 µs).
@@ -253,13 +285,175 @@ const blocking = collisionLines(world, { select: (s) => !s.standable, segments: 
 console.log(standable.count, blocking.count);
 ```
 
-### Not built
+## Walking on a sphere
 
-- A curved world (a sphere, up pointing away from a centre). The world is flat with +y up. The places where a local
-  up would replace y are marked `UP:` in `src/world/collide.ts`: the vertical span of a solid in `slide`, the base
-  height in `groundAt`, the height above the base in `clearance`; and in `src/world/walker.ts`: gravity, the height
-  span of the body, the slope of the base and the plane of the heading.
+`ChartWalker` (`wallhammer-web/world`) walks a body on a sphere with the flat `CollisionWorld` and `Walker` as they are.
+It keeps a **local chart** (`SurfaceChart`, `wallhammer-web/base`): flat coordinates round one point of the sphere, the
+exponential map, in which chart `x` and `z` are metres along the sphere from the chart's origin and chart `y` is the
+height above a reference radius. The ground of the chart's collision world is `radiusAt(direction) − radius`, so the
+feet stand exactly on the world's ground. When the body gets farther than `rechartM` from the chart's origin (default
+the smaller of 48 m and radius / 64), a new chart is anchored under it at the next step boundary: position, velocity,
+heading and the drawing's interpolation are carried through world space, the new chart's axes are the old ones moved
+along the great circle (a heading keeps its numbers), a new collision world is made, and `onRechart(chart, world)` lets
+you add the solids near the body again. A rechart is a pure function of the state, so the walk stays deterministic and
+independent of how the time is cut into frames.
+
+<!-- check: wrap -->
+```ts
+import { ChartWalker, newWalkIntent } from 'wallhammer-web/world';
+
+const R = 2000;
+// The ground's distance from the centre in a unit direction: here a sphere with gentle bumps.
+const radiusAt = (x: number, y: number, z: number): number => R + 3 * Math.sin((x * R) / 97) * Math.cos((z * R) / 131);
+const tower: [number, number, number] = [0, R, -120]; // a world point the solids are kept at
+const walker = new ChartWalker({
+  radiusM: R,
+  radiusAt,
+  // Called for every new chart, the first one (made in the constructor) included.
+  onRechart: (chart, world) => {
+    const at = chart.fromWorld(tower[0], tower[1], tower[2], [0, 0, 0] as [number, number, number]);
+    // Only what lies near the new chart's origin; x and z are metres along the sphere.
+    if (Math.hypot(at[0], at[2]) < 500) world.addCylinder(at[0], at[2], 3, at[1] - 1, at[1] + 6);
+  },
+}, [0, 1, 0]);
+walker.teleportDirection([0.1, 1, 0], 0, [0, 0, -1]); // on the ground in that direction, facing world −z
+
+const intent = newWalkIntent();
+intent.moveZ = -1; // in the chart: the walker's input is the flat walker's
+walker.advance(1 / 60, intent);
+
+const at = walker.renderPosition([0, 0, 0]); // world metres, drawn between the last two steps
+const up = walker.renderUp([0, 0, 0]);
+console.log(at, up, walker.chart.anchor, walker.recharts, walker.grounded);
+```
+
+`onRechart` is called for every new chart: the constructor's, a teleport's, a loaded state's and every rechart's. In
+the constructor's call the walker is not built yet, so use the `chart` it is given (`toChart` of the walker does the same
+later, with a reach). Members besides the walker's own: `chart`, `world` and `walker` (the current
+ones; do not keep them across a frame), `position`, `velocity`, `renderPosition`, `renderChartPosition`, `renderUp`,
+`renderYaw`, `renderFacing`, `renderFrame(out, alpha?, origin?)` (the body's 3 × 4 matrix in world space or relative to
+a render origin: x right, y up, −z facing), `teleport(point, facing?)`, `teleportDirection(dir, above?, facing?)`,
+`toChart(point, out, reach?)`, `rechart()`, `heightAboveGround`, `chartDistance`, `recharts`. `saveState` and
+`loadState` hold the chart's anchor and axes with the walker's own state (`CHART_WALKER_STATE_BYTES`); a loaded state
+rebuilds the same chart bit for bit and calls `onRechart` (with the loaded walker in place). The whole state is checked
+first: one that is refused throws and leaves the walker, its chart and its world as they were. A chart's frame is
+orthonormal for every anchor, also next to the sphere's −y pole, where `upFrame` alone is not. The point straight
+opposite a chart's origin is π · radius away along the sphere; `fromWorld` puts it there, on the chart's +x axis, and
+`toChart` takes it as within reach only of a reach that long.
+
+The view of a walking body on a sphere is `ChartFollowView` (`wallhammer-web/camera`, see Cameras): a `FollowRig` in the
+chart's coordinates shown in world space.
+
+Limits of the method (measured by `pnpm check:walk`, scenarios `sphere-*`):
+
+- Exact in height: the feet stand on `radiusAt` to 1e-10 m on spheres of 2 km and 100 km.
+- Along the ground a chart stretches lengths across the direction from its origin by about θ² / 6 (θ = distance /
+  radius): 1e-4 at 48 m on a sphere of 2 km, so a speed or a solid's size is off by that much near the edge of a chart.
+  It is meant for a radius much larger than `rechartM`; a sphere smaller than about 300 m makes charts so short that
+  solids near the body are added again very often.
+- Solids live in one chart: a solid is laid flat in the chart, so a long one far from the chart's origin does not bend
+  with the sphere, and one that the body is touching at a rechart may be met a few millimetres off where it was. Add
+  them again in `onRechart`, from world positions.
+- Slopes are measured in the chart: the ground of a perfect sphere is flat there (chart y is the height above the
+  sphere), and a slope's angle is off by the stretch above and by height / radius. Gravity is the chart's −y, which at
+  the foot is the local down.
+- One chart per walker: two bodies walking near each other each have their own chart and do not see each other.
+
+## Solids of streamed cells
+
+The instances of streamed cells (houses, trees, rocks of a game) are plain records in their cells; a walker does not
+meet them until they are solids of its collision world. Three parts make them so, all in plain Node:
+
+1. **A descriptor per archetype**, `InstanceSolid` (`wallhammer-web/base`, plain data next to `InstanceBounds`): which
+   floats of an instance record are the base point, the radius and the height (or constants `radiusM`, `heightM`),
+   factors on them (`radiusScale`, `heightScale`), how far the solid reaches under its base (`belowM`), which way it
+   stands (`up: 'y'` on a flat world, `'radial'` on a sphere), `standable`, `blocksSight`, and `minRadiusM` to skip small
+   ones. With `box: { turn, sizeX, sizeZ?, scale? }` it is an upright box turned about up the way `addBox` turns (in the
+   frame `upFrame(up)` on a sphere, the shaders' `localFrame`); a `sizeZ` of 0 takes `sizeX`, and a half extent is the
+   size times `scale` (default 0.5). An archetype without a descriptor is not solid.
+2. **`SolidIndex`** (`wallhammer-web/world`): the solids of the cells added to it, in world metres (double precision),
+   kept in a spatial hash of cubes (`bucketM`, default 32 m) keyed on the middle of each solid's axis. `addCell(content)`
+   reads the records (new content of a cell replaces its solids; all or nothing: a layout whose stride is not a
+   positive multiple of 4 bytes, or a solid outside the hash's range of ±65,536 cubes, throws and leaves the index and
+   the cell's earlier content as they were), `removeCell(cell)` drops them. `within(point, radius,
+   visit)` is the general question "what stands within a radius of this point": every solid whose axis comes within
+   `radius` plus its own radius of the point, with its base point, up, radius, height, box, archetype, instance id
+   (`idHigh`, `idLow`), cell and `distance` (to the axis, less its radius). It works the same on a flat world and on a
+   sphere, allocates nothing and hands one reused `SolidHit` to `visit`. Its cost is bounded by the solids in the
+   index: a query that would visit more cubes than there are solids (a huge solid, a wide radius) looks at every solid
+   instead, and the margin a query is grown by follows the largest solid in the index, not the largest ever added. A
+   listener (`listen`) may stop itself while it is told. `keep(archetype, data, offset)` in the options
+   filters instances by their record. Fed by hand, or from a `StreamedWorld` with `streamSolids` of `runtime` (see
+   [Solids of resident cells](streaming.md#solids-of-resident-cells)).
+3. **`SolidFeed`** (`wallhammer-web/world`): keeps a `CollisionWorld` in step with the index, one upright cylinder or
+   turned box per solid (`tag` = the slot in the index, `index.get(slot, hit)` reads it back). On a flat world
+   `feed.attach(world)` once (attaching again first takes this feed's solids out of the world attached before, the same
+   one or another, so nothing is added twice). On a sphere call `feed.attach(world, chart)` from the `ChartWalker`'s
+   `onRechart`: the solids within `reachM` (default 160 m) of the chart's origin are added in chart coordinates, and
+   cells that arrive or leave before the next rechart are added to or taken from that chart's world. The camera boom
+   (`world.clearance`) sees them as well.
+
+<!-- check: wrap -->
+```ts
+import type { InstanceSolid } from 'wallhammer-web/base';
+import { SphereWorld } from 'wallhammer-web/world';
+import { ChartWalker, SolidFeed, SolidIndex } from 'wallhammer-web/world';
+import type { CellContent } from 'wallhammer-web/gen-core';
+declare const arrived: CellContent; // a cell's content, from your streaming
+
+const shape = new SphereWorld(100_000);
+// Records of 8 floats: base x, y, z, reach | height, turn, width, depth.
+const solids: Record<string, InstanceSolid> = {
+  column: { position: 0, radius: 3, radiusScale: 0.1, height: 4, belowM: 1, up: 'radial', standable: false },
+  block: { position: 0, height: 4, belowM: 1, up: 'radial', box: { turn: 5, sizeX: 6, sizeZ: 7 } },
+};
+const index = new SolidIndex({ solids, shape, center: shape.centerM });
+index.addCell(arrived); // and index.removeCell(cell) when it leaves
+
+const feed = new SolidFeed(index);
+const walker = new ChartWalker({
+  radiusM: 100_000,
+  center: shape.centerM,
+  radiusAt: () => 100_000,
+  onRechart: (chart, world) => void feed.attach(world, chart),
+});
+
+// What stands within 5 m of the feet?
+const feet = walker.position([0, 0, 0] as [number, number, number]);
+index.within(feet, 5, (hit) => console.log(hit.archetype, hit.distance, hit.radius, hit.idHigh, hit.idLow, hit.cell));
+```
+
+A flat world takes the same index with `up: 'y'` descriptors and a `CollisionWorld` in world coordinates:
+
+<!-- check: wrap -->
+```ts
+import { FlatWorld } from 'wallhammer-web/gen-core';
+import { CollisionWorld, SolidFeed, SolidIndex } from 'wallhammer-web/world';
+declare const groundAt: (x: number, z: number) => number;
+
+const index = new SolidIndex({ solids: { post: { position: 0, radiusM: 0.4, heightM: 3 } }, shape: new FlatWorld() });
+const world = new CollisionWorld({ heightAt: groundAt });
+const feed = new SolidFeed(index);
+feed.attach(world); // every indexed solid now, and every cell's solids as the cell comes and goes
+```
+
+Measured by `pnpm check:walk` (scenarios `solids-*`): `within` agrees with a brute-force answer, a walker stops at a
+cylinder's radius and at a turned box's face to 1e-4 m on a flat world and on a sphere of 2 km (through recharts and a
+rechart forced while touching), a cell arriving between recharts stops the body and one leaving lets it pass, and at
+1e5 m from the centre a distance is right to 1e-5 m. CPU time in the development container: removing and adding a cell
+of 500 solids about 50 µs, a `within` of 2 m about 2 µs among 12,500 solids, a chart's feed of about 1,400 solids
+0.5 ms. The planet example (`examples/planet`, walk mode) makes its trees and rocks solid this way.
+
+## Not built
+
+- A general up inside the collision world and the walker. A sphere is walked through a moving chart (below); the places
+  where a local up would replace y in the flat code are still marked `UP:` in `src/world/collide.ts` and
+  `src/world/walker.ts`, for a world that a chart does not fit (a body walking round a small asteroid, inside a ring).
 - Sloped or shaped tops: the top of a solid is flat at `maxY`. Ramps are made of the base surface or of thin steps.
+- Solids of streamed cells are upright cylinders and turned boxes read from instance records, not the drawn meshes of
+  their archetypes; a footprint of several parts (an L-shaped structure) or a prism over an outline from a record is
+  not built, and a long box on a sphere is laid flat in its chart like any chart solid. An index holds the cells of the
+  levels it is fed; which level holds the solids near a walker is the application's choice (`streamSolids`).
 - Moving solids. Remove and add again to move one (the grid lists are updated each time). A walker standing on a
   solid is not carried with it.
 - Jump timing aids: a jump asked a step after running off an edge is dropped (no grace time, "coyote time"), and so

@@ -10,6 +10,8 @@
 // mirroring transform flips the winding and keeps the volume positive, that `append` keeps payloads, determinism,
 // and that two very different vertex formats (52 bytes with a per-vertex direction computed after building, panel
 // coordinates and a tone; 24 bytes with an 8-bit normal, colour with occlusion and four flag bytes) can be written.
+// Also the rig meshes (rig-cases.ts) and the sphere patch's split, coarse extra and ground extra channel
+// (sphere-patch-cases.ts, cases `sphere-…`).
 
 import type { VertexLayout } from '../../packages/wallhammer-web/src/base/data.ts';
 import { mat34Multiply, mat34RotationY, mat34Scaling, mat34Translation } from '../../packages/wallhammer-web/src/base/mat34.ts';
@@ -18,6 +20,7 @@ import type { ShapeVertex } from '../../packages/wallhammer-web/src/gen-mesh/bar
 import { MeshBuilder } from '../../packages/wallhammer-web/src/gen-mesh/mesh-builder.ts';
 import type { VertexFormat } from '../../packages/wallhammer-web/src/gen-mesh/mesh-builder.ts';
 import { RIG_CASES } from './rig-cases.ts';
+import { SPHERE_PATCH_CASES } from './sphere-patch-cases.ts';
 
 // --- Two vertex formats of imagined games ------------------------------------------------------------------------------
 
@@ -392,7 +395,7 @@ const cases: [string, () => Result][] = [
   }],
 ];
 
-cases.push(...RIG_CASES);
+cases.push(...RIG_CASES, ...SPHERE_PATCH_CASES);
 
 const filter = process.argv[2] ?? '';
 let failed = 0;

@@ -2,14 +2,21 @@
 // stations, each trying one ability (walls and a corner, pillars, steps, ramps, jumps, low passages, a thin wall, a
 // footbridge over a pit). The course is pure data (src/course.ts) shared with the headless check (pnpm check:walk).
 //
-// URL hash: #seed=7&x=60&z=60&yaw=0&fp=0&c=0&lock=0&pr=1.5
+// URL hash: #seed=7&x=60&z=60&yaw=0&fp=0&c=0&lock=0&pr=1.5&profile=default&figure=pathfinder
 //   x, z, yaw  start place (yaw in degrees, 0 faces −z)     fp=1 first person     c=1 the wireframe of the solids
 //   lock=1     a click locks the pointer (Escape lets it go)  pr  cap of the canvas pixel ratio (default 1.5; 0 = none)
+//   profile    how the body carries its weight: default, heavy, light (examples/shared profiles.ts: run-up, braking,
+//              running turn, stride, lean) or engine (the walker's own defaults: no separate braking, turns on the
+//              spot; the walker of `pnpm check:walk`)
+//   figure     pathfinder (default: the shared figure with a ponytail that lags behind its motion, src/body.ts) or
+//              boxes (the box figure of src/pose.ts)
 // Controls: W A S D or the arrows walk, Shift runs, Space jumps, a drag turns, the wheel moves the camera in and out;
-// F first person and back, C the wireframe of the solids, R back to the start, N the mark mode (dev server only: a click
+// F first person and back, C the wireframe of the solids, R back to the start, P the next movement profile, N the mark
+// mode (dev server only: a click
 // pins a note to the course; marks=1 turns the marks on in a page driven by a script). A gamepad works too (left stick,
 // right stick, A, RT or the left stick pressed). A jump keeps the speed and the heading of take-off until landing (the
-// walker's defaults); the view can still be turned in the air. The figure's poses come from src/pose.ts.
+// walker's defaults); the view can still be turned in the air. The pathfinder's poses come from src/body.ts, the box
+// figure's from src/pose.ts.
 
 import { definePalette } from 'wallhammer-web/core';
 import { heightFieldMesh } from 'wallhammer-web/gen-mesh';
@@ -21,14 +28,20 @@ import type { Material } from 'wallhammer-web/render';
 import { collisionPick, createEngine, installEngineMarking } from 'wallhammer-web/runtime';
 import { collisionLines, formatProfile, profileFrame } from 'wallhammer-web/tools';
 import type { FrameProfile } from 'wallhammer-web/tools';
-import { Walker, newWalkIntent } from 'wallhammer-web/world';
+import { DEFAULT_WALKER, WALKER_TUNING_KEYS, Walker, newWalkIntent } from 'wallhammer-web/world';
+import type { WalkerTuning } from 'wallhammer-web/world';
+import { FigureParts } from '../../shared/src/figures/parts.ts';
+import { PATHFINDER_TAIL } from '../../shared/src/figures/pathfinder.ts';
+import { MOVE_PROFILES, MOVE_PROFILE_NAMES } from '../../shared/src/figures/profiles.ts';
+import type { MoveProfile } from '../../shared/src/figures/profiles.ts';
+import { PathfinderBody } from './body.ts';
 import { COURSE_SIZE_M, LIMIT_TAG, STATIONS, buildCourse, stationAt } from './course.ts';
 import { driveTo, walkState } from './drive.ts';
 import type { DriveOptions, WalkState } from './drive.ts';
 import { Figure, solidsMesh } from './meshes.ts';
 import { FigureMotion } from './pose.ts';
 import type { MotionSample } from './pose.ts';
-import { FIGURE_MATERIAL, GROUND_MATERIAL, SOLID_MATERIAL, WIRE_MATERIAL } from './shaders.ts';
+import { FIGURE_MATERIAL, GROUND_MATERIAL, PATHFINDER_MATERIAL, SOLID_MATERIAL, WIRE_MATERIAL } from './shaders.ts';
 
 const q = new URLSearchParams(location.hash.slice(1));
 const num = (k: string, d: number): number => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d);
@@ -42,9 +55,19 @@ const BOOM_M = 4.5;
 const BOOM_RADIUS_M = 0.25;
 
 // --- Course, walker, view --------------------------------------------------------------------------------------------
+/** The movement profiles of the page: the shared three, then the walker's own defaults. */
+const ENGINE_PROFILE: MoveProfile = {
+  name: 'engine',
+  walker: Object.fromEntries(WALKER_TUNING_KEYS.map((k) => [k, DEFAULT_WALKER[k]])) as unknown as WalkerTuning,
+  gait: MOVE_PROFILES.default.gait,
+};
+const PROFILES: readonly MoveProfile[] = [...MOVE_PROFILE_NAMES.map((n) => MOVE_PROFILES[n]), ENGINE_PROFILE];
+const profileOf = (name: string | null): MoveProfile => PROFILES.find((p) => p.name === name) ?? MOVE_PROFILES.default;
+let moveProfile = profileOf(q.get('profile'));
+const boxes = q.get('figure') === 'boxes';
 const course = buildCourse(seed);
 const { field, world } = course;
-const walker = new Walker(world);
+const walker = new Walker(world, moveProfile.walker);
 const startX = num('x', course.start[0]);
 const startZ = num('z', course.start[1]);
 const startYaw = q.has('yaw') ? num('yaw', 0) * DEG : course.start[2];
@@ -87,6 +110,10 @@ engine.add(new MeshLayer({ name: 'solids', material: solidMat, mesh: renderer.cr
 const figure = new Figure();
 const motion = new FigureMotion(walker.setup);
 const sample: MotionSample = { time: 0, travelled: 0, speed: 0, vy: 0, grounded: true };
+const body = new PathfinderBody(walker.setup.height, moveProfile, (x, z, y) => world.groundAt(x, z, y + 0.5, walker.setup.maxStepUp));
+/** The walker's time and distance at the body's last update. */
+let bodyTime = 0;
+let bodyTravelled = 0;
 /** The figure's motion from the walker at `a` of the way between its last two steps. */
 function sampleMotion(a: number): void {
   const v = walker.velocity;
@@ -95,11 +122,42 @@ function sampleMotion(a: number): void {
   sample.speed = Math.hypot(v[0]!, v[2]!);
   sample.vy = v[1]!;
   sample.grounded = walker.grounded;
-  motion.update(sample);
+  if (boxes) {
+    motion.update(sample);
+    return;
+  }
+  const dt = sample.time - bodyTime;
+  // A teleport starts the walker's steps over: the body starts standing.
+  if (dt < 0 || dt > 1) body.reset();
+  else body.update(dt, Math.max(0, sample.travelled - bodyTravelled), sample.grounded, sample.vy);
+  bodyTime = sample.time;
+  bodyTravelled = sample.travelled;
+}
+/** Poses the drawn figure at the walker's drawn place `at` and heading `yaw`. */
+function poseFigure(yaw: number): void {
+  if (boxes) figure.pose(at[0]!, at[1]!, at[2]!, yaw, motion);
+  else parts.write(body.pose(at[0]!, at[1]!, at[2]!, yaw));
 }
 const figureLayer = new InstanceSetLayer(renderer, { name: 'figure', material: figureMat });
 figureLayer.add(figure.set);
 engine.add(figureLayer);
+// The pathfinder: a ponytail behind its spiky hair (`PATHFINDER_TAIL`).
+const parts = new FigureParts(renderer, 'pathfinder', renderer.material(PATHFINDER_MATERIAL), body.kind, 0 + PATHFINDER_TAIL);
+engine.add(parts.layer);
+// Only the figure of `figure=` is drawn.
+if (!boxes) (figure.set.visible = false), (figure.set.dirty = true);
+/** Shows the drawn figure (the one of `figure=`) or hides it. */
+function showFigure(on: boolean): void {
+  if (boxes) {
+    if (figure.set.visible !== on) (figure.set.visible = on), (figure.set.dirty = true);
+  } else parts.visible = on;
+}
+/** Another movement profile: the walker is retuned, the figure gets a gait of the profile. */
+function setMoveProfile(p: MoveProfile): void {
+  moveProfile = p;
+  walker.retune(p.walker);
+  body.setProfile(p);
+}
 
 // The wireframe of the collision world (C): standable solids, solids that only block, invisible limits.
 const wire = (name: string, color: [number, number, number], select: Parameters<typeof collisionLines>[1]): { layer: MeshLayer; mesh: ReturnType<typeof renderer.createMesh> } => {
@@ -195,13 +253,9 @@ engine.onExtract(() => {
   rig.follow(at[0]!, at[1]!, at[2]!);
   rig.update(engine.frameSeconds);
   sampleMotion(a);
-  figure.pose(at[0]!, at[1]!, at[2]!, walker.renderYaw(a), motion);
+  poseFigure(walker.renderYaw(a));
   // In first person the body would fill the near plane.
-  const firstPerson = rig.boom < 0.35;
-  if (figure.set.visible === firstPerson) {
-    figure.set.visible = !firstPerson;
-    figure.set.dirty = true;
-  }
+  showFigure(rig.boom >= 0.35);
   rig.eye(eye);
   moving =
     Math.abs(at[0]! - lastAt[0]!) + Math.abs(at[1]! - lastAt[1]!) + Math.abs(at[2]! - lastAt[2]!) > 1e-5 ||
@@ -226,10 +280,10 @@ function hud(): string {
   const fps = ft.frames > 10 && ft.meanMs > 0 ? `${ft.meanMs.toFixed(1)} ms/frame (${(1000 / ft.meanMs).toFixed(0)} fps, worst ${ft.worstMs.toFixed(1)} ms, cpu ${ft.cpuMs.toFixed(1)} ms)` : 'measuring the frame time…';
   const mode = rig.distance <= 0 ? 'first person' : `behind the figure ${rig.boom.toFixed(1)} m`;
   return [
-    `Walking test course  seed ${seed}`,
+    `Walking test course  seed ${seed}  ·  profile ${moveProfile.name} (P)`,
     `Pad: ${st ? st.label : 'between pads'}`,
     `x ${s.x.toFixed(2)}  y ${s.y.toFixed(2)}  z ${s.z.toFixed(2)}  speed ${s.speed.toFixed(2)} m/s  ${s.grounded ? (s.steep ? 'on a steep slope, sliding' : 'on the ground') : 'in the air'}  view ${mode}${wireOn ? '  collision solids' : ''}`,
-    `WASD/arrows walk · Shift run · space jump · drag turn · wheel camera · F first person · C solids · R start`,
+    `WASD/arrows walk · Shift run · space jump · drag turn · wheel camera · F first person · C solids · R start · P profile`,
     `${fps} · ${(rs.triangles / 1e3).toFixed(0)} k triangles · ${rs.drawCalls} draws · ${rig.width}×${rig.height} px (dpr ${rig.dpr.toFixed(2)}) · ${world.solidCount} solids`,
   ].join('\n');
 }
@@ -245,6 +299,7 @@ const KEYS: Record<string, () => void> = {
   f: toggleFirstPerson,
   c: () => showWire(!wireOn),
   r: () => place(course.start[0], course.start[1], course.start[2]),
+  p: () => setMoveProfile(PROFILES[(PROFILES.indexOf(moveProfile) + 1) % PROFILES.length]!),
 };
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
@@ -287,7 +342,8 @@ function hash(): string {
   const r = (x: number, d = 2): string => String(Math.round(x * 10 ** d) / 10 ** d);
   const p = walker.position;
   const extra = ['lock', 'pr'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
-  return `seed=${seed}&x=${r(p[0]!)}&z=${r(p[2]!)}&yaw=${r(walker.yaw / DEG, 1)}&fp=${rig.distance <= 0 ? 1 : 0}&c=${wireOn ? 1 : 0}${extra}`;
+  const looks = `${moveProfile.name !== 'default' ? `&profile=${moveProfile.name}` : ''}${boxes ? '&figure=boxes' : ''}`;
+  return `seed=${seed}&x=${r(p[0]!)}&z=${r(p[2]!)}&yaw=${r(walker.yaw / DEG, 1)}&fp=${rig.distance <= 0 ? 1 : 0}&c=${wireOn ? 1 : 0}${looks}${extra}`;
 }
 
 /**
@@ -342,6 +398,9 @@ function hold(o: HoldInput, seconds: number): WalkState {
     held.jump = i === 0 && (o.jump ?? false);
     walker.step(held);
     sampleMotion(1);
+    // The figure is posed after every step, so its lagging ponytail sees every step too.
+    walker.renderPosition(at, 1);
+    poseFigure(walker.renderYaw(1));
   }
   walker.renderPosition(at, 1);
   rig.follow(at[0]!, at[1]!, at[2]!);
@@ -373,9 +432,9 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
   /** Position, velocity, `grounded`, `steep`, heading and the station under the feet. */
   state: (): WalkState => walkState(walker),
   /**
-   * Holds a direction toward (x, z) for `seconds` of fixed walker steps (synchronously, the same path as
-   * `pnpm check:walk`), then draws; returns the state at the end. Options: `run`, `jump` (jump by itself at edges and
-   * ledges), `within`.
+   * Holds a direction toward (x, z) for `seconds` of fixed walker steps (synchronously; with `profile=engine` the same
+   * path as `pnpm check:walk`), then draws; returns the state at the end. Options: `run`, `jump` (jump by itself at
+   * edges and ledges), `within`.
    */
   walkTo: (x: number, z: number, seconds: number, o: DriveOptions = {}): WalkState => {
     const end = driveTo(walker, world, x, z, seconds, o);
@@ -414,6 +473,20 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
   stats: () => ({ ...renderer.lastStats, renderer: engine.device.name, seed, solids: world.solidCount, frameTimes: frameTimes(), walker: walkState(walker), boom: rig.boom }),
   profile,
   profileText: (frames = 20): string => formatProfile(profile(frames)),
+  /** The movement profile ('default', 'heavy', 'light', 'engine'); with a name, switches to it first. Returns the name. */
+  moveProfile: (name?: string): string => {
+    if (name !== undefined) setMoveProfile(profileOf(name));
+    engine.invalidate();
+    return moveProfile.name;
+  },
+  /**
+   * The pathfinder's gait: the graph's state, smoothed speed and acceleration, the lean layers' weights, the stride
+   * and the ponytail's largest angle from its posed shape (degrees). Null with `figure=boxes`.
+   */
+  figure: () =>
+    boxes
+      ? null
+      : { state: body.gait.state, speedMs: body.gait.speed, accelMs2: body.gait.accel, push: body.gait.graph.getParam('push'), brace: body.gait.graph.getParam('brace'), stride: body.gait.stride, tailDeg: (body.tailAngle * 180) / Math.PI, profile: moveProfile.name },
 };
 
 // Marks (key N): notes pinned to points of the course, picked against the collision world. A mark's view puts the

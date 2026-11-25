@@ -1,12 +1,16 @@
 // Marks for the engine's own cameras: a ready `MarkHost` (`installMarking` of platform) for an engine that draws
-// through a `FreeRig` or a `FollowRig`, so a page needs one call (`installEngineMarking`) and a pick.
+// through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`, so a page needs one call (`installEngineMarking`)
+// and a pick.
 //
-// The host reads the engine's current view on every call: marking is possible while it is one of the two rigs (an
+// The host reads the engine's current view on every call: marking is possible while it is one of the three rigs (an
 // engine that switches views with `setView` gets the marks wherever it draws through one). A mark's view records the
 // rig's state as text (`rigViewText`) in shortest round-trip numbers, so `restoreRigView` puts the rig back bit for
 // bit, and the animation clocks (the hour and the animation time). Its URL hash is the page's own hash (which rebuilds
 // the scene) with that text added as `mkview=` and the clocks as `mkclock=`; `installEngineMarking` reads them from the
 // address when the page opens, so a tool that opens `page#hash` sees the very view.
+//
+// An orbit view is the rig's own fields (the target, yaw and pitch in radians, the distance), set back as they were
+// without the clamps of `setState`.
 //
 // A following view is the rig's own state (the followed point, the pivot, yaw, pitch, the wanted and the drawn boom).
 // The followed point belongs to the caller, who moves it every frame: without `placeTarget` a restored view holds only
@@ -22,6 +26,7 @@ import type { Vec3 } from '../base/math.ts';
 import type { Ray, View } from '../base/view.ts';
 import { FollowRig } from '../camera/follow.ts';
 import { FreeRig } from '../camera/free.ts';
+import { PerspectiveOrbitRig } from '../camera/orbit.ts';
 import type { Clock } from '../core/clock.ts';
 import type { Canvas } from '../platform/canvas.ts';
 import type { MarkHost } from '../platform/marks/host.ts';
@@ -33,7 +38,7 @@ import type { CollisionWorld } from '../world/collide.ts';
 import { marchRay } from '../world/march.ts';
 
 /** A camera the marks can read and put back. */
-export type MarkRig = FreeRig | FollowRig;
+export type MarkRig = FreeRig | FollowRig | PerspectiveOrbitRig;
 
 /**
  * The point a ray in world metres meets, or null. `pixelGrowth` is the view's metres per pixel gained per metre of
@@ -70,7 +75,7 @@ export interface EngineMarkingOptions {
    * before the view is restored. Without it a restored following view holds until the caller's next `follow`.
    */
   placeTarget?(target: Vec3): void;
-  /** Whether marking is possible now, besides the engine drawing through a `FreeRig` or a `FollowRig`. */
+  /** Whether marking is possible now, besides the engine drawing through one of the rigs of `MarkRig`. */
   allowed?(): boolean;
   /** What is known of the picked place (or, for a miss, of the view); default the camera and the eye. */
   facts?(hit: PickHit | null, ray: Ray): Record<string, unknown>;
@@ -87,14 +92,16 @@ const num = (v: number): string => String(v);
 
 /** The rig among the engine's view, or null when it draws through another kind of view. */
 function rigOf(view: View): MarkRig | null {
-  return view instanceof FreeRig || view instanceof FollowRig ? view : null;
+  return view instanceof FreeRig || view instanceof FollowRig || view instanceof PerspectiveOrbitRig ? view : null;
 }
 
 /**
- * The exact view of a rig as text: `free,x,y,z,yawDeg,pitchDeg,roll` or
- * `follow,tx,ty,tz,px,py,pz,yawDeg,pitchDeg,distance,boom`, numbers in their shortest round-trip form.
+ * The exact view of a rig as text: `free,x,y,z,yawDeg,pitchDeg,roll`,
+ * `follow,tx,ty,tz,px,py,pz,yawDeg,pitchDeg,distance,boom` or `orbit,tx,ty,tz,yaw,pitch,distance` (yaw and pitch of the
+ * orbit in radians, its own fields), numbers in their shortest round-trip form.
  */
 export function rigViewText(rig: MarkRig): string {
+  if (rig instanceof PerspectiveOrbitRig) return ['orbit', ...rig.target, rig.yaw, rig.pitch, rig.distance].map(String).join(',');
   if (rig instanceof FreeRig) {
     const s = rig.state();
     return ['free', ...s.position, s.yawDeg, s.pitchDeg, rig.roll].map(String).join(',');
@@ -111,6 +118,14 @@ export function restoreRigView(rig: MarkRig, text: string, placeTarget?: (target
   const parts = text.split(',');
   const n = parts.slice(1).map(Number);
   if (!n.every(Number.isFinite)) return false;
+  if (rig instanceof PerspectiveOrbitRig) {
+    if (parts[0] !== 'orbit' || n.length !== 6) return false;
+    rig.target = [n[0]!, n[1]!, n[2]!];
+    rig.yaw = n[3]!;
+    rig.pitch = n[4]!;
+    rig.distance = n[5]!;
+    return true;
+  }
   if (rig instanceof FreeRig) {
     if (parts[0] !== 'free' || n.length !== 6) return false;
     rig.setState({ position: [n[0]!, n[1]!, n[2]!], yawDeg: n[3]!, pitchDeg: n[4]! });
@@ -142,18 +157,23 @@ function eyeOf(rig: MarkRig): Vec3 {
     const p = rig.position;
     return [p[0], p[1], p[2]];
   }
-  // A following view has no render origin: its space is the world's.
+  // A following or an orbit view has no render origin: its space is the world's.
   return rig.eye();
 }
 
-/** A `MarkHost` for an engine that draws through a `FreeRig` or a `FollowRig`. */
+/** The name of a rig in a mark's view and facts. */
+function cameraOf(rig: MarkRig | null): string {
+  return rig instanceof FreeRig ? 'free' : rig instanceof FollowRig ? 'follow' : rig instanceof PerspectiveOrbitRig ? 'orbit' : 'other';
+}
+
+/** A `MarkHost` for an engine that draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`. */
 export function engineMarkHost(engine: MarkEngine, options: EngineMarkingOptions): MarkHost {
   const clocks = options.clocks ?? true;
   const pageHash = options.hash ?? (() => pageMarking().hash());
   const rig = (): MarkRig | null => rigOf(engine.view);
   const need = (): MarkRig => {
     const r = rig();
-    if (!r) throw new Error('marks: the engine does not draw through a FreeRig or a FollowRig');
+    if (!r) throw new Error('marks: the engine does not draw through a FreeRig, a FollowRig or a PerspectiveOrbitRig');
     return r;
   };
 
@@ -166,7 +186,7 @@ export function engineMarkHost(engine: MarkEngine, options: EngineMarkingOptions
     const axes = r.axes();
     return {
       hash: [base, ...params].filter((p) => p !== '').join('&'),
-      camera: r instanceof FreeRig ? 'free' : 'follow',
+      camera: cameraOf(r),
       rig: text,
       eye: eyeOf(r).map(r2),
       forward: axes.forward.map((v) => Math.round(v * 1e5) / 1e5),
@@ -187,9 +207,8 @@ export function engineMarkHost(engine: MarkEngine, options: EngineMarkingOptions
 
   const facts = (hit: PickHit | null, ray: Ray): Record<string, unknown> => {
     if (options.facts) return options.facts(hit, ray);
-    const r = rig();
     return {
-      camera: r instanceof FreeRig ? 'free' : r instanceof FollowRig ? 'follow' : 'other',
+      camera: cameraOf(rig()),
       eyeM: ray.origin.map(r2),
       ...(hit ? {} : { hit: 'none: the ray met nothing the pick knows' }),
     };
@@ -210,7 +229,7 @@ export function engineMarkHost(engine: MarkEngine, options: EngineMarkingOptions
       const f = r.axes().forward;
       if ((w[0] - e[0]) * f[0] + (w[1] - e[1]) * f[1] + (w[2] - e[2]) * f[2] <= 0) return null;
       if (options.hidden?.(w, e)) return null;
-      if (r instanceof FollowRig) return r.project(w);
+      if (!(r instanceof FreeRig)) return r.project(w);
       const o = r.origin;
       return r.project([w[0] - o[0], w[1] - o[1], w[2] - o[2]]);
     },
@@ -225,10 +244,10 @@ export function engineMarkHost(engine: MarkEngine, options: EngineMarkingOptions
 }
 
 /**
- * The marks for an engine that draws through a `FreeRig` or a `FollowRig`: the mark mode on a key (default N), the
- * pins and the panel, saved through the dev server's store (`marksStore` of `wallhammer-web/marks-store`). Returns
- * null in a page driven by a script whose hash does not say `marks=1`. A view in the address (`mkview=`, `mkclock=`:
- * a mark's view opened by a tool) is restored at once.
+ * The marks for an engine that draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`: the mark mode on
+ * a key (default N), the pins and the panel, saved through the dev server's store (`marksStore` of
+ * `wallhammer-web/marks-store`). Returns null in a page driven by a script whose hash does not say `marks=1`. A view in
+ * the address (`mkview=`, `mkclock=`: a mark's view opened by a tool) is restored at once.
  */
 export function installEngineMarking(engine: MarkEngine, options: EngineMarkingOptions): MarkingApi | null {
   const page = pageMarking();

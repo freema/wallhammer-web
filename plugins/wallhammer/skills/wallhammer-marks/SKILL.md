@@ -23,10 +23,14 @@ the place. Each mark has a status and an append-only log. The full description i
    }
    ```
 
-   This host works for an engine whose view is a `FreeRig` or a `FollowRig`. Another camera needs a host of its own
-   (`installMarking` of `wallhammer-web/platform`, described in `marks.md`). State the page keeps outside the camera
-   and the clocks (a seed, a toggled layer) goes in the `hash` option so a mark's link restores it.
-3. Key N in the page switches the mark mode. A page driven by a script (webdriver) has marks only with `#marks=1`.
+   This host works while the engine draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig` (an orbit
+   view comes back with its own target, yaw, pitch and distance; its drag and wheel wait while the mark mode is on).
+   Another view (`ChartFollowView`, `SteppedOrthoRig`, a camera of the project's) needs a host of its own
+   (`installMarking` of `wallhammer-web/platform`, or `engineMarkHost` of `runtime` with parts replaced, described in
+   `marks.md`). State the page keeps outside the camera and the clocks (a seed, a toggled layer) goes in the `hash`
+   option so a mark's link restores it; a page with a clock of its own passes `clocks: false` and its time in `hash`.
+3. Key N in the page switches the mark mode (option `key` when the page uses N). A page driven by a script
+   (webdriver) has marks only with `#marks=1`.
 
 ## The developer's part
 
@@ -83,6 +87,7 @@ referred to; any other PNG is copied there. Ways to make one:
 - The pick is a ray marched on the CPU against the page's height function or collision world. Trees, rocks, figures,
   water and clouds are not in it: a mark on one stores the ground behind; the note and the picture say what was meant.
 - The picture is the canvas alone, without the page's HTML.
-- The view restores the camera, the hour and the animation time; state the page does not put in its hash may differ.
+- The view restores the camera, the hour and the animation time (unless `clocks: false`); state the page does not put
+  in its hash may differ.
 - Never edit `.marks/marks.jsonl` by hand while the dev server runs; go through the command or the page.
 - Do not test the tools on the developer's real marks: point `WH_MARKS_DIR` at a scratch folder.

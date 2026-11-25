@@ -1,4 +1,5 @@
-// The planet's side of the marks (`installMarking` of wallhammer-web/platform): key N in the free camera, for the dev server only.
+// The planet's side of the marks (`installMarking` of wallhammer-web/platform): key N in the free camera and while walking
+// (the following view of walk.ts), for the dev server only.
 // main.ts loads this file only when `import.meta.env.DEV` holds, so the static build of the live demos has none of it;
 // a page driven by a script (navigator.webdriver: the shot tools, the benchmarks) has none of it unless `#marks=1`.
 // `#marks=0` hides the pins. `window.__wh.marks` is the script interface (`MarkingApi`).
@@ -9,7 +10,7 @@
 // meshes, and the drawn mesh of a coarser level may stand off the height function by its screen error.
 
 import type { MarkView, PickHit, Ray, Vec3 } from 'wallhammer-web/base';
-import type { FreeRig } from 'wallhammer-web/camera';
+import type { ChartFollowView, FreeRig } from 'wallhammer-web/camera';
 import { installMarking } from 'wallhammer-web/platform';
 import type { MarkHost, MarkingApi } from 'wallhammer-web/platform';
 import { marchRay } from 'wallhammer-web/world';
@@ -19,6 +20,8 @@ import { RADIUS_M, SHAPE, latLonOf } from './world.ts';
 export interface PlanetMarkPage {
   canvas: HTMLCanvasElement;
   rig: FreeRig;
+  /** The following view while the page walks (walk.ts), null in the free camera: the marks then use its eye and rays. */
+  walkView(): ChartFollowView | null;
   seed: number;
   params: URLSearchParams;
   /** The store's URL path. */
@@ -107,9 +110,18 @@ export function planetMarkHost(page: PlanetMarkPage): MarkHost {
     };
   };
 
+  /** The eye in world metres and the view the picture is drawn through: the walk's following view or the free camera. */
+  const eyeOf = (): Vec3 => {
+    const w = page.walkView();
+    if (w) return w.worldEye();
+    const p = rig.position;
+    return [p[0], p[1], p[2]];
+  };
+
   const view = (): MarkView => {
-    const s = rig.state();
-    const [lat, lon] = latLonOf(SHAPE.directionOf(rig.position));
+    const w = page.walkView();
+    const s = w ? { yawDeg: (w.heading * 180) / Math.PI, pitchDeg: w.rig.pitchDeg } : rig.state();
+    const [lat, lon] = latLonOf(SHAPE.directionOf(eyeOf()));
     return { hash: page.exactHash(), lat: Number(lat.toFixed(6)), lon: Number(lon.toFixed(6)), yawDeg: Number(s.yawDeg.toFixed(3)), pitchDeg: Number(s.pitchDeg.toFixed(3)), fovYDeg: rig.setup.fovYDeg, hour: Number(page.hour().toFixed(4)), timeS: r2(page.timeS()) };
   };
 
@@ -142,20 +154,21 @@ export function planetMarkHost(page: PlanetMarkPage): MarkHost {
     allowed: page.free,
     size: () => [rig.width, rig.height],
     ray: (px, py) => {
-      const p = rig.position;
-      return { origin: [p[0], p[1], p[2]], dir: norm(rig.screenRay(px, py).dir) };
+      const wv = page.walkView();
+      return { origin: eyeOf(), dir: norm((wv ?? rig).screenRay(px, py).dir) };
     },
     toScreen: (w) => {
-      const p = rig.position;
+      const wv = page.walkView();
+      const p = eyeOf();
       const v = sub(w, p);
-      if (dot(v, rig.axes().forward) <= 0) return null;
+      if (dot(v, (wv ?? rig).axes().forward) <= 0) return null;
       // Behind the planet: the line from the eye to the point dips under the sea's level on the way (a hill on the
       // way is not looked at; a pin behind it stays drawn).
       const e = sub(p, SHAPE.centerM);
       const s = Math.min(1, Math.max(0, -dot(e, v) / dot(v, v)));
       if (s > 0 && s < 1 && Math.hypot(e[0] + v[0] * s, e[1] + v[1] * s, e[2] + v[2] * s) < RADIUS_M - 50) return null;
-      const o = rig.origin;
-      return rig.project([w[0] - o[0], w[1] - o[1], w[2] - o[2]]);
+      const o = (wv ?? rig).origin;
+      return (wv ?? rig).project([w[0] - o[0], w[1] - o[1], w[2] - o[2]]);
     },
     pick,
     view,

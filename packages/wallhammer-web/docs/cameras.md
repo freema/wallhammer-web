@@ -305,9 +305,75 @@ Members: `yawDeg`, `pitchDeg`, `distance` (wanted), `boom` (drawn, read only), `
 
 Weak spots:
 
-- Flat world only: up is +y. On a curved world the pivot height, the horizon of `axes` and `forward` would be laid along the local up taken from an up source at the pivot, as `FreeRig` does; the places are marked in `camera/follow.ts`. Not built yet.
-- No render origin: positions go to the renderer as they are, so keep the walking area within a few kilometres of the world origin.
+- Flat world only: up is +y. On a sphere wrap it in a `ChartFollowView` (below), which runs it in a walker's local chart and shows it in world space.
+- No render origin: positions go to the renderer as they are, so keep the walking area within a few kilometres of the world origin (`ChartFollowView` has one).
 - In first person the followed body is inside the near plane; hide it yourself. `followLag` still applies to the pivot; set it to 0 for a stiff head.
+
+### On a sphere: `ChartFollowView`
+
+`new ChartFollowView(rig, chart)` shows a `FollowRig` that runs in the flat coordinates of a `SurfaceChart` (the chart
+of a `ChartWalker`, see Walking) in world space. The rig keeps everything it does: the pivot's lag, the boom cut by a
+clearance from the chart's collision world and grown back, the input of `bindWalkInput`. The view places it as one rigid
+body at the pivot: the pivot through the chart, the boom and the axes turned by the chart's frame there, so the view's
+up is the sphere's up at the pivot and the pivot stays in the middle of the image. It implements `View` with a render
+origin like `FreeRig`'s: `origin` is the world point the renderer's space starts at, and the eye is found in double
+precision and only its difference to `origin` becomes a float, so it holds a millimetre at 1e5 m from the world's origin.
+
+`setChart(chart)` moves the rig into a new chart without moving the picture: the followed point and the pivot are
+carried through world space, the heading is turned by the difference of the two charts' frames, the pitch and the boom
+stay. It does nothing when the chart is the current one, so call it every frame with the walker's chart, right after
+the walker has stepped and before `rig.follow`. Members: `rig`, `chart`, `origin`, `setChart`, `worldEye(out?)` (world
+metres), `eye(out?)` (renderer's space), `heading` (the view's heading in the local horizon at the pivot, measured as
+`FreeRig.yaw`), `screenRay`, `project`, and the `View` contract.
+
+<!-- check: wrap -->
+```ts
+import { ChartFollowView, FollowRig } from 'wallhammer-web/camera';
+import { bindWalkInput } from 'wallhammer-web/platform';
+import type { Engine } from 'wallhammer-web/runtime';
+import { ChartWalker, newWalkIntent } from 'wallhammer-web/world';
+declare const engine: Engine<ChartFollowView>;
+declare const renderOrigin: () => readonly [number, number, number]; // whatever owns the render origin
+
+const walker = new ChartWalker({ radiusM: 100_000, radiusAt: () => 100_000 });
+const rig = new FollowRig(
+  { minDistance: 0, maxDistance: 40, far: 1e7 },
+  // The clearance asks the walker's current collision world (a new one after every rechart).
+  { clearance: (ox, oy, oz, dx, dy, dz, max) => walker.world.clearance(ox, oy, oz, dx, dy, dz, max, 0.25) },
+);
+const view = new ChartFollowView(rig, walker.chart);
+engine.setView(view);
+const input = bindWalkInput(engine.canvas, rig, { onChange: () => engine.invalidate() });
+const state = { forward: 0, right: 0, run: false, jump: false };
+const intent = newWalkIntent();
+const fw = [0, 0, 0];
+const at = [0, 0, 0];
+
+engine.renderer.beforeFrame.push(() => {
+  input.read(state, engine.frameSeconds);
+  rig.forward(fw); // in the chart, like the walker's intent
+  intent.moveX = fw[0]! * state.forward - fw[2]! * state.right;
+  intent.moveZ = fw[2]! * state.forward + fw[0]! * state.right;
+  intent.run = state.run;
+  intent.jump = state.jump;
+  walker.advance(engine.frameSeconds, intent);
+  view.setChart(walker.chart); // after a rechart: the same picture in the new chart
+  walker.renderChartPosition(at);
+  rig.follow(at[0]!, at[1]!, at[2]!);
+  rig.update(engine.frameSeconds);
+  const o = renderOrigin();
+  view.origin = [o[0], o[1], o[2]];
+});
+```
+
+The body's own drawing goes with it: `walker.renderFrame(m, undefined, view.origin)` is its matrix relative to the
+render origin. The planet example (`examples/planet`, key `G` or `#walk=1`) walks on the ground its cells draw this way.
+
+Limits: the boom is laid straight in the frame at the pivot while the chart bends the ground under it by about
+boom² / (2 radius) (2.5 cm for 10 m on a sphere of 2 km), which the clearance's sphere radius covers. A rechart turns the
+boom by about the area between two paths over radius², well under a microradian (`pnpm check:follow`, cases
+`sphere:`). The clearance sees only the chart's collision world (the ground and the solids added to it), not the
+picture.
 
 ### Walk controls
 

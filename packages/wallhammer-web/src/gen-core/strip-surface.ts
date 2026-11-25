@@ -11,7 +11,8 @@
 import { CUBE_FACE_AXES, cubeDirection, cubeFaceCoords, cubeFaceOf, cubeGrid, cubeWarp } from './cube-sphere.ts';
 import { cellId, FACE_FLAT } from './cell.ts';
 import type { CellId, FlatWorld } from './cell.ts';
-import { spherePatchRadius } from './sphere-patch.ts';
+import { spherePatchRadius, spherePatchSplitsAD } from './sphere-patch.ts';
+import type { SpherePatchSplit } from './sphere-patch.ts';
 
 type P3 = readonly [number, number, number];
 
@@ -131,10 +132,19 @@ export function flatStripSurface(o: { shape: FlatWorld; quads: number; heightAt:
   };
 }
 
-/** The sphere of six quadtrees whose cells are drawn by `spherePatchMesh` with `quads` intervals along their edge. */
-export function sphereStripSurface(o: { radiusM: number; quads: number; heightAt: (x: number, y: number, z: number) => number }): StripSurface {
+/**
+ * The sphere of six quadtrees whose cells are drawn by `spherePatchMesh` with `quads` intervals along their edge. Pass
+ * the `split` the cells are made with (default `'fixed'`), so the diagonals the ways are cut at are the drawn ones.
+ */
+export function sphereStripSurface(o: { radiusM: number; quads: number; heightAt: (x: number, y: number, z: number) => number; split?: SpherePatchSplit }): StripSurface {
   const R = o.radiusM;
   const q = o.quads;
+  const split: SpherePatchSplit = o.split ?? 'fixed';
+  /** Distance from the centre of grid vertex (i, j) of a face, the bits `spherePatchMesh` decides its split by. */
+  const vertexR = (face: number, i: number, j: number, N: number): number => {
+    const d = cubeDirection(face, cubeGrid(i, N), cubeGrid(j, N));
+    return R + o.heightAt(d[0] * R, d[1] * R, d[2] * R);
+  };
   if (!(R > 0)) throw new Error(`sphereStripSurface: radiusM must be positive, got ${R}`);
   const unit = (p: P3): [number, number, number] => {
     const l = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
@@ -223,8 +233,10 @@ export function sphereStripSurface(o: { radiusM: number; quads: number; heightAt
         if (s !== s || t !== t) continue;
         const i = Math.min(gx0 + q - 1, Math.max(gx0, Math.floor(((s + 1) / 2) * N)));
         const j = Math.min(gy0 + q - 1, Math.max(gy0, Math.floor(((t + 1) / 2) * N)));
-        const p = vertexDir(cell.face, i + 1, j, N);
-        const r = vertexDir(cell.face, i, j + 1, N);
+        // The diagonal the quad is cut along: b–c, or a–d where the split rule says so.
+        const ad = split !== 'fixed' && spherePatchSplitsAD(split, vertexR(cell.face, i, j, N), vertexR(cell.face, i + 1, j, N), vertexR(cell.face, i, j + 1, N), vertexR(cell.face, i + 1, j + 1, N));
+        const p = ad ? vertexDir(cell.face, i, j, N) : vertexDir(cell.face, i + 1, j, N);
+        const r = ad ? vertexDir(cell.face, i + 1, j + 1, N) : vertexDir(cell.face, i, j + 1, N);
         const n = [p[1] * r[2] - p[2] * r[1], p[2] * r[0] - p[0] * r[2], p[0] * r[1] - p[1] * r[0]];
         const td = meet(n);
         if (td > t0 && td < t1) shares.push(td);
@@ -234,7 +246,7 @@ export function sphereStripSurface(o: { radiusM: number; quads: number; heightAt
     heightOn: (level, p) => {
       const d = unit(p);
       const c = cellOfDir(level, d);
-      return spherePatchRadius({ radiusM: R, face: c.face, level, x: c.x, y: c.y, quads: q, heightAt: o.heightAt }, d, 1) - R;
+      return spherePatchRadius({ radiusM: R, face: c.face, level, x: c.x, y: c.y, quads: q, heightAt: o.heightAt, split }, d, 1) - R;
     },
   };
 }

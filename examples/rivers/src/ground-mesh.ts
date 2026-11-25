@@ -194,9 +194,10 @@ export function putPaths(view: DataView, v: number, paths: PathPlan, kinds: Path
 
 /**
  * The ground of the square, in chunks of `CHUNK_CELLS` cells. With a cover the grass is lusher near water and darker
- * under the woods; with paths every vertex near one carries the way to its centreline.
+ * under the woods; with paths every vertex near one carries the way to its centreline. With `bankFrom` (per point,
+ * a height at least the ground's) the bank of the water near a point is drawn from that height instead.
  */
-export function groundPieces(f: Field, cover?: Cover, paths?: PathPlan, kinds?: PathKinds): GroundPiece[] {
+export function groundPieces(f: Field, cover?: Cover, paths?: PathPlan, kinds?: PathKinds, bankFrom?: Float32Array): GroundPiece[] {
   const { n, step, x0, z0, ground, water } = f;
   const h = (i: number, j: number): number => ground[Math.min(n - 1, Math.max(0, j)) * n + Math.min(n - 1, Math.max(0, i))]!;
   const pieces: GroundPiece[] = [];
@@ -260,7 +261,10 @@ export function groundPieces(f: Field, cover?: Cover, paths?: PathPlan, kinds?: 
           }
           // Dry ground that lies under a level carried to it is no bank: it lies behind the bank, down a slope.
           const k = j * n + i;
-          const bank = carried[k] && y < shore[k]! ? OVER_MAX_M : y - shore[k]!;
+          // Ground a brook cut down (carveBrooks of brooks.ts) is its channel, with its own bed over it: its bank is
+          // that of the ground as it was.
+          const yb = bankFrom ? Math.max(y, bankFrom[k]!) : y;
+          const bank = carried[k] && yb < shore[k]! ? OVER_MAX_M : yb - shore[k]!;
           const away = sat((wetNear[k]! - BANK_NEAR_M) / (BANK_FAR_M - BANK_NEAR_M));
           const over = bank + (OVER_MAX_M - bank) * away;
           putVertex(view, b * ni + a, x0 + i * step, y, z0 + j * step, nx, ny, nz, 0, c[0], c[1], c[2], over);

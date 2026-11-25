@@ -101,6 +101,86 @@ What it does not do yet:
 - From far above a path is not seen: the edge of its tread is as soft as a pixel is wide, so with distance it thins
   into a faint line and then disappears, by design rather than flickering.
 
+## Brooks
+
+The lines are drawn into the ground's 2.5 m mesh and start from a basin of 220 nodes of the plan's 20 m grid; the small
+watercourses above them are brooks and streams (`src/brooks.ts`), 0.8 to about 2.3 m of water, narrower than the mesh
+can carve. The engine finds and sorts them: `traceChannels` traces the plan's drainage from the brooks' threshold
+(default 40 nodes, 1.6 ha), `channelOrder` gives each channel its Strahler order, `channelFlow` the flow it hands on,
+and `classifyByThresholds` its class from that flow: a brook, from 110 nodes a stream (deeper, its water further under
+its banks), and from 220 the lines' own. A brook runs from its spring down its channel into another brook,
+or to the water of a line, a lake or the sea, which it ends a little inside.
+
+- Its course is the chain of nodes smoothed and slid into the lowest ground within 6 m. On level ground it meanders: a
+  chain of bends, each with its own length (8 to 15 widths of the water, the whole bend) and depth (1 to 2.5 widths)
+  from the brook's own hashes, mostly to alternate sides, never tighter than 2.2 widths; the meander fades out as the
+  ground steepens and toward both ends. Its shore is the first point where the ground lies under the water's level;
+  it goes on 6 m past it, under that water.
+- Where brooks meet there is no junction of strips. At each meeting of the channels the larger brook in and the one
+  out are one brook, the stem, one strip through it; every other brook in is a tributary, a strip of its own that
+  runs to the stem's middle and ends there. Its last stretch curves to meet the stem at about 45°, pointing
+  downstream (`ENTRY_ANGLE`); it leaves its own course before it comes within three of the larger width of the two of
+  the stem, so the two never run side by side. Its entry lies a little down the stem, at least four of the stem's
+  widths (8 m) from another tributary's and clear of the stem's end and of the last metres before its mouth. Below
+  the entry the stem's basin, and so its width, grows by the tributary's over 10 m (`ENTRY_GROW_M`), and the stem is
+  never more than 1.3 times as wide there as above it (`JOIN_WIDEN`). So three brooks in and one out are a stem and
+  two tributaries entering a few widths apart. A tributary that cannot be led in so ends where it came near (or is
+  left out when too short); no brook is led into one that drains into it. Brooks that run together for more than
+  6 m above their meeting meet further up instead, and several brooks that would end in one hollow (at the head of a
+  line) end as one, at one mouth.
+- The top of its banks is the lowest ground across it and never rises downstream. Over the 6 m before its shore its
+  water comes down to the level of the water it runs into, and past the shore sinks 6 cm under it; the banks come down
+  with it. A tributary's banks come down to the stem's at the stem's edge at no more than 6 %, and its bed to the
+  stem's, so the cut ground has no step there; where its own banks lie lower than the stem's there, the stem's come
+  down to them instead (gently above, level below). Past the stem's edge its water sinks a few centimetres under the
+  stem's.
+- It is drawn as two strips of the engine (`stripNet`, `stripMesh` in `src/brook-mesh.ts`): the bed, a cut bank and a
+  dished bed (0.4 m deep for a brook, 0.55 m for a stream), and the water 0.15 or 0.2 m under the top of the bank, 0.7
+  of the bed's width. The strips have no nodes; every line ends square. The width narrows to 45 % at a spring and wanders up to ±35 %
+  along, wider on level stretches (pools) and narrower on steeper ones (riffles); the water's share of the bed wanders
+  on its own (±12 %), so its edges and the bank's are never parallel. Its half-width is never more than 0.8 of the
+  radius of its bend, so a strip never folds over itself on the inside of a tight bend. Near a mouth the water spreads
+  over the whole bed. Past its shore the brook fades out under the water it runs into, and a tributary fades out
+  wherever it lies over its stem's water, at its edges too (`a_coarseShift` of the strip's layout carries the fade),
+  so no end of a brook is seen from any side and no two waters lie over each other.
+- The ground is cut under the bed (`stripCarve`), and every corner of a mesh cell the bed touches is cut under the
+  water, so the coarse mesh never rises through it; never across a path's tread, where the brook runs over the path,
+  and never under the water that may stand there (a line's, a lake's or the sea's): it would flood, and that water
+  would spread up the brook's channel as a sheet. Beside the last metres before a shore no shoulder is cut, only the
+  cells the strip touches, so the bank of the water is notched, not flattened to a shelf; the bank of that water is
+  drawn from the ground as it was before the brook cut it (`carveBrooks` hands it to `groundPieces`).
+- The materials (`src/brook-material.ts`): silt and gravel on the bed; on each bank damp grass reaching down to a
+  ragged line of its own, earth only in patches, a pale gravel bar on the inside of a bend and a darker cut on its
+  outside (the mesh writes each vertex's bend into the strip's attributes); toward a mouth the earth and the bar give
+  way to grass. The water has the colour of the lines' shallows and is clear, the bed showing through it, a little
+  darker in a pool; fine soft ripples drawn out along the flow and carried down it, and short white streaks only on a
+  riffle. Over the last 7 m before a mouth it takes the look of the water it runs into: calm, deeper, all the sky's
+  mirror. The strips lie on the ground's triangles, so the water is drawn level but for its ripples and the bed under
+  it lit as level, and the grade that makes a riffle is the water's along the brook, smooth between its points (the
+  mesh writes it into the strip's attributes): no facets show. A far brook stays at least about a pixel wide
+  (`stripWiden`).
+- Small faceted stones (`src/brook-stones.ts`) lie on the bed and its edges, a few half out of the water: more on a
+  riffle and on the inside of a bend, few in a pool; none in the last 2 m before its shore or where the water of a
+  line, a lake or the sea stands. They use the ground's layout and material.
+- Paths cross a brook anywhere (a point of a brook costs a few metres, so they do not run along one); no tree stands
+  within 1.5 m of one.
+
+Hash `brooks=0` (or `off`) leaves them out and the page is as it was without them; `brooks=<nodes>` sets the threshold
+(8 to 219: 15 gives a brook in nearly every hollow, 120 only the larger streams). The views `brook` (one course from
+its spring to the water it runs into, from the air) and `brook-near` (its last stretch from the bank at walking height)
+come after the others, then the close views `brook-mouth-1`, `brook-mouth-2` (the two mouths with the largest basins at
+least 150 m apart) and `brook-join-1`, `brook-join-2` (the same for tributaries' entries), each low and oblique from about 8 m and,
+with `-top`, from 22 m straight over it. The panel gives their numbers; `__wh.brooks()` adds `brookCrowding`: mouths
+within 15 m of another, and twins, brooks side by side for more than 6 m (a tributary's curve into its stem left out).
+`node scripts/pictures.ts --brooks` prints both for seeds 1 to 4 and fails on a twin longer than 8 m or more than two
+crowded mouths.
+
+What it does not do yet: a brook that crosses a steep drop runs down it as a steep chute with foam, not a fall; a brook
+that the mesh's water cannot be kept under (a ford, a few points on a cliff) lies on the ground there. A tributary's
+fade over its stem follows the strip's vertices, so from straight above a faint edge of it can show. The entry angle
+is aimed at, not enforced: a few entries meet their stem at 25 to 70°. A mouth on a steep bank is a notch in the bank
+down to the water.
+
 ## Walkers
 
 Little travelling figures walk the paths (`src/walkers.ts`): the pathfinder figure, a stocky traveller in a poncho
@@ -146,6 +226,7 @@ main thread between them, so the page stays responsive and the bar moves.
     the ground and above any water. Back in orbit, the target is where the view meets the ground or the water.
 - Keys `1`–`9` and `0` jump to the views listed in the panel (`island`, `fall`, `fall-above`, `bends`, `bank`,
   `mouth`, `upper`, `lake`, `path`, `path-above`; a view whose feature the seed lacks is left out), in both modes.
+  The brooks' views `brook` and `brook-near` follow them (from the hash when they are past the tenth).
   `path` looks along the first path from a walker's eyes, `path-above` at the same place from 24 m over it.
 - The view `walker` (last in the list) looks at the first walker from behind, about 6 m away, and follows it: while
   it is active the orbit's target tracks the walker every frame, and dragging and the wheel still orbit and zoom round
@@ -153,8 +234,17 @@ main thread between them, so the page stays responsive and the bar moves.
   following.
 - The panel shows the plan's numbers, among them the count of paths and their total length, and the count of
   walkers.
+- `N` switches the mark mode in both cameras (dev server only, not in the live demo): a click pins a note to the
+  ground or the water, picked against the surface the free camera keeps clear of (`heightPick` over `surfaceAt`; trees,
+  props, walkers and the mist are not in it), kept in `internal/marks/` by the dev server's store; one call to the
+  engine's `installEngineMarking` in `src/main.ts`, made once the build has set its first view (Marks in the engine's
+  docs). The drag and the wheel do not orbit or look while it is on; the flying keys still work; `N` or Escape leaves
+  it. A mark's hash is the seed, `free=1` in free flight and the field of view (`fov=`) plus the exact view and the
+  clocks (`mkview=`, `mkclock=`); a mark made while the orbit follows a walker comes back without the following.
+  `marks=1` turns the marks on in a page driven by a script, `marks=0` hides the pins.
 - URL hash: `#seed=3&view=fall&free` (`seed` default 1, `view` one of the names above, default `island`; `free` or
-  `mode=free` opens in free flight).
+  `mode=free` opens in free flight; `fov=<degrees>` sets the field of view after the view; `brooks=0` leaves the
+  brooks out, `brooks=<nodes>` sets their threshold, see Brooks).
 - `window.__wh`: `ready`, `presets()`, `setView(v)` and `getView()` (orbit states; in free flight `getView()` gives
   the orbit `F` would return to), `mode()` and `setMode('orbit' | 'free')`, `freeState()` (the free camera's position,
   yaw, pitch and clearance), `progress()` (the loading `ProgressReport`), `settled()`, `setTimeOfDay(h)`,
@@ -164,7 +254,8 @@ main thread between them, so the page stays responsive and the bar moves.
   10 m, its fords and the widest of them, `walkers()`, per walker at the current time its position, heading
   (degrees, 0 toward −z, 90 toward +x), look (`variant`), motion, path, the stations of its stretch, the length
   of its loop, the metres along it and the walker it follows in a pair (`leader`, −1: none), and `following()` and
-  `follow(i)`, the walker the `walker` view follows (−1: none).
+  `follow(i)`, the walker the `walker` view follows (−1: none), and `brooks()`, the brooks' threshold and numbers
+  (null without brooks).
 
 ## Pictures without a browser
 
@@ -177,4 +268,5 @@ container:
 ```sh
 docker compose exec -T dev sh -c 'cd /app && node examples/rivers/scripts/pictures.ts 1'        # seed 1
 docker compose exec -T dev sh -c 'cd /app && node examples/rivers/scripts/pictures.ts --stats'  # numbers of seeds 1–8
+docker compose exec -T dev sh -c 'cd /app && node examples/rivers/scripts/pictures.ts --brooks' # brooks of seeds 1–4
 ```

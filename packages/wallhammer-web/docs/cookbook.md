@@ -121,6 +121,13 @@ engine.renderer.beforeFrame.unshift(() => {
   [Blending between levels](streaming.md#blending-between-levels).
 - The engine has no ready material for `cellSurfaceMesh`; copy the terrain material of `endless` (`src/shaders.ts`)
   and keep `u_cellOffset` in its vertex programs.
+- On a sphere, steep walls of patch cells show a saw where every quad is cut the same way: `split: 'shorter'` in the
+  patch options picks the shorter diagonal per quad ([A sphere world](streaming.md#a-sphere-world)). A category of your
+  own per vertex travels in the patch's extra channel (`coarseExtra: 'nearest'` keeps it a category between levels),
+  which the ground's shaders read with `extra` ([The ground of a sphere from patch cells](rendering.md#the-ground-of-a-sphere-from-patch-cells)).
+- The instances of streamed cells (trees, rocks) are not solid by themselves: `InstanceSolid` per archetype,
+  `SolidIndex` fed by `streamSolids` and `SolidFeed` make them solids of a collision world, and `index.within(point,
+  radius, visit)` answers what stands near a point ([Solids of streamed cells](walking.md#solids-of-streamed-cells)).
 
 ## Terrain with hills
 
@@ -365,12 +372,24 @@ route inside the simulation).
 **Pitfalls.**
 
 - The walker is in fixed steps (60 Hz by default); always draw `renderPosition`, never `position`.
+- For a body with weight set `deceleration`, `runAcceleration` and `turnSpeedAtRun` (all off by default) and switch sets
+  with `walker.retune` ([Momentum](walking.md#momentum)); a ponytail or a tail that swings behind is a `ChainLag`
+  applied after the figure's other post steps ([A chain that lags behind](motion.md#a-chain-that-lags-behind)).
 - `FollowRig` is flat-world only and has no render origin: keep the walking area within a few kilometres of the
-  world origin ([Walking](walking.md), [`FollowRig`](cameras.md#followrig)).
+  world origin ([Walking](walking.md), [`FollowRig`](cameras.md#followrig)). On a planet, `ChartWalker` runs the same
+  `CollisionWorld` and `Walker` in a moving local chart (`SurfaceChart`) and `ChartFollowView` shows the `FollowRig` in
+  world space with a render origin ([Walking on a sphere](walking.md#walking-on-a-sphere),
+  [`ChartFollowView`](cameras.md#on-a-sphere-chartfollowview); the `planet` example, key `G`).
+- Trees and rocks of streamed cells stop the walker only as solids: [Solids of streamed
+  cells](walking.md#solids-of-streamed-cells).
 - Solids are upright prisms, cylinders and boxes; a mesh becomes one through `addMeshSolid`
   ([Solids from a mesh](walking.md#solids-from-a-mesh)). Draw them with `collisionLines` to check.
 - The engine has no figure of its own: build it with `motion` (skeleton, poses, `MotionGraph`) or as a rig
-  ([Motion](motion.md), [Rigs](rigs.md)); the examples' figures are example code.
+  ([Motion](motion.md), [Rigs](rigs.md)); the examples' figures are example code. Feet on a slope: `fitToGround` with
+  `align`; a hand that reaches, a head that looks, a thing held: `TwoBoneReach`, `ChainAim`, `SocketBlend`, eased by
+  `WeightFade` ([Reaching, aiming and holding over time](motion.md#reaching-aiming-and-holding-over-time)).
+- A close view of a figure wants short, sharp shadows, a view over land long ones: `renderer.setShadowFit({ softnessM,
+  distanceM })` changes them while running, `renderer.shadowFit` reads them to put them back ([Shadows](rendering.md#shadows)).
 - With a simulation, put the walker in it (`walker.simState(name)`, step it in a system) so replays and saves hold
   ([Saving and restoring](walking.md#saving-and-restoring)).
 
@@ -639,7 +658,8 @@ npx wallhammer-marks set m0001 --status fixed --by agent --text "what changed" -
 ```
 
 **Example.** `endless` (`#cam=free`, a `FreeRig` over a height function), `walk` (a `FollowRig` over a collision
-world, `placeTarget` puts the walker back), `planet` (a host of its own).
+world, `placeTarget` puts the walker back), `fantasy-village` (a `PerspectiveOrbitRig`), `planet` (a host of its own),
+`system` (`engineMarkHost` with its own pick, key `K`, `clocks: false` and the page's time in its hash).
 
 **Pitfalls.**
 
@@ -648,6 +668,9 @@ world, `placeTarget` puts the walker back), `planet` (a host of its own).
 - `fixed` needs an after-picture of the same view (open the mark's link from `list --md`); the developer sets
   `accepted` or `reopened`, never the agent.
 - Add `.marks/` to `.gitignore`. The page's view hash holds the camera, hour and animation time; state your page
-  keeps elsewhere (a toggled layer, a seed) belongs in the `hash` option.
+  keeps elsewhere (a toggled layer, a seed) belongs in the `hash` option, and a clock of the page's own with
+  `clocks: false` too.
+- A view other than a `FreeRig`, `FollowRig` or `PerspectiveOrbitRig` (`ChartFollowView`, say) needs a `MarkHost` of
+  its own ([Marks](marks.md)).
 
 All of it: [Marks](marks.md).

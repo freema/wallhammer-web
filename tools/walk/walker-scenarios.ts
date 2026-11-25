@@ -3,12 +3,16 @@
 // wall at speed, determinism, a solid that appears over the body, and the CPU time of one step (spec M2, 3.3 and 3.4).
 // Then the saved state (`saveState`, `loadState`, `simState`): a save loaded into a second walker saves the same bytes,
 // a restored walker steps on and draws exactly like the original, offsets and refused buffers, and the walker as a
-// part of a `Simulation` snapshot.
+// part of a `Simulation` snapshot. Last the momentum options (`deceleration`, `runAcceleration`, `turnSpeedAtRun`):
+// the stop distance from a run, the run-up, the radius of a running turn, the same options through a `ChartWalker`,
+// the default setup stepping exactly as with the options spelled out, the fixed-step stop distance and the rate of
+// change in the air.
 
 import { ByteReader, ByteWriter } from '../../packages/wallhammer-web/src/sim/bytes.ts';
 import { Simulation } from '../../packages/wallhammer-web/src/sim/simulation.ts';
 import { CollisionWorld, newRayHit } from '../../packages/wallhammer-web/src/world/collide.ts';
-import { WALKER_STATE_BYTES, Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
+import { ChartWalker } from '../../packages/wallhammer-web/src/world/chart-walker.ts';
+import { DEFAULT_WALKER, WALKER_STATE_BYTES, Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
 import type { WalkIntent, WalkerSetup } from '../../packages/wallhammer-web/src/world/walker.ts';
 import { scattered } from './collide-scenarios.ts';
 import { f, meanMs, seeded, verdict } from './scenario.ts';
@@ -724,5 +728,245 @@ const stateSim: Scenario = {
   },
 };
 
+
+// --- Momentum ----------------------------------------------------------------------------------------------------------
+
+/** Runs +x to full speed, releases the input; metres from the release to a stop, seconds to stop, and the stopped walker. */
+function stopFrom(setup: Partial<WalkerSetup>): { dist: number; secs: number; speed: number } {
+  const k = walker(flat(), 0, 0, 0, setup);
+  walk(k, intent(1, 0, true), 3);
+  const speed = k.velocity[0]!;
+  const x0 = k.position[0]!;
+  let n = 0;
+  const idle = intent(0, 0);
+  while (Math.hypot(k.velocity[0]!, k.velocity[2]!) > 0 && n < 600) {
+    k.step(idle);
+    n++;
+  }
+  return { dist: k.position[0]! - x0, secs: n * k.stepSeconds, speed };
+}
+
+const stopDistance: Scenario = {
+  name: 'walker-momentum-stop-distance',
+  run() {
+    const parts: string[] = [];
+    let ok = true;
+    for (const [label, setup, d] of [['default', {}, DEFAULT_WALKER.acceleration], ['deceleration 9', { deceleration: 9 }, 9], ['deceleration 5, acceleration 30', { deceleration: 5, acceleration: 30 }, 5]] as const) {
+      const r = stopFrom(setup);
+      // v² / (2d) in continuous time; a fixed step brakes before it moves, so up to one step's distance less.
+      const want = (r.speed * r.speed) / (2 * d);
+      const err = r.dist - want;
+      ok &&= err > -r.speed / 60 - 0.01 && err < 0.01 && Math.abs(r.secs - r.speed / d) < 2 / 60;
+      parts.push(`${label}: ${f(r.dist)} m in ${f(r.secs, 2)} s from ${f(r.speed, 2)} m/s (v²/2d ${f(want)} m)`);
+    }
+    return verdict(ok, parts.join('; '));
+  },
+};
+
+const runUp: Scenario = {
+  name: 'walker-momentum-run-up',
+  run() {
+    const time = (setup: Partial<WalkerSetup>, run: boolean): number => {
+      const k = walker(flat(), 0, 0, 0, setup);
+      const it = intent(1, 0, run);
+      const top = run ? k.setup.runSpeed : k.setup.walkSpeed;
+      let n = 0;
+      while (k.velocity[0]! < top - 1e-9 && n < 600) {
+        k.step(it);
+        n++;
+      }
+      return n * k.stepSeconds;
+    };
+    const setup = { acceleration: 8, runAcceleration: 4 };
+    const run = time(setup, true);
+    const walkUp = time(setup, false);
+    const dflt = time({}, true);
+    const s = DEFAULT_WALKER;
+    const ok = Math.abs(run - s.runSpeed / 4) < 2 / 60 && Math.abs(walkUp - s.walkSpeed / 8) < 2 / 60 && Math.abs(dflt - s.runSpeed / s.acceleration) < 2 / 60;
+    return verdict(ok, `to the run speed with runAcceleration 4: ${f(run, 2)} s (want ${f(s.runSpeed / 4, 2)}); to the walk speed with acceleration 8: ${f(walkUp, 2)} s (want ${f(s.walkSpeed / 8, 2)}); default to the run speed ${f(dflt, 2)} s`);
+  },
+};
+
+/** Runs +x at full speed, then asks for −x: the sideways offset of the path when it heads −x, and the heading's lead over the velocity. */
+function reverse(setup: Partial<WalkerSetup>): { offset: number; minSpeed: number; lag: number } {
+  const k = walker(flat(), 0, 0, 0, { ...setup });
+  walk(k, intent(1, 0, true), 3);
+  // A hair to the left, so the reversal turns one way.
+  const it = intent(-1, 0.001, true);
+  const z0 = k.position[2]!;
+  let minSpeed = Infinity;
+  let lag = 0;
+  let n = 0;
+  while (n < 600) {
+    k.step(it);
+    n++;
+    const vx = k.velocity[0]!, vz = k.velocity[2]!;
+    const sp = Math.hypot(vx, vz);
+    minSpeed = Math.min(minSpeed, sp);
+    if (sp > 0.5) {
+      // The heading against the velocity's direction (yaw 0 faces −z).
+      let d = Math.atan2(-vx, -vz) - k.yaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      lag = Math.max(lag, Math.abs(d));
+    }
+    if (vx < 0 && Math.abs(vz) < 1e-3 * sp) break;
+  }
+  return { offset: k.position[2]! - z0, minSpeed, lag };
+}
+
+const turnArc: Scenario = {
+  name: 'walker-momentum-turn-radius',
+  run() {
+    const rate = 3;
+    const arc = reverse({ turnSpeedAtRun: rate });
+    const again = reverse({ turnSpeedAtRun: rate });
+    const on = reverse({});
+    const v = DEFAULT_WALKER.runSpeed;
+    // Half a circle of radius v / rate: the path ends 2 v / rate to the side; the speed stays (the turn is within the acceleration).
+    const want = (2 * v) / rate;
+    const ok = Math.abs(Math.abs(arc.offset) - want) < 0.03 * want && arc.minSpeed > v - 0.05 && arc.lag < 0.15 && Object.is(arc.offset, again.offset) && Math.abs(on.offset) < 0.05 && on.minSpeed < 0.5;
+    return verdict(ok, `turnSpeedAtRun ${rate}: a reversal at ${v} m/s swings ${f(Math.abs(arc.offset))} m to the side (2v/rate ${f(want)}), speed at least ${f(arc.minSpeed, 2)} m/s, heading within ${f(arc.lag / DEG_W, 1)}° of the velocity, the same bits twice ${Object.is(arc.offset, again.offset)}; default: ${f(on.offset)} m to the side, speed down to ${f(on.minSpeed, 2)} m/s (turns on the spot)`);
+  },
+};
+const DEG_W = Math.PI / 180;
+
+const momentumDefaults: Scenario = {
+  name: 'walker-momentum-defaults-unchanged',
+  run() {
+    // The options spelled out at the values that mean "as before" step bit for bit like the default setup.
+    const spelled: Partial<WalkerSetup> = { deceleration: DEFAULT_WALKER.acceleration, runAcceleration: DEFAULT_WALKER.acceleration, turnSpeedAtRun: 0 };
+    const trace = (setup: Partial<WalkerSetup>): Uint8Array[] => {
+      const k = walker(course(), 60, 10, 60, setup);
+      const rnd = seeded(21);
+      const it = newWalkIntent();
+      const out: Uint8Array[] = [];
+      for (let i = 0; i < 1500; i++) {
+        if (i % 30 === 0) {
+          const a = rnd() * Math.PI * 2;
+          const stop = rnd() < 0.3;
+          it.moveX = stop ? 0 : Math.cos(a);
+          it.moveZ = stop ? 0 : Math.sin(a);
+          it.run = rnd() < 0.5;
+        }
+        it.jump = i % 113 === 0;
+        k.step(it);
+        if (i % 5 === 0) out.push(k.saveState().slice());
+      }
+      return out;
+    };
+    const a = trace({});
+    const b = trace(spelled);
+    let apart = 0;
+    for (let i = 0; i < a.length; i++) if (stateDiff(a[i]!, b[i]!)) apart++;
+    const d = DEFAULT_WALKER;
+    const zero = d.deceleration === 0 && d.runAcceleration === 0 && d.turnSpeedAtRun === 0;
+    return verdict(apart === 0 && zero, `defaults deceleration ${d.deceleration}, runAcceleration ${d.runAcceleration}, turnSpeedAtRun ${d.turnSpeedAtRun}; 1500 steps against the options spelled out: ${apart} of ${a.length} saved states differ`);
+  },
+};
+
+const chartMomentum: Scenario = {
+  name: 'walker-momentum-chart-walker',
+  run() {
+    const R = 2000;
+    const cw = new ChartWalker({ radiusM: R, radiusAt: () => R, walker: { deceleration: 6, turnSpeedAtRun: 2 } });
+    const run = intent(0, -1, true);
+    for (let i = 0; i < 180; i++) cw.step(run);
+    const a: [number, number, number] = [0, 0, 0];
+    cw.position(a);
+    const speed = cw.walker.velocity[2]!;
+    const idle = intent(0, 0);
+    let n = 0;
+    while (Math.hypot(cw.walker.velocity[0]!, cw.walker.velocity[2]!) > 0 && n < 600) {
+      cw.step(idle);
+      n++;
+    }
+    const b: [number, number, number] = [0, 0, 0];
+    cw.position(b);
+    // Along the sphere: the angle between the two feet times the radius.
+    const dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
+    const dist = Math.acos(Math.min(1, dot)) * R;
+    const want = (speed * speed) / 12;
+    const s = cw.setup;
+    const ok = Math.abs(speed) > 4 && dist - want > -Math.abs(speed) / 60 - 0.01 && dist - want < 0.01 && s.deceleration === 6 && s.turnSpeedAtRun === 2;
+    return verdict(ok, `setup through ChartWalker: deceleration ${s.deceleration}, turnSpeedAtRun ${s.turnSpeedAtRun}; stopped ${f(dist)} m after the release from ${f(Math.abs(speed), 2)} m/s (v²/2d ${f(want)} m) in ${n} steps, ${cw.recharts} charts`);
+  },
+};
+
+const retune: Scenario = {
+  name: 'walker-momentum-retune',
+  run() {
+    // Retuned in the middle of a run, a walker steps on exactly like one built with the new numbers from that state.
+    const t = { deceleration: 7, turnSpeedAtRun: 3, runSpeed: 5 };
+    const a = walker(course(), 60, 10, 60);
+    const it = intent(0.6, 0.8, true);
+    walk(a, it, 2);
+    const b = walker(course(), 0, 0, 0, t);
+    b.loadState(a.saveState());
+    a.retune(t);
+    const turn = intent(-0.8, 0.6, true);
+    let apart = 0;
+    for (let i = 0; i < 240; i++) {
+      const x = i < 120 ? turn : intent(0, 0);
+      a.step(x);
+      b.step(x);
+      if (stateDiff(a.saveState().slice(), b.saveState().slice())) apart++;
+    }
+    // A chart walker keeps the new numbers over a rechart.
+    const R = 300;
+    const cw = new ChartWalker({ radiusM: R, radiusAt: () => R });
+    cw.retune({ deceleration: 5, height: 3 } as Partial<WalkerSetup>);
+    const run = intent(0, -1, true);
+    for (let i = 0; i < 1200; i++) cw.step(run);
+    const kept = cw.recharts > 1 && cw.setup.deceleration === 5 && cw.setup.height === DEFAULT_WALKER.height;
+    return verdict(apart === 0 && kept, `retuned walker against a new one from the same state: ${apart} of 240 steps differ; chart walker after ${cw.recharts} charts: deceleration ${cw.setup.deceleration}, height ${cw.setup.height} (not a tuning field)`);
+  },
+};
+
+const stopFixedStep: Scenario = {
+  name: 'walker-momentum-stop-distance-fixed-step',
+  run() {
+    // The fixed-step stop distance is v²/2d − v·dt/2 (the continuous v²/2d less half a step's travel) when v / (d·dt)
+    // is a whole number of steps: 4.5 m/s, deceleration 5 at 60 Hz stops in 54 steps.
+    const d = 5;
+    const r = stopFrom({ deceleration: d });
+    const dt = 1 / 60;
+    const continuous = (r.speed * r.speed) / (2 * d);
+    const fixed = continuous - (r.speed * dt) / 2;
+    return verdict(Math.abs(r.dist - fixed) < 1e-9 && r.speed === DEFAULT_WALKER.runSpeed, `from ${f(r.speed, 2)} m/s with deceleration ${d}: ${f(r.dist, 6)} m; v²/2d − v·dt/2 ${f(fixed, 6)} m (continuous v²/2d ${f(continuous, 4)} m)`);
+  },
+};
+
+const airRate: Scenario = {
+  name: 'walker-air-control-rate-is-acceleration',
+  run() {
+    // In the air the velocity changes at acceleration × airControl whatever the momentum options say: braking (no
+    // input), speeding up while running and turning at the same speed. deceleration 40, runAcceleration 2,
+    // acceleration 10, airControl 0.5: 5 m/s² in all three.
+    const setup: Partial<WalkerSetup> = { acceleration: 10, deceleration: 40, runAcceleration: 2, airControl: 0.5, jumpSpeed: 6 };
+    const want = 10 * 0.5;
+    const rates: string[] = [];
+    let ok = true;
+    for (const [label, air, run] of [['brake', [0, 0], false], ['run-up', [-1, 0], true], ['turn', [0, -1], true]] as const) {
+      // Walk −x at the walk speed (or run at the run speed for the turn), jump, then hold `air` for 10 steps in the air.
+      const k = walker(flat(), 0, 0, 0, setup);
+      const lead = label === 'turn' ? intent(-1, 0, true) : intent(-1, 0, false);
+      walk(k, lead, 2);
+      k.step(label === 'turn' ? intent(-1, 0, true, true) : intent(-1, 0, false, true));
+      const it = intent(air[0], air[1], run);
+      let most = 0;
+      for (let s = 0; s < 10; s++) {
+        const vx = k.velocity[0]!, vz = k.velocity[2]!;
+        k.step(it);
+        if (k.grounded) break;
+        most = Math.max(most, Math.hypot(k.velocity[0]! - vx, k.velocity[2]! - vz) * k.setup.stepHz);
+      }
+      ok &&= Math.abs(most - want) < 1e-9;
+      rates.push(`${label} ${f(most, 4)} m/s²`);
+    }
+    return verdict(ok, `${rates.join(', ')} (want ${want} each)`);
+  },
+};
+
 export const WALKER_SCENARIOS: Scenario[] = [wall30, corner, steps, slopes, jump, airMomentum, standingJump, fall, thinWall,
-  determinism, appear, timing, stateRoundTrip, stateContinues, stateOffsets, stateSim];
+  determinism, appear, timing, stateRoundTrip, stateContinues, stateOffsets, stateSim, stopDistance, runUp, turnArc, momentumDefaults, chartMomentum, retune,
+  stopFixedStep, airRate];

@@ -1,5 +1,7 @@
 // Worker script of the planet example with strips: generates and encodes cells with the strips off the main thread.
+// The options of the cells come in the worker's own URL, as for cell-worker.ts.
 import { serveCellGenerator } from 'wallhammer-web/runtime';
-import { generatePlanetStripCell } from './strips.ts';
+import { planetStripCellGenerator } from './strips.ts';
+import { planetCellOptions } from './world.ts';
 
-serveCellGenerator(generatePlanetStripCell);
+serveCellGenerator(planetStripCellGenerator(planetCellOptions(new URLSearchParams(self.location.search))));

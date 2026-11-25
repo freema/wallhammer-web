@@ -67,7 +67,7 @@ Keep inputs small and fixed. Do not read data files from outside the tool's fold
 
 If the package source itself has a type error, the samples cannot be checked; such findings say "in the package source, not a sample". Fix the package (or wait for whoever is editing it) and run again.
 
-What it does not check: that samples run, that GLSL inside samples compiles, or that prose is true.
+What it does not check: that samples run, that GLSL inside samples compiles (the [Shader check](#shader-check) compiles the programs a page makes, not samples), or that prose is true.
 
 ## Walking check
 
@@ -128,6 +128,23 @@ node shot.mjs --url http://127.0.0.1:5281/minimal-3d/ --tod 13,21   # the minima
 ```
 
 Pictures in Docker, on the software renderer and independent of the host's graphics card, come from `tools/shot/page-shot.mjs` in the `shot` service (options in its header).
+
+## Shader check
+
+`tools/shot/shader-check.mjs` compiles and links the shaders of a page in headless Chromium on the software renderer (SwiftShader), with no graphics card. The engine checks a program only on its first use, so a broken shader of a program that is made but not drawn stays silent in the browser. The tool does not rely on the page: before the page's scripts run it wraps the WebGL2 calls that make programs, and after the load it asks the context for the compile and link status of every program made. It works for any page, also one that throws on the way. In this repository it is the compose service `shaders` (profile `tools`):
+
+```sh
+docker compose run --rm shaders                                # every example page the dev server lists, about 2 min
+docker compose run --rm shaders --pages planet,walk            # only these
+docker compose run --rm shaders --pages 'planet#strip=0'       # a page with a hash
+docker compose run --rm shaders --url http://host:port/page/   # any page by its whole address
+```
+
+Options: `--base` (the examples' server, default `http://dev:5281`), `--pages`, `--url`, `--timeout` (page load, ms, default 300000), `--wait` (after the page is ready, ms, default 1500). A failed program prints its info log with the lines of the source it names. The last line is `shaders: N programs on M pages, K failed, E page errors`; the exit code is 1 when K or E is not 0. A full run takes about 2 minutes, most of it the `system` page (about 90 s).
+
+Limits: only the programs a page makes with the options it starts with are seen; a program made later, by a key or a mode, needs a `#hash` that turns it on. Contexts made in workers are not seen. The GLSL is validated by Chromium's translator (ANGLE), the same in every Chromium, but a fault of one graphics driver's own compiler cannot show. It does not judge the look.
+
+A project built on the package can run the script against its own dev server with `--url` (Node with `playwright-core` and a Chromium, as in `tools/shot/Dockerfile`).
 
 Animation time is frozen at the given value, so the same input gives the same image. Pages expose a small script interface on `window.__wh` (views, time, weather, stats, benchmark) that the tool uses.
 

@@ -14,7 +14,9 @@ export type { EngineOptions, EngineView, HeadlessEngineOptions } from './engine.
 export { StreamedWorld, WorkerCellProvider, preloadTickets, serveCellGenerator, viewTickets, viewerTickets } from './streaming.ts';
 /** Kept here for older imports; it lives in base. */
 export { boxInVolume } from '../base/view.ts';
-export type { PreloadPose, StreamArchetype, StreamedWorldOptions, StreamedWorldStats } from './streaming.ts';
+export type { PreloadPose, StreamArchetype, StreamedCellListener, StreamedWorldOptions, StreamedWorldStats } from './streaming.ts';
+export { streamSolids } from './solids.ts';
+export type { StreamSolidsOptions } from './solids.ts';
 export { CloudShadowLayer, CloudWeatherMap } from './cloud-shadows.ts';
 export type { CloudShadowOptions, CloudShadowSource, CloudWeatherMapOptions } from './cloud-shadows.ts';
 export { CloudVolumeLayer, DEFAULT_CLOUD_VOLUME_STYLE } from './cloud-volume.ts';

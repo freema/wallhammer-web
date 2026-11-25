@@ -239,7 +239,7 @@ The shadow map is refitted only when the view key, the light direction or `rende
 - `Layer.cull` runs only on a refit. A layer whose visible set changes for another reason must make the renderer refit: return true from `cullStale()` (as `PieceLayer` and `InstanceCellLayer` do after an add), or call `renderer.invalidateShadows()`.
 - Animation time is not part of the key. Something that moves and casts a shadow must refresh the map itself. `TransientLayer` does this while its batches move.
 
-Options: `shadowMapSize` (default 4096), `shadowSoftnessM` (default 0.9), `shadowDistanceM` (perspective only, default the whole scene).
+Options: `shadowMapSize` (default 4096), `shadowSoftnessM` (default 0.9), `shadowDistanceM` (perspective only, default the whole scene). `renderer.setShadowFit({ softnessM?, distanceM? })` changes the last two while running and draws the shadows again (`renderer.shadowFit` reads them, to put them back later): a short reach with a narrow penumbra for a close view of a figure, the wide one for a view over land. In the area modes the areas' reach stays as built.
 
 ### Moving casters
 
@@ -536,6 +536,17 @@ the streamed world, the near surface after it, the shafts after the water and th
   under it. With `waterline: true` the vertex shader also hands over `v_landMark`, and `SPHERE_GROUND_WATERLINE_GLSL`
   gives `groundUnder(p, blendM)`, the share under the level by the fragment's own height (over ± `blendM`, at least a
   pixel), and `groundLandAlpha()`, the alpha of the vertices above the level alone. Without it the program is unchanged.
+- **The extra channel**, opt-in: with `extra` (`SphereGroundExtra`) both vertex shaders read the four bytes a patch
+  made with `extraAt` carries (`a_extra`, `a_coarseExtra`; the material binds `SPHERE_PATCH_COVER_EXTRA_ATTRIBS`, or
+  `SPHERE_PATCH_EXTRA_ATTRIBS` for a patch without `coverAt`) and blend them with the factor of the height. The colour
+  pass hands them on as `v_extra` (0 to 1 per byte). `extra.vertex` is GLSL of the content defining
+  `vec3 groundVertex(vec3 p, vec4 extra)`: it gets the render position after the blend between levels and the blended
+  bytes, and returns the point to draw. It runs before the cover's lift, so the lift, `v_world`, `v_lift.w` and the air
+  see the moved point; the normal stays. Pass the same `extra` to `sphereGroundVs` and `sphereGroundDepthVs`: with a
+  hook the shadow pass calls it at the same place, so the shadow falls from the moved ground; without one the shadow
+  pass does not read the channel. The hook is pasted after `lift` at global scope (its own uniforms may go there too).
+  Without `extra` both programs are unchanged byte for byte. Objects stood on the ground with `spherePatchRadius` do not
+  know the hook: move them by the same rule, or keep the hook to things that do not carry objects.
 
 <!-- check: wrap -->
 ```ts
@@ -556,7 +567,33 @@ const desc: MaterialDesc = {
 console.log(desc.name);
 ```
 
-The `planet` example builds its ground this way.
+The extra channel with a hook (the bytes from `extraAt`, here a category in the second byte):
+
+<!-- check: wrap -->
+```ts
+import type { MaterialDesc } from 'wallhammer-web/base';
+import { DEPTH_ONLY_FS, sphereGroundDepthVs, sphereGroundVs } from 'wallhammer-web/env';
+import { SPHERE_PATCH_COVER_EXTRA_ATTRIBS } from 'wallhammer-web/gen-core';
+declare const LIFT_GLSL: string; // defines coverLift, coverLiftShare, coverElevation, coverShade
+declare const MY_FS: string; // the content's fragment shader, which declares in vec4 v_extra
+
+const ground = {
+  thinRank: [0.12, 0.25, 0.5, 1],
+  thinFrom: [0.75, 0.6, 0.55, 0.5],
+  lift: LIFT_GLSL,
+  // Ground of category 1 (the second byte) sinks half a metre; both passes draw it there.
+  extra: { vertex: 'vec3 groundVertex(vec3 p, vec4 extra) { return p - localUp(p) * (0.5 * step(0.5, extra.g)); }' },
+};
+const desc: MaterialDesc = {
+  name: 'my-ground',
+  attribs: SPHERE_PATCH_COVER_EXTRA_ATTRIBS,
+  passes: { color: { vs: sphereGroundVs(ground), fs: MY_FS }, shadow: { vs: sphereGroundDepthVs(ground), fs: DEPTH_ONLY_FS } },
+};
+console.log(desc.name);
+```
+
+The `planet` example builds its ground this way; `#extra=slope` adds the extra channel (the slope, and a cliff
+category taken with `coarseExtra: 'nearest'`) with a tint in the fragment shader, `#extra=lift` also the hook.
 
 ## Levels of detail with a fade
 

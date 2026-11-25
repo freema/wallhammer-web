@@ -44,14 +44,19 @@ destruction are part of it. The engine knows nothing about any project: content 
 | Houses from footprints | `/gen-arch` | [Cookbook](cookbook.md#houses-from-footprints), [gen-arch](generators.md#content-module-gen-arch) | `destruction` |
 | Time of day, weather, seasons | `/env`, `/runtime`, `/gen-ground` | [Cookbook](cookbook.md#time-of-day-weather-and-seasons), [Environment](environment.md) | `planet`, `destruction` |
 | A walking figure, follow camera | `/world`, `/camera`, `/platform` | [Cookbook](cookbook.md#a-walking-figure-with-a-follow-camera), [Walking](walking.md) | `walk` |
+| Walking on a planet | `/world` (`ChartWalker`), `/camera` (`ChartFollowView`), `/base` (`SurfaceChart`) | [Walking on a sphere](walking.md#walking-on-a-sphere), [Cameras](cameras.md#on-a-sphere-chartfollowview) | `planet` (key `G`) |
+| Trees and rocks of streamed cells that block the walker | `/base` (`InstanceSolid`), `/world` (`SolidIndex`, `SolidFeed`), `/runtime` (`streamSolids`) | [Solids of streamed cells](walking.md#solids-of-streamed-cells) | `planet` |
 | Things you can kick or break | `/sim/destruction`, `/gen-arch`, `/core` | [Cookbook](cookbook.md#things-you-can-kick-or-break), [Destruction](destruction.md) | `destruction` |
 | Vehicles and people on schedules | `/sim`, `/render` | [Cookbook](cookbook.md#vehicles-and-people-on-schedules), [Simulation](simulation.md) | `outpost`, `rivers` |
 | Your own place data | your project → the above | [Cookbook](cookbook.md#your-own-place-data) | `destruction` (footprints) |
 | Find what is slow | `/tools` | [Cookbook](cookbook.md#performance-and-budgets), [Tools](tools.md#frame-profile) | `fantasy-village` |
 | Debug a generated world | `/runtime`, `/marks-store` | [Cookbook](cookbook.md#debugging-with-marks), [Marks](marks.md) | `endless`, `walk` |
 | Skeletons and poses | `/motion` | [Motion](motion.md) | `outpost` |
+| A figure that reaches, aims, holds, stands on a slope | `/motion` (`TwoBoneReach`, `ChainAim`, `SocketBlend`, `WeightFade`, `fitToGround` `align`) | [Motion](motion.md#reaching-aiming-and-holding-over-time) | `planet` (walk mode) |
+| A body with weight (run-up, braking, wide turns at a run) and hair or a tail that lags behind | `/world` (`deceleration`, `runAcceleration`, `turnSpeedAtRun`, `retune`), `/motion` (`ChainLag`) | [Momentum](walking.md#momentum), [A chain that lags behind](motion.md#a-chain-that-lags-behind) | `walk` (key `P`), `planet` (walk mode, key `P`) |
 | Animated people, vehicles as rigs | `/render` | [Rigs](rigs.md) | `minimal-3d` |
 | A planet, orbits, a solar system | `/world`, `/env`, `/core` | [Planet](planet.md), [Frames](frames.md) | `planet`, `system` |
+| Rivers and roads planned over a sphere, classes of rivers | `/gen-plan` (`channelOrder`, `channelFlow`, `classifyByThresholds`) | [gen-plan](generators.md#gen-plan-the-plan-of-a-sphere) | `rivers`, `system` |
 | A material or a layer of your own | `/base`, `/render` | [Rendering](rendering.md), [Recipes](recipes.md) | any |
 
 Examples are in the repository (<https://github.com/freema/wallhammer-web/tree/main/examples>), not in the npm package,
@@ -65,25 +70,25 @@ Each module is `wallhammer-web/<module>`. A module imports only lower layers; We
 
 | Entry | What it holds |
 | --- | --- |
-| `base` | Vector and 3 × 4 matrix math, plain-data contracts (`MeshData`, `MaterialDesc`, …), `View`, `Progress`, the mark record. |
+| `base` | Vector and 3 × 4 matrix math, plain-data contracts (`MeshData`, `MaterialDesc`, `InstanceSolid`, …), `View`, `Progress`, `SurfaceChart`, the mark record. |
 | `platform` | Canvas, keys, pointer, gamepad (`bindWalkInput`, `bindFreeInput`), frame loop, workers, `fetchBytes`, the marks panel. |
 | `core` | `Clock`, `definePalette`, ballistic tracks, orbits (`BodySystem`), level fades. |
 | `gen-core` | Hash streams, value noise, polygons, `HeightField`, occupancy, cell ids, `FlatWorld`, near scatter. |
-| `motion` | Skeletons, poses, blends, `MotionGraph`, reach. No motions of its own. |
+| `motion` | Skeletons, poses, blends, `MotionGraph`, reach and ground fit, reach, aim and sockets over time (`TwoBoneReach`, `ChainAim`, `SocketBlend`, `WeightFade`). No motions of its own. |
 | `gen-mesh` | `heightFieldMesh`, `cellSurfaceMesh`, `cellMorphMesh`, strips, prisms, `MeshBuilder` with `box`, `extrude`, `revolve`, `sweep`. |
 | `gen-tex` | Code textures, colour ramps, `CodeStamp`, noise volumes. |
 | `gen-arch` | Content: structures from recipes over footprints, destructible descriptions, rubble, falling pieces, lit windows. |
 | `gen-ground` | Content: ground bake from surface classes, markings, the `season` and `snow` slots. |
 | `gen-vegetation` | Content: tree placement, instanced trees with levels, the `sway` slot. |
-| `gen-plan` | Coarse plans over a sphere: drainage, rivers, routes, sites, skylines. |
+| `gen-plan` | Coarse plans over a sphere: drainage, rivers and their classes (`channelOrder`, `channelFlow`), routes, sites, skylines. |
 | `gpu` | `Device`: programs, buffers, textures, targets, GPU memory. You rarely touch it. |
-| `render` | `Renderer`, `MeshLayer`, `InstancedLayer`, `InstanceCellLayer`, `InstanceSetLayer`, `TransientLayer`, `RigLayer`, particles, point lights. |
-| `camera` | `PerspectiveOrbitRig`, `FreeRig`, `FollowRig`, `SteppedOrthoRig`, `OrbitPath`, `FreePath`. |
-| `env` | `Environment`: clocks, sun, sky, atmosphere, weather, wind, clouds, fog, `weatherGround`. |
-| `world` | `CollisionWorld`, `Walker`, picking (`marchRay`), `StreamingManager`, cell providers, the cell file format. |
+| `render` | `Renderer` (`setShadowFit` narrows the shadows while running), `MeshLayer`, `InstancedLayer`, `InstanceCellLayer`, `InstanceSetLayer`, `TransientLayer`, `RigLayer`, particles, point lights. |
+| `camera` | `PerspectiveOrbitRig`, `FreeRig`, `FollowRig`, `ChartFollowView` (a `FollowRig` on a sphere), `SteppedOrthoRig`, `OrbitPath`, `FreePath`. |
+| `env` | `Environment`: clocks, sun, sky, atmosphere, weather, wind, clouds, fog, `weatherGround`, the sphere ground's shaders (with an `extra` channel). |
+| `world` | `CollisionWorld`, `Walker`, `ChartWalker` (walking on a sphere), `SolidIndex` and `SolidFeed` (solids of streamed cells), picking (`marchRay`), `StreamingManager`, cell providers, the cell file format. |
 | `sim` | `Simulation`, `EntityTable`, `NavGraph`, `Movers`, `Agendas`, `StateMachine`, `FlowNetwork`. |
 | `sim/destruction` | The destruction model: events, support, rubble, state text and hash. |
-| `runtime` | `createEngine`, `createHeadlessEngine`, `StreamedWorld`, `WorkerCellProvider`, sky, clouds, rain, `installEngineMarking`. |
+| `runtime` | `createEngine`, `createHeadlessEngine`, `StreamedWorld`, `WorkerCellProvider`, `streamSolids`, sky, clouds, rain, `installEngineMarking`. |
 | `tools` | `profileFrame`, the data view, `collisionLines`, mesh checks. |
 | `marks-store` | Node only: the marks' Vite dev-server plugin `marksStore`; the `wallhammer-marks` command line. |
 
@@ -94,11 +99,12 @@ Full names per entry: [Reference](reference.md). Layers and rules: [Architecture
 **Use marks to debug your procedurally generated worlds.** Fly or walk to what looks wrong, press N, click it, type a
 note. The mark keeps the point, the exact view and a picture; an agent lists the open marks, opens each at its view,
 fixes, attaches an after-picture and sets it `fixed`; the developer accepts. Two lines set it up in a Vite project
-whose engine draws through a `FreeRig` or a `FollowRig`:
+whose engine draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`:
 
 - `marksStore()` from `wallhammer-web/marks-store` in `vite.config.ts` (marks go to `.marks/`; add it to `.gitignore`);
 - `installEngineMarking(engine, { pick })` from `wallhammer-web/runtime` inside `if (import.meta.env.DEV)`, with
-  `heightPick(heightAt)` over a height function or `collisionPick(world)` over a collision world.
+  `heightPick(heightAt)` over a height function or `collisionPick(world)` over a collision world. A page whose key N
+  is taken passes `key`; one that keeps its own time passes `clocks: false` and puts the time in its `hash`.
 
 Then, with the dev server running: `npx wallhammer-marks list --open`, `npx wallhammer-marks set m0001 --status seen
 --by agent`. Agents never set `accepted` or `reopened`. All of it: [Marks](marks.md).
@@ -111,7 +117,14 @@ Other tools:
   of a collision world ([Walking](walking.md#seeing-the-solids)).
 - **Without a browser:** generators, `sim`, `world`, `env` and `camera` run in plain Node; `createHeadlessEngine`
   steps the simulation and the clocks. Hash generator output and compare it in your own tests ([Headless](headless.md)).
-- **Shaders:** nothing type-checks GLSL. A broken shader shows only in the browser console; open the page.
+- **Shaders:** TypeScript checks do not compile GLSL. A broken shader of a program that is drawn throws in the
+  browser console, but the engine checks a program only on its first use, so one that a page makes and does not draw
+  yet stays silent. A headless-browser check of your own sees them all: before the page's scripts run, wrap
+  `shaderSource`, `attachShader` and `linkProgram` of `WebGL2RenderingContext.prototype` to remember every shader and
+  program, and after the load read `getShaderParameter(s, COMPILE_STATUS)` and `getProgramParameter(p, LINK_STATUS)`
+  with their info logs. The engine's repository does it in
+  [`tools/shot/shader-check.mjs`](https://github.com/freema/wallhammer-web/blob/main/tools/shot/shader-check.mjs), a
+  reference script that is not part of the package ([Tools](tools.md#shader-check)).
 
 ## Read next
 

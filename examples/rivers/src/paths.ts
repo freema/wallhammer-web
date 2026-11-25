@@ -8,7 +8,8 @@
 //      moves to the 8 neighbours and the 8 knight moves. A move costs its length, more the steeper it is, and a
 //      little more or less by a slow noise, so a route over a plain bends instead of running ruled. It may not touch
 //      the sea or a lake; each wet point of a line it crosses costs as much as a long detour, more the deeper the
-//      water, so a path fords a brook where it likes and a river rarely and squarely. Legs laid later pay little for
+//      water, so a path fords a small line where it likes and a large one rarely and squarely. A point of a brook
+//      (brooks.ts, narrower than the field) costs a few metres: a path steps over a brook anywhere but does not follow one. Legs laid later pay little for
 //      ground an earlier leg already took, so they join it and fork from it. The route found is searched for again
 //      near itself with its turns limited, so a switchback up a slope has room for its bend.
 //   3. Where a leg runs on an earlier path it is cut: each stretch of ground belongs to one path, and a path that
@@ -132,6 +133,11 @@ const BLOCK = 4;
 const LINE = 8;
 /** The wet edge of a line (`EDGE_M`). */
 const EDGE = 16;
+/** A brook (brooks.ts): crossed freely, but no path runs along one. */
+const BROOK = 32;
+/** A point of a field counts as a brook within this far beyond its strip's edge, metres, and costs this much to walk. */
+const BROOK_NEAR_M = 0.6;
+const BROOK_COST_M = 8;
 
 // The 16 moves of the route grid, in pairs of opposites (move k ^ 1 is the way back of move k).
 const MI = [1, -1, 0, 0, 1, -1, 1, -1, 1, -1, 2, -2, 1, -1, 2, -2];
@@ -210,7 +216,7 @@ interface Ground {
   noiseSeed: number;
 }
 
-function groundOf(plan: Plan, f: Field): Ground {
+function groundOf(plan: Plan, f: Field, brookEdge?: Float32Array): Ground {
   const n = f.n;
   const flag = new Uint8Array(n * n);
   for (let k = 0; k < n * n; k++) {
@@ -219,6 +225,7 @@ function groundOf(plan: Plan, f: Field): Ground {
     let fl = 0;
     if (w > g + 0.01) fl = f.body[k] === 2 ? WET | LINE : WET | STAND | BLOCK;
     else if (f.body[k] === 2 && g - w < EDGE_M) fl = EDGE;
+    else if (brookEdge && brookEdge[k]! < BROOK_NEAR_M) fl = BROOK;
     if (g < MIN_GROUND_M) fl |= BLOCK;
     flag[k] = fl;
   }
@@ -281,6 +288,7 @@ function walkCost(g: Ground, count: number, sub: number, noise: number): number 
   const { flag, f } = g;
   let rise = 0;
   let wet = 0;
+  let brook = 0;
   let edge = false;
   let dryH = 0;
   let dryAt = -1;
@@ -289,6 +297,7 @@ function walkCost(g: Ground, count: number, sub: number, noise: number): number 
     const fl = flag[k]!;
     if (fl & BLOCK) return Infinity;
     if (fl & EDGE) edge = true;
+    if (fl & BROOK) brook += s === 0 || s === count - 1 ? 0.5 : 1;
     const h = f.ground[k]!;
     if (fl & LINE) {
       wet += (s === 0 || s === count - 1 ? 0.5 : 1) * (1 + f.water[k]! - h);
@@ -301,7 +310,7 @@ function walkCost(g: Ground, count: number, sub: number, noise: number): number 
   const grade = rise / sub;
   walkGrade = grade;
   const q = grade / GRADE_UNIT;
-  return (count - 1) * sub * (1 + 1.5 * q * q) * (0.8 + 0.5 * noise) * (edge ? EDGE_FACTOR : 1) + FORD_COST_M * wet;
+  return (count - 1) * sub * (1 + 1.5 * q * q) * (0.8 + 0.5 * noise) * (edge ? EDGE_FACTOR : 1) + FORD_COST_M * wet + BROOK_COST_M * brook;
 }
 
 /**
@@ -946,9 +955,12 @@ function crossing(paths: Path[], ax: number, az: number, bx: number, bz: number)
   return first;
 }
 
-/** The paths of a plan: a pure function of the plan and of the field of its whole square at 2.5 m. */
-export function pathPlan(plan: Plan, f: Field): PathPlan {
-  const g = groundOf(plan, f);
+/**
+ * The paths of a plan: a pure function of the plan and of the field of its whole square at 2.5 m, and of the brooks
+ * when there are any (`brookEdge` of brooks.ts: per point of the field its distance from a brook's strip).
+ */
+export function pathPlan(plan: Plan, f: Field, brookEdge?: Float32Array): PathPlan {
+  const g = groundOf(plan, f, brookEdge);
   const places = placesOf(plan, g);
   const paths: Path[] = [];
   const named = (name: string): number => places.findIndex((p) => p.name === name);

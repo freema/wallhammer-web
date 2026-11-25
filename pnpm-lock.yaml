@@ -18,6 +18,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/wallhammer-web
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -47,6 +50,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/wallhammer-web
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -60,6 +66,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/wallhammer-web
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -73,6 +82,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/wallhammer-web
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

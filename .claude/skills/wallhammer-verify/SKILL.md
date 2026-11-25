@@ -84,9 +84,20 @@ docker compose exec -T dev sh -c 'cd /app && pnpm build:examples'
 
 Passes with `[pages] N examples under / in dist-pages/, … MB, … s`. A worker handed to the engine must appear as its own `<worker-name>-<hash>.js` in `dist-pages/<example>/assets/`; without `workerUrls()` the build still passes but the worker never starts (skill `wallhammer-extend`).
 
+## Shader check (after a shader change)
+
+Not part of `checks.yml`. Run it after any change to GLSL (engine shader parts, an example's materials), on the pages that use it, once, in the foreground:
+
+```sh
+docker compose run --rm shaders --pages planet,system          # the pages that use the shader; no --pages = every example, about 2 min
+docker compose run --rm shaders --pages 'planet#extra=lift'    # a program made only in a mode needs the hash that turns it on
+```
+
+Passes with `shaders: N programs on M pages, 0 failed, 0 page errors` (exit 0). A failure prints the program's info log and the source lines it names. Limits: a program a page makes only in a mode (a key, a later view) is seen only with a `#hash` that turns that mode on; contexts made in workers are not seen; and the GLSL is validated by Chromium's translator, so a fault of one graphics driver's own compiler cannot show. The `system` page alone takes about 90 s. Options: header of `tools/shot/shader-check.mjs`.
+
 ## Not covered here
 
-- **Shader compile errors.** No check compiles GLSL. Open the page and read the browser console, or take a picture with the `shot` service; its last line counts the page errors (skill `wallhammer-run`).
+- **Shader faults of one driver.** The `shaders` check validates GLSL with Chromium's translator on the software renderer; a fault of one graphics driver's compiler shows only on that GPU (skill `wallhammer-run`, "Real GPU on the host").
 - **Look and frame cost.** There is no committed visual regression. Pictures and timings on the real GPU: skill `wallhammer-run`, section "Real GPU on the host".
 
 ## Report

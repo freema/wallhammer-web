@@ -73,6 +73,28 @@ services:
     security_opt:
       - no-new-privileges
 
+  # Compiles the shaders of the example pages with the same headless Chromium (tools/shot/shader-check.mjs): every
+  # program a page makes is checked, used or not. A one-off tool like `shot`:
+  #   docker compose run --rm shaders
+  #   docker compose run --rm shaders --pages planet,walk
+  shaders:
+    profiles: [tools]
+    image: wallhammer-web-shot:1
+    build:
+      context: tools/shot
+    init: true
+    user: "1000:1000"
+    shm_size: 1gb
+    entrypoint: ["node", "/opt/shot/tool/shader-check.mjs"]
+    depends_on:
+      dev:
+        condition: service_healthy
+    volumes:
+      - ./tools/shot:/opt/shot/tool:ro
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges
+
 volumes:
   node_modules:
   engine_node_modules:

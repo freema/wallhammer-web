@@ -7,17 +7,25 @@
 // feature (a hood, a kind of hair, a sign, the side of the pole). `look(variant)` gives the colours and the features
 // of a variant: 0–3 are the four colourways of the model sheet, any other number a combination found from it.
 // Shapes in metres in the rest pose: x to the figure's left, y up, z forward.
+//
+// Besides its parts the kind names its arms and its gaze as chains for the engine's reach and aim, sockets for held
+// things (a hand each, a place in front of the chest to read at, a pocket on the side of the pack) and two props: a
+// small box and a book in two halves (the front half turns about the spine to open it). The motions for the upper
+// body (`wave`, `offer`, `take`, `read`) move only the arms and are meant for a layer masked to them; `sitDown` and
+// `standUp` lead from standing into `sit` and back. `push` and `brace` are additive: the body leaning into a start and
+// back against a stop, for layers weighted by the figure's acceleration. The ponytail hangs on a chain of three bones
+// (`lag`) that a figure may let lag behind its motion (the engine's `ChainLag`).
 
 import { hashInts, unit } from 'wallhammer-web/gen-core';
 import type { Pose } from 'wallhammer-web/motion';
 import { GLYPHS, glyphFaces } from './glyphs.ts';
-import { Bones, TAU, shift, turn } from './kind.ts';
+import { Bones, TAU, mix, shift, smooth, turn } from './kind.ts';
 import type { FigureKind, FigureLook, FigureMotion } from './kind.ts';
-import { MAT, rgb } from './mesh.ts';
-import type { FigureMesh, P, RGB } from './mesh.ts';
+import { FigureMesh, MAT, rgb } from './mesh.ts';
+import type { P, RGB } from './mesh.ts';
 import { SIDES, STEPS, kite, stride } from './biped.ts';
 
-type Bone = 'root' | 'torso' | 'head' | 'armL' | 'foreL' | 'armR' | 'foreR' | 'legL' | 'shinL' | 'legR' | 'shinR' | 'cloak' | 'lampL' | 'lampR' | 'tail';
+type Bone = 'root' | 'torso' | 'head' | 'armL' | 'foreL' | 'armR' | 'foreR' | 'legL' | 'shinL' | 'legR' | 'shinR' | 'cloak' | 'lampL' | 'lampR' | 'tail' | 'footL' | 'footR' | 'handL' | 'handR' | 'tail2' | 'tail3';
 
 /** Colour slots of a look. */
 const SLOT = { cloak: 0, trim: 1, hair: 2, skin: 3, neck: 4 } as const;
@@ -35,6 +43,8 @@ export const PATHFINDER = {
   torch: 512,
   /** The first of the six signs (glyphs.ts, in the order of `GLYPHS`). */
   glyph: 1024,
+  /** The ponytail without the ponytail's scalp, behind any other hair (`PATHFINDER_TAIL`). */
+  tail: 65536,
 } as const;
 
 const WHITE: RGB = [1, 1, 1];
@@ -112,6 +122,15 @@ function pathfinder(): FigureKind {
     ['lampL', 'torso', [0.56, 1.75, -0.4]],
     ['lampR', 'torso', [-0.56, 1.75, -0.4]],
     ['tail', 'head', [0, 1.6, -0.2]],
+    // The ankles: the boots hang on them, so a foot can lie on a slope.
+    ['footL', 'shinL', [0.13, 0.1, 0]],
+    ['footR', 'shinR', [-0.13, 0.1, 0]],
+    // The wrists: the ends of the arms' chains and the sockets of the hands (the hands' meshes stay on the forearms).
+    ['handL', 'foreL', [0.42, 0.665, 0.03]],
+    ['handR', 'foreR', [-0.42, 0.665, 0.03]],
+    // The ponytail's lower links (after every other bone, so the indices above stay as they were).
+    ['tail2', 'tail', [0, 1.61, -0.38]],
+    ['tail3', 'tail2', [0, 1.44, -0.46]],
   ]);
   const id = B.id;
   const F = PATHFINDER;
@@ -133,10 +152,11 @@ function pathfinder(): FigureKind {
     const sh = B.part(L ? 'shinL' : 'shinR');
     sh.paint(TROUSERS, MAT.flat, 0.06).limb([0.13 * s, 0.36, 0], [0.13 * s, 0.26, 0], 0.105, 0.1, 6);
     // The boot: a wide shaft with a cuff on a long blunt foot.
-    sh.paint(BOOT, MAT.flat, 0.07).box([0.14 * s, 0.17, -0.01], [0.22, 0.22, 0.24], 1.08);
-    sh.paint(BOOT_DARK, MAT.flat, 0.05).box([0.14 * s, 0.295, -0.01], [0.26, 0.06, 0.28]);
-    sh.paint(BOOT, MAT.flat, 0.07).box([0.14 * s, 0.065, 0.07], [0.24, 0.13, 0.4], 0.84);
-    sh.paint(BOOT_DARK, MAT.flat, 0.04).box([0.14 * s, 0.012, 0.07], [0.25, 0.024, 0.41]);
+    const boot = B.part(L ? 'footL' : 'footR');
+    boot.paint(BOOT, MAT.flat, 0.07).box([0.14 * s, 0.17, -0.01], [0.22, 0.22, 0.24], 1.08);
+    boot.paint(BOOT_DARK, MAT.flat, 0.05).box([0.14 * s, 0.295, -0.01], [0.26, 0.06, 0.28]);
+    boot.paint(BOOT, MAT.flat, 0.07).box([0.14 * s, 0.065, 0.07], [0.24, 0.13, 0.4], 0.84);
+    boot.paint(BOOT_DARK, MAT.flat, 0.04).box([0.14 * s, 0.012, 0.07], [0.25, 0.024, 0.41]);
   }
 
   // --- The poncho: a cape over the shoulders on the torso, the long part swinging from the neck ---
@@ -240,14 +260,17 @@ function pathfinder(): FigureKind {
       m.paint([0.85, 0.85, 0.85], MAT.tint, 0.1).blob([0, 1.4, -0.24], [0.11, 0.1, 0.09], 22, 0.1, 6, 2);
     }
   }
-  const tail = B.part('tail', SLOT.hair, F.ponytail);
-  tail.paint([0.85, 0.85, 0.85], MAT.tint, 0.06).limb([0, 1.62, -0.19], [0, 1.66, -0.27], 0.05, 0.05, 5);
-  tail.paint(WHITE, MAT.tint, 0.1).loft([
+  // The ponytail in three links, one on each bone of its chain: the tie and the root, the body, the point.
+  const TAIL_RINGS: P[][] = [
     [[0.06, 1.72, -0.26], [0.06, 1.62, -0.25], [-0.06, 1.62, -0.25], [-0.06, 1.72, -0.26]],
     [[0.09, 1.7, -0.4], [0.09, 1.52, -0.36], [-0.09, 1.52, -0.36], [-0.09, 1.7, -0.4]],
     [[0.05, 1.5, -0.5], [0.05, 1.38, -0.42], [-0.05, 1.38, -0.42], [-0.05, 1.5, -0.5]],
-  ]);
-  tail.cone([[0.05, 1.5, -0.5], [0.05, 1.38, -0.42], [-0.05, 1.38, -0.42], [-0.05, 1.5, -0.5]], [0, 1.3, -0.5]);
+  ];
+  const tail = B.part('tail', SLOT.hair, F.ponytail | F.tail);
+  tail.paint([0.85, 0.85, 0.85], MAT.tint, 0.06).limb([0, 1.62, -0.19], [0, 1.66, -0.27], 0.05, 0.05, 5);
+  tail.paint(WHITE, MAT.tint, 0.1).loft([TAIL_RINGS[0]!, TAIL_RINGS[1]!]);
+  B.part('tail2', SLOT.hair, F.ponytail | F.tail).paint(WHITE, MAT.tint, 0.1).loft([TAIL_RINGS[1]!, TAIL_RINGS[2]!]);
+  B.part('tail3', SLOT.hair, F.ponytail | F.tail).paint(WHITE, MAT.tint, 0.1).cone(TAIL_RINGS[2]!, [0, 1.3, -0.5]);
 
   // --- Hood: round the head, its point behind, the face open ---
   const hood = B.part('head', SLOT.cloak, F.hood);
@@ -383,6 +406,27 @@ function pathfinder(): FigureKind {
       dress(pose, time, f.seed * TAU, 0.42 + 0.08 * Math.sin(ph * TAU * 2), 1.2, 0.24);
     },
   };
+  /**
+   * In the air, after a jump or off an edge: over its first quarter second the knees come up (the left one more), the
+   * arms lift out to the sides and the cloak rises. `time`: seconds since leaving the ground; the pose then holds.
+   */
+  const leap: FigureMotion = {
+    sample(pose, time, f) {
+      const k = smooth(time / 0.25);
+      const w = f.seed * TAU;
+      turn(pose, id.torso, 0.1 * k);
+      turn(pose, id.head, -0.12 * k);
+      for (const s of SIDES) {
+        const L = s > 0;
+        turn(pose, L ? id.legL : id.legR, (L ? -0.6 : -0.2) * k, 0, 0.06 * s * k);
+        turn(pose, L ? id.shinL : id.shinR, (L ? 0.95 : 0.55) * k);
+        turn(pose, L ? id.footL : id.footR, (L ? -0.25 : -0.15) * k);
+        turn(pose, L ? id.armL : id.armR, -0.3 * k, 0, 0.6 * s * k);
+        turn(pose, L ? id.foreL : id.foreR, -0.45 * k);
+      }
+      dress(pose, time, w, 0.03 + 0.3 * k, 1.4, 0.1 * k);
+    },
+  };
   /** Seated: the figure's place is the seat (the saddle anchor of a mount). */
   const ride: FigureMotion = {
     sample(pose, time, f) {
@@ -448,6 +492,132 @@ function pathfinder(): FigureKind {
     },
   };
 
+  // --- Additive motions of the whole body, weighted by its acceleration ---
+  /** Leaning into a start: the trunk forward, the head kept level, the arms driving. */
+  const push: FigureMotion = {
+    sample(pose) {
+      turn(pose, id.torso, 0.2);
+      turn(pose, id.head, -0.13);
+      turn(pose, id.armL, -0.25, 0, 0.05);
+      turn(pose, id.armR, 0.25, 0, -0.05);
+      turn(pose, id.cloak, 0.12);
+    },
+  };
+  /** Braced against a stop: the trunk back, the knees bent, the legs ahead of the body, the arms out for balance. */
+  const brace: FigureMotion = {
+    sample(pose) {
+      // The knees bend; the ground fit lowers the hips until the feet reach the ground again.
+      turn(pose, id.torso, -0.2);
+      turn(pose, id.head, 0.14);
+      for (const s of SIDES) {
+        const L = s > 0;
+        turn(pose, L ? id.legL : id.legR, -0.22, 0, 0.04 * s);
+        turn(pose, L ? id.shinL : id.shinR, 0.3);
+        turn(pose, L ? id.armL : id.armR, -0.45, 0, 0.2 * s);
+        turn(pose, L ? id.foreL : id.foreR, -0.3);
+      }
+      turn(pose, id.cloak, -0.25);
+      turn(pose, id.lampL, 0.2);
+      turn(pose, id.lampR, 0.2);
+    },
+  };
+
+  // --- Motions of the upper body (for a layer masked to the arms) ---
+  /** The right arm raised high, the forearm waving from side to side; one wave a pass. */
+  const wave: FigureMotion = {
+    duration: WAVE_S,
+    sample(pose, time) {
+      const a = Math.sin((time / WAVE_S) * TAU);
+      turn(pose, id.armR, -0.3, 0, -2.45 + 0.05 * a);
+      turn(pose, id.foreR, -0.3, 0, 0.55 * a);
+      turn(pose, id.armL, 0.03, 0, 0.03);
+    },
+  };
+  /** The right arm held forward, the forearm a little raised: a hand that gives (the reach puts it on its target). */
+  const offer: FigureMotion = {
+    sample(pose, time) {
+      turn(pose, id.armR, -1.05 + 0.01 * Math.sin(1.3 * time), 0, 0.15);
+      turn(pose, id.foreR, -0.55);
+    },
+  };
+  /** The right arm forward and lower, the hand open below the other's: a hand that takes. */
+  const take: FigureMotion = {
+    sample(pose, time) {
+      turn(pose, id.armR, -0.85 + 0.01 * Math.sin(1.1 * time), 0, 0.2);
+      turn(pose, id.foreR, -0.8);
+    },
+  };
+  /** Both forearms raised in front of the chest, the hands holding something open between them. */
+  const read: FigureMotion = {
+    sample(pose, time) {
+      const b = 0.01 * Math.sin(1.7 * time);
+      for (const s of SIDES) {
+        const L = s > 0;
+        turn(pose, L ? id.armL : id.armR, -0.55 + b, 0, -0.3 * s);
+        turn(pose, L ? id.foreL : id.foreR, -1.45 + b, 0.2 * s);
+      }
+    },
+  };
+  /**
+   * From standing (k = 0) to the seat of `sit` (k = 1): the knees draw up, the body leans forward on the way down and
+   * settles; `drop` lowers the pelvis.
+   */
+  const seat = (pose: Pose, time: number, f: { seed: number }, k: number, drop: number): void => {
+    const w = f.seed * TAU;
+    shift(pose, id.root, 0, -0.41 * drop, 0);
+    turn(pose, id.torso, mix(0.015, 0.2, k) + 0.4 * Math.sin(Math.PI * Math.min(1, Math.max(0, drop))));
+    turn(pose, id.head, mix(0, -0.14, k) - 0.2 * Math.sin(Math.PI * Math.min(1, Math.max(0, drop))));
+    for (const sd of SIDES) {
+      const L = sd > 0;
+      turn(pose, L ? id.legL : id.legR, mix(0, -2.02, k), 0, mix(0, 0.2, k) * sd);
+      turn(pose, L ? id.shinL : id.shinR, mix(0, 1.5, k));
+      turn(pose, L ? id.armL : id.armR, mix(0.03, -1.2, k) - 0.3 * Math.sin(Math.PI * k), 0, mix(0, -0.12, k) * sd);
+      turn(pose, L ? id.foreL : id.foreR, mix(0, -0.55, k));
+    }
+    dress(pose, time, w, mix(0.03, 0.0, k), 1, 0.02);
+  };
+  /** Sitting down on the ground in `SIT_DOWN_S`: the knees bend first, then the pelvis goes down; holds the end. */
+  const sitDown: FigureMotion = {
+    duration: SIT_DOWN_S,
+    loop: false,
+    sample(pose, time, f) {
+      const t = time / SIT_DOWN_S;
+      seat(pose, time, f, smooth(t / 0.8), smooth((t - 0.15) / 0.85));
+    },
+  };
+  /** Standing up from `sit` in `STAND_UP_S`: leaning forward, the pelvis rises, the legs straighten; holds the end. */
+  const standUp: FigureMotion = {
+    duration: STAND_UP_S,
+    loop: false,
+    sample(pose, time, f) {
+      const t = time / STAND_UP_S;
+      seat(pose, time, f, 1 - smooth((t - 0.1) / 0.9), 1 - smooth(t / 0.85));
+    },
+  };
+
+  // --- Things held: a small box, and a book whose front half turns about the spine ---
+  const box = new FigureMesh(901);
+  box.paint(WOOD, MAT.flat, 0.08).box([0, 0, 0], [0.2, 0.15, 0.17]);
+  box.paint(LEATHER_DARK, MAT.flat, 0.04).box([0, 0, 0], [0.205, 0.04, 0.175]);
+  box.paint(BRASS, MAT.flat, 0).box([0, 0, 0.088], [0.04, 0.05, 0.008]);
+  // The book in the frame of its socket: the spine along y at x = 0, each half to +x when closed, its pages on the
+  // half's side toward −z; the front half (the reader's side) turns about the y axis through (0, 0, −BOOK_HINGE_Z).
+  const bookBack = new FigureMesh(902);
+  bookBack.paint(rgb('#7a2f2a'), MAT.flat, 0.05).box([0.08, 0, 0.006], [0.165, 0.23, 0.012]);
+  bookBack.paint(rgb('#efe6cf'), MAT.flat, 0.03).box([0.077, 0, -0.008], [0.152, 0.215, 0.016]);
+  const bookFront = new FigureMesh(903);
+  bookFront.paint(rgb('#efe6cf'), MAT.flat, 0.03).box([0.077, 0, -0.024], [0.152, 0.215, 0.016]);
+  bookFront.paint(rgb('#7a2f2a'), MAT.flat, 0.05).box([0.08, 0, -0.038], [0.165, 0.23, 0.012]);
+  bookFront.paint(BRASS, MAT.flat, 0).box([0.15, 0, -0.045], [0.02, 0.05, 0.004]);
+
+  /** A socket at a rest point of a bone, turned about x by `ax` and then about y by `ay`. */
+  const socket = (bone: Bone, at: P, ax = 0, ay = 0): { bone: number; local: number[] } => {
+    const p = B.local(bone, at);
+    const cx = Math.cos(ax), sx = Math.sin(ax), cy = Math.cos(ay), sy = Math.sin(ay);
+    // Columns of Rx(ax) · Ry(ay).
+    return { bone: p.bone, local: [cy, sx * sy, -cx * sy, 0, cx, sx, sy, -sx * cy, cx * cy, p.at[0], p.at[1], p.at[2]] };
+  };
+
   // --- Looks ---
   const CLOAKS = ['#a9402f', '#ecdcb4', '#6f7f3a', '#dca638', '#3f6f96', '#7a3a52', '#3f8c84', '#c9682c'].map(rgb);
   const TRIMS = ['#ecd7a8', '#3f8c84', '#dba032', '#7a2a3a', '#e8d3a4', '#e0b040', '#ecdcb4', '#f0e0b8'].map(rgb);
@@ -464,7 +634,8 @@ function pathfinder(): FigureKind {
   const looks = new Map<number, FigureLook>();
   /**
    * Variants 0–3: the sheet's four. Bit 2 and up of a larger number are a seed for a combination of its own; adding
-   * `PATHFINDER_TORCH` to any variant puts a torch in the hand, `PATHFINDER_MIRROR` the pole on the other side.
+   * `PATHFINDER_TORCH` to any variant puts a torch in the hand, `PATHFINDER_MIRROR` the pole on the other side,
+   * `PATHFINDER_TAIL` a ponytail behind whatever hair it has.
    */
   const look = (variant: number): FigureLook => {
     let l = looks.get(variant);
@@ -487,6 +658,7 @@ function pathfinder(): FigureKind {
     let features = made.features;
     if (Math.floor(v / PATHFINDER_MIRROR) & 1) features = (features & ~F.poleL) | F.poleR;
     if (Math.floor(v / PATHFINDER_TORCH) & 1) features |= F.torch;
+    if (Math.floor(v / PATHFINDER_TAIL) & 1) features |= F.tail;
     looks.set(variant, (l = { colors: made.colors, features }));
     return l;
   };
@@ -521,14 +693,44 @@ function pathfinder(): FigureKind {
     name: 'pathfinder',
     skeleton: B.skeleton,
     parts: B.parts(),
-    motions: { stand, walk, run, bear, hold, ride, swim, sit },
+    motions: { stand, walk, run, bear, hold, ride, swim, sit, leap, wave, offer, take, read, sitDown, standUp, push, brace },
     anchors: { lantern: B.local('lampL', [0.56, 1.53, -0.4]), head: B.local('head', [0, 1.7, 0]), torch: B.local('foreR', [-0.42, 0.66, 0.7]) },
     look,
     heightM: 1.72,
     capacity: 32,
     shadowRangeM: 160,
+    legs: {
+      chains: [
+        { upper: id.legL, lower: id.shinL, end: id.footL },
+        { upper: id.legR, lower: id.shinR, end: id.footR },
+      ],
+      pelvis: id.root,
+    },
+    arms: {
+      left: { chain: { upper: id.armL, lower: id.foreL, end: id.handL, bend: [-1, 0, 0] }, pole: [0.75, 0.75, -0.55] },
+      right: { chain: { upper: id.armR, lower: id.foreR, end: id.handR, bend: [-1, 0, 0] }, pole: [-0.75, 0.75, -0.55] },
+    },
+    gaze: { bones: [id.torso, id.head], shares: [0.25, 0.75], eye: B.local('head', [0, 1.43, 0.19]).at, maxYaw: 80 * (Math.PI / 180), maxUp: 35 * (Math.PI / 180), maxDown: 55 * (Math.PI / 180) },
+    // The ponytail: stiff enough to keep its shape, swinging a few times after a stop; a little gravity.
+    lag: [{ bones: [id.tail, id.tail2, id.tail3], end: [0, -0.14, -0.04], stiffness: 90, damping: 7, gravity: 0.25, maxAngle: 1.0 }],
+    sockets: {
+      handL: socket('handL', [0.42, 0.575, 0.07]),
+      handR: socket('handR', [-0.42, 0.575, 0.07]),
+      read: socket('torso', [0, 1.1, 0.45], 0.75),
+      pocket: socket('torso', [-0.3, 0.86, -0.3], 0, Math.PI / 2),
+      belt: socket('torso', [-0.33, 0.66, 0.14], 0, 0.5),
+    },
+    props: { box: box.mesh(), bookBack: bookBack.mesh(), bookFront: bookFront.mesh() },
   };
 }
+
+/** Seconds of one wave of the pathfinder's motion `wave`. */
+export const WAVE_S = 0.6;
+/** Seconds of the pathfinder's `sitDown` and `standUp`. */
+export const SIT_DOWN_S = 1.3;
+export const STAND_UP_S = 1.1;
+/** Where the front half of the pathfinder's book turns: the y axis through (0, 0, −BOOK_HINGE_Z) of its socket. */
+export const BOOK_HINGE_Z = 0.016;
 
 /** Seconds after which the pathfinder's motion `sit` repeats exactly. */
 export const SIT_LOOP_S = 60;
@@ -536,5 +738,7 @@ export const SIT_LOOP_S = 60;
 export const PATHFINDER_TORCH = 4096;
 /** Added to a pathfinder's variant: the pole and its lantern on the right side instead of the left. */
 export const PATHFINDER_MIRROR = 8192;
+/** Added to a pathfinder's variant: a ponytail (on the lagging chain of `lag`) behind whatever hair the look has. */
+export const PATHFINDER_TAIL = 16384;
 
 export const PATHFINDERS = { pathfinder } as const;

@@ -7,14 +7,16 @@
 //   ground=follow: the ground starts dry and bare and follows the weather (`weatherGround` on the animation clock):
 //   with w=snow it whitens over a few minutes, with w=rain it is wet within half a minute.
 // Controls: drag orbits, the wheel zooms, [ ] move the hour, space runs the day, P pauses the figures, . steps one
-// tick, - and = halve and double their speed, C calls the wanderers to the gap in the ring.
+// tick, - and = halve and double their speed, C calls the wanderers to the gap in the ring. N switches the mark mode
+// (dev server only: a click pins a note to the island; marks=1 turns the marks on in a page driven by a script,
+// marks=0 hides the pins).
 
 import { DEFAULT_WEATHER, PerspectiveOrbitRig, definePalette, heightFieldMesh, weatherGround } from 'wallhammer-web';
 import type { InstanceData, MeshData, WeatherState } from 'wallhammer-web';
 import { InstancedLayer, MeshLayer, RigLayer } from 'wallhammer-web/render';
 import type { InstanceBatch, Material } from 'wallhammer-web/render';
 import type { Uniforms } from 'wallhammer-web/base';
-import { createEngine } from 'wallhammer-web/runtime';
+import { createEngine, heightPick, installEngineMarking } from 'wallhammer-web/runtime';
 import { FigureLayer } from './figures.ts';
 import { glowSlot } from './glow.ts';
 import { TAG, createLife } from './life.ts';
@@ -69,6 +71,8 @@ if (groundFollows) {
 const field = islandField(seed);
 /** How far the sea reaches beyond the island: far enough that its edge lies under the horizon haze. */
 const SEA_REACH_M = 4000;
+/** The level of the sea, metres. */
+const SEA_Y = -0.8;
 const c = ISLAND_SIZE_M / 2;
 view.target = [c, 6, c];
 env.fogLayer = { bottomY: field.minY, topY: field.maxY + 10 };
@@ -81,7 +85,7 @@ const stones = (shape: MeshData, data: InstanceData, albedo: [number, number, nu
   return { lods: [renderer.createMesh(shape, stoneMat, instances)], instances, all: data.data, uniforms: { u_albedo: { vec3: albedo }, u_glowBand: { float: glowBand } } };
 };
 engine.add(meshLayer(ground, heightFieldMesh(field, field.minY - 6), [1, 1, 1]));
-engine.add(meshLayer(solid, seaMesh(-0.8, SEA_REACH_M), [0.12, 0.2, 0.23], { u_water: { float: 1 }, u_glowShare: { float: 0 } }));
+engine.add(meshLayer(solid, seaMesh(SEA_Y, SEA_REACH_M), [0.12, 0.2, 0.23], { u_water: { float: 1 }, u_glowShare: { float: 0 } }));
 engine.add(meshLayer(solid, ringMesh([c, field.heightAt(c, c), c], 7.5, 0.9, RING_YAW), [0.62, 0.6, 0.58], { u_water: { float: 0 }, u_glowShare: { float: 0.35 } }));
 const stoneLayer = new InstancedLayer(engine.device, { material: stoneMat, bounds: STONE_BOUNDS });
 stoneLayer.batches = [stones(slabMesh(), standingStones(field, seed), [0.6, 0.58, 0.55], 1), stones(boulderMesh(seed), boulders(field, seed), [0.47, 0.45, 0.43], 0)];
@@ -144,4 +148,20 @@ const now = <T>(f: () => T): T => (f(), engine.renderNow(), undefined as T);
   stats: () => ({ ...renderer.lastStats, renderer: engine.device.name, seed, tick: sim.tick, state: sim.stateHash(), figures: t.count, glow: engine.link.value(glow)?.strength ?? 0 }),
   benchmark: (n: number): number => renderer.benchmark(view, n),
 };
+
+// Marks (key N): notes pinned to points of the island, picked against its height field with the sea over it (stones,
+// figures and the cart are not in the pick). A mark's hash is the page's own with the tick of the figures (`tick=`, so
+// the figures stand where they stood) and the exact view. Only in the dev server (the live demos have none);
+// `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  const marks = installEngineMarking(engine, {
+    pick: heightPick((x, z) => Math.max(field.heightAt(x, z), SEA_Y), { maxDistanceM: SEA_REACH_M, topM: field.maxY + 20, surface: 'island ground or sea' }),
+    hash: () => {
+      const p = new URLSearchParams(location.hash.slice(1));
+      p.set('tick', String(sim.tick));
+      return p.toString();
+    },
+  });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
 engine.start();

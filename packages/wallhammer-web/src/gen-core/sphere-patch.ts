@@ -12,6 +12,11 @@
 //   parent's surface is flat triangles between every second vertex, so the shift includes the bulge of the sphere
 //   between them: a vertex moved by the whole shift lies exactly on the parent's triangle.
 // - A skirt hangs from the border toward the centre and covers the step against a neighbour of another level.
+// - Each quad is cut into two triangles along one of its diagonals (`split`): always the same one by default, or per
+//   quad the one whose ends differ less in height. The rule (`spherePatchSplitsAD`) reads only the four corners'
+//   distances from the centre, which carry the same bits in every cell that has them, so the mesh, the parent's
+//   surface in `a_coarseShift` and `spherePatchRadius` agree. A diagonal never lies on a cell's border (it joins
+//   opposite corners of one quad), so borders, seams and skirts do not depend on the split.
 //
 // Positions are relative to the cell origin, the middle of the cell on the base sphere; axes are the world's.
 
@@ -116,6 +121,28 @@ float spherePatchMorph(vec3 p) {
 }
 `;
 
+/**
+ * How the quads of a patch are cut into triangles. `'fixed'`: every quad along the diagonal from (i + 1, j) to
+ * (i, j + 1). `'shorter'`: per quad along the diagonal whose two ends differ less in height (ties keep the fixed
+ * diagonal), which keeps the edge of a steep wall straight instead of a saw.
+ */
+export type SpherePatchSplit = 'fixed' | 'shorter';
+
+/**
+ * True when the quad with corners a (i, j), b (i + 1, j), c (i, j + 1), d (i + 1, j + 1) is cut along a–d, false when
+ * along b–c. Arguments are the corners' distances from the sphere's centre (radius plus height, as the patch computes
+ * them). Pure, and the one rule for every place that needs the split: the mesh, the parent's surface it blends into and
+ * `spherePatchRadius`.
+ *
+ * Why the height difference and not the shorter diagonal in space: the teeth along a wall come from a diagonal that
+ * climbs the wall, i.e. from the difference in height alone. The length in space adds the grid's own distortion (the
+ * warped cube makes the two diagonals of a quad differ in length on flat ground), so flat ground would change its
+ * diagonals by where it lies on the face. With heights, flat ground ties and keeps the fixed diagonal.
+ */
+export function spherePatchSplitsAD(split: SpherePatchSplit, ra: number, rb: number, rc: number, rd: number): boolean {
+  return split === 'shorter' && Math.abs(ra - rd) < Math.abs(rb - rc);
+}
+
 export interface SpherePatchOptions {
   /** Radius of the base sphere in metres. */
   radiusM: number;
@@ -150,6 +177,16 @@ export interface SpherePatchOptions {
    * them are those of the patch without it. Default: none.
    */
   extraAt?: (x: number, y: number, z: number, height: number) => readonly [number, number, number, number];
+  /**
+   * How `a_coarseExtra` is made at a vertex that is not a vertex of the parent. `'blend'` (default): thinned like the
+   * colour, the parent's surface value there (a mean of two parent vertices). `'nearest'`: the four bytes of one of
+   * those two parent vertices unchanged, the one nearer in space (on a tie the larger value, the bytes read as one
+   * number with the first byte highest), so a byte that holds a category never becomes a mix of two. Between the
+   * vertices a shader still interpolates whatever it is given.
+   */
+  coarseExtra?: 'blend' | 'nearest';
+  /** How each quad is cut into triangles (default `'fixed'`, see `SpherePatchSplit`). */
+  split?: SpherePatchSplit;
   /** Least depth of the skirt in metres. 0 = no skirt. */
   skirtDepth: number;
 }
@@ -311,7 +348,8 @@ export function spherePatchMesh(o: SpherePatchOptions): SpherePatch {
   }
 
   // The parent's surface at every vertex: where the line from the centre through the vertex meets the parent's
-  // triangle (the parent's vertices are every second vertex, its quads are split by the same diagonal).
+  // triangle (the parent's vertices are every second vertex, its quads are split by the same rule, from the same
+  // corner distances: `parentAD`).
   //
   // A vertex on a line of the parent's grid lies on the parent's edge between the two vertices of that line. Only those
   // two enter there, through their mean and their difference, so the result has the same bits whichever of them comes
@@ -332,6 +370,10 @@ export function spherePatchMesh(o: SpherePatchOptions): SpherePatch {
     const nz = ex * wy - ey * wx;
     return (nx * mx + ny * my + nz * mz) / (nx * dir[s]! + ny * dir[s + 1]! + nz * dir[s + 2]!);
   };
+  const split: SpherePatchSplit = o.split ?? 'fixed';
+  /** Whether the parent's quad with its lower corner at (i0, j0) (both even) is cut along a–d. */
+  const parentAD = (i0: number, j0: number): boolean =>
+    split !== 'fixed' && spherePatchSplitsAD(split, rad[at(i0, j0)]!, rad[at(i0 + 2, j0)]!, rad[at(i0, j0 + 2)]!, rad[at(i0 + 2, j0 + 2)]!);
   const coarse = new Float64Array(n * n);
   for (let j = 0; j < n; j++) {
     const j0 = Math.min(j - (j % 2), q - 2);
@@ -353,10 +395,22 @@ export function spherePatchMesh(o: SpherePatchOptions): SpherePatch {
       const qa = at(i0, j0) * 3;
       const qb = at(i0 + 2, j0) * 3;
       const qc = at(i0, j0 + 2) * 3;
-      const lower = sameSide(pos, qa, qb, qc, dir[at(i, j) * 3]!, dir[at(i, j) * 3 + 1]!, dir[at(i, j) * 3 + 2]!);
-      const a = lower ? qa : at(i0 + 2, j0 + 2) * 3;
-      const b = lower ? qb : qc;
-      const c = lower ? qc : qb;
+      let a: number;
+      let b: number;
+      let c: number;
+      if (parentAD(i0, j0)) {
+        // Cut along a–d: the triangles (a, b, d) and (a, d, c), parted by the plane through the centre, a and d.
+        const qd = at(i0 + 2, j0 + 2) * 3;
+        const right = sameSide(pos, qb, qa, qd, dir[at(i, j) * 3]!, dir[at(i, j) * 3 + 1]!, dir[at(i, j) * 3 + 2]!);
+        a = qa;
+        b = right ? qb : qd;
+        c = right ? qd : qc;
+      } else {
+        const lower = sameSide(pos, qa, qb, qc, dir[at(i, j) * 3]!, dir[at(i, j) * 3 + 1]!, dir[at(i, j) * 3 + 2]!);
+        a = lower ? qa : at(i0 + 2, j0 + 2) * 3;
+        b = lower ? qb : qc;
+        c = lower ? qc : qb;
+      }
       const mn = unitCross(pos[b]! - pos[a]!, pos[b + 1]! - pos[a + 1]!, pos[b + 2]! - pos[a + 2]!, pos[c]! - pos[a]!, pos[c + 1]! - pos[a + 1]!, pos[c + 2]! - pos[a + 2]!, out3);
       const s = at(i, j) * 3;
       coarse[k] = (mn[0] * pos[a]! + mn[1] * pos[a + 1]! + mn[2] * pos[a + 2]!) / (mn[0] * dir[s]! + mn[1] * dir[s + 1]! + mn[2] * dir[s + 2]!);
@@ -400,6 +454,59 @@ export function spherePatchMesh(o: SpherePatchOptions): SpherePatch {
       for (let k = 0; k < n * n; k++) channel[k] = extras[k * 4 + ch]!;
       const thin = HeightField.coarseSurface(n, n, channel, 2);
       for (let k = 0; k < n * n; k++) coarseExtras[k * 4 + ch] = Math.round(thin[k]!);
+    }
+  }
+  // The middle of a parent's quad cut along a–d lies on that diagonal: its values there are the mean of a and d (the
+  // thinning above takes b and c). Inside the cell only, so no neighbour has to agree.
+  if (split !== 'fixed') {
+    for (let j0 = 0; j0 < q; j0 += 2) {
+      for (let i0 = 0; i0 < q; i0 += 2) {
+        if (!parentAD(i0, j0)) continue;
+        const k = (j0 + 1) * n + i0 + 1;
+        const ka = j0 * n + i0;
+        const kd = (j0 + 2) * n + i0 + 2;
+        coarseNx[k] = (cnx[ka]! + cnx[kd]!) * 0.5;
+        coarseNy[k] = (cny[ka]! + cny[kd]!) * 0.5;
+        coarseNz[k] = (cnz[ka]! + cnz[kd]!) * 0.5;
+        for (let ch = 0; ch < 4; ch++) coarseColors[k * 4 + ch] = Math.round((colors[ka * 4 + ch]! + colors[kd * 4 + ch]!) * 0.5);
+        if (covers && coarseCovers) {
+          for (let ch = 0; ch < 4; ch++) coarseCovers[k * 4 + ch] = Math.round((covers[ka * 4 + ch]! + covers[kd * 4 + ch]!) * 0.5);
+        }
+        if (extras && coarseExtras) {
+          for (let ch = 0; ch < 4; ch++) coarseExtras[k * 4 + ch] = Math.round((extras[ka * 4 + ch]! + extras[kd * 4 + ch]!) * 0.5);
+        }
+      }
+    }
+  }
+  // `coarseExtra: 'nearest'`: a vertex off the parent's vertices takes the bytes of one end of the parent's edge or
+  // diagonal it lies on. The choice reads only the two ends' positions and bytes (which carry the same bits from
+  // every cell), never which end comes first, so cells that share a border agree.
+  if (extras && coarseExtras && o.coarseExtra === 'nearest') {
+    const word = (k: number): number => ((extras[k * 4]! << 24) >>> 0) + (extras[k * 4 + 1]! << 16) + (extras[k * 4 + 2]! << 8) + extras[k * 4 + 3]!;
+    const dist2 = (s: number, e: number): number => {
+      const dx = pos[e]! - pos[s]!;
+      const dy = pos[e + 1]! - pos[s + 1]!;
+      const dz = pos[e + 2]! - pos[s + 2]!;
+      return dx * dx + dy * dy + dz * dz;
+    };
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        if (i % 2 === 0 && j % 2 === 0) continue;
+        let ea: [number, number];
+        let eb: [number, number];
+        if (j % 2 === 0) (ea = [i - 1, j]), (eb = [i + 1, j]);
+        else if (i % 2 === 0) (ea = [i, j - 1]), (eb = [i, j + 1]);
+        else if (parentAD(i - 1, j - 1)) (ea = [i - 1, j - 1]), (eb = [i + 1, j + 1]);
+        else (ea = [i + 1, j - 1]), (eb = [i - 1, j + 1]);
+        const s = at(i, j) * 3;
+        const da = dist2(s, at(ea[0], ea[1]) * 3);
+        const db = dist2(s, at(eb[0], eb[1]) * 3);
+        const ka = ea[1] * n + ea[0];
+        const kb = eb[1] * n + eb[0];
+        const from = da < db ? ka : db < da ? kb : word(ka) >= word(kb) ? ka : kb;
+        const k = j * n + i;
+        for (let ch = 0; ch < 4; ch++) coarseExtras[k * 4 + ch] = extras[from * 4 + ch]!;
+      }
     }
   }
 
@@ -487,7 +594,16 @@ export function spherePatchMesh(o: SpherePatchOptions): SpherePatch {
       const b = a + 1;
       const c = a + n;
       const d = c + 1;
-      // u × v points outward: (a, b, c) winds anticlockwise seen from outside.
+      // u × v points outward: (a, b, c) winds anticlockwise seen from outside, and so do (a, b, d) and (a, d, c).
+      if (split !== 'fixed' && spherePatchSplitsAD(split, own[a]!, own[b]!, own[c]!, own[d]!)) {
+        idx[w++] = a;
+        idx[w++] = b;
+        idx[w++] = d;
+        idx[w++] = a;
+        idx[w++] = d;
+        idx[w++] = c;
+        continue;
+      }
       idx[w++] = a;
       idx[w++] = b;
       idx[w++] = c;
@@ -541,9 +657,10 @@ export function spherePatchMesh(o: SpherePatchOptions): SpherePatch {
  * Distance from the sphere's centre at which the line along the unit direction `dir` meets the surface a patch draws:
  * the flat triangles of its own grid (`step` 1) or of the cell one level coarser (`step` 2, the shape the patch
  * blends into). For standing something on the mesh of a level instead of on the ideal surface, where it would float
- * above a coarse level or sink into it. `dir` should point into the cell; outside it the nearest quad is used.
+ * above a coarse level or sink into it. `dir` should point into the cell; outside it the nearest quad is used. Pass
+ * the `split` the mesh was made with (default `'fixed'`); the coarser level is split by the same rule.
  */
-export function spherePatchRadius(o: Pick<SpherePatchOptions, 'radiusM' | 'face' | 'level' | 'x' | 'y' | 'quads' | 'heightAt'>, dir: readonly [number, number, number], step: 1 | 2 = 1): number {
+export function spherePatchRadius(o: Pick<SpherePatchOptions, 'radiusM' | 'face' | 'level' | 'x' | 'y' | 'quads' | 'heightAt' | 'split'>, dir: readonly [number, number, number], step: 1 | 2 = 1): number {
   const R = o.radiusM;
   const N = o.quads * 2 ** o.level;
   const gx0 = o.x * o.quads;
@@ -554,16 +671,34 @@ export function spherePatchRadius(o: Pick<SpherePatchOptions, 'radiusM' | 'face'
   const gv = (((t + 1) / 2) * N - gy0) / step;
   const i = Math.min(count - 1, Math.max(0, Math.floor(gu)));
   const j = Math.min(count - 1, Math.max(0, Math.floor(gv)));
+  /** Distance from the centre of the last vertex made, the number the mesh decides its split by. */
+  let lastR = 0;
   const vertex = (a: number, b: number): [number, number, number] => {
     const d = cubeDirection(o.face, cubeGrid(gx0 + a * step, N), cubeGrid(gy0 + b * step, N));
     const r = R + o.heightAt(d[0] * R, d[1] * R, d[2] * R);
+    lastR = r;
     return [d[0] * r, d[1] * r, d[2] * r];
   };
-  // The same split of a quad as the mesh, along the diagonal from (i + 1, j) to (i, j + 1). The line meets the triangle
-  // on its side of the plane through the centre and that diagonal.
+  // The same split of a quad as the mesh (`spherePatchSplitsAD` on the corners' distances from the centre, the bits
+  // the mesh has). The line meets the triangle on its side of the plane through the centre and the diagonal.
   const v00 = vertex(i, j);
+  const r00 = lastR;
   const v10 = vertex(i + 1, j);
+  const r10 = lastR;
   const v01 = vertex(i, j + 1);
+  const r01 = lastR;
+  const split = o.split ?? 'fixed';
+  if (split !== 'fixed') {
+    const v11 = vertex(i + 1, j + 1);
+    if (spherePatchSplitsAD(split, r00, r10, r01, lastR)) {
+      // Cut along a–d: the triangles (a, b, d) and (a, d, c), parted by the plane through the centre, a and d.
+      const right = sameSide([...v10, ...v00, ...v11], 0, 3, 6, dir[0], dir[1], dir[2]);
+      const B = right ? v10 : v11;
+      const C = right ? v11 : v01;
+      const m = unitCross(B[0] - v00[0], B[1] - v00[1], B[2] - v00[2], C[0] - v00[0], C[1] - v00[1], C[2] - v00[2], [0, 0, 0]);
+      return (m[0] * v00[0] + m[1] * v00[1] + m[2] * v00[2]) / (m[0] * dir[0] + m[1] * dir[1] + m[2] * dir[2]);
+    }
+  }
   const lower = sameSide([...v00, ...v10, ...v01], 0, 3, 6, dir[0], dir[1], dir[2]);
   const A = lower ? v00 : vertex(i + 1, j + 1);
   const B = lower ? v10 : v01;

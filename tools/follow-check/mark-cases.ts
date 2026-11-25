@@ -1,12 +1,13 @@
 // Headless cases of the marks for the engine's own cameras (runtime/marks.ts), run by check:follow next to the cases
 // of the following view and of the free path. Plain Node, no DOM and no GPU: an engine stand-in with the parts the
-// marks use. A view recorded and restored puts both rigs back exactly (text, eye, axes, key), the URL hash carries the
-// page's own hash plus the view, a pick through a height function and through a collision world lands on the surface,
-// and the pixel of a picked point comes back from `toScreen`. The DOM side (`installMarking`: the panel, the pins,
+// marks use. A view recorded and restored puts the three rigs (free, following, orbit) back exactly (text, eye, axes,
+// key), the URL hash carries the page's own hash plus the view, a pick through a height function and through a
+// collision world lands on the surface, and the pixel of a picked point comes back from `toScreen`. The DOM side (`installMarking`: the panel, the pins,
 // the picture) is not exercised here; it needs a browser.
 
 import type { Vec3 } from '../../packages/wallhammer-web/src/base/math.ts';
 import type { View } from '../../packages/wallhammer-web/src/base/view.ts';
+import { SteppedOrthoRig } from '../../packages/wallhammer-web/src/camera/camera.ts';
 import { FollowRig } from '../../packages/wallhammer-web/src/camera/follow.ts';
 import { FreeRig } from '../../packages/wallhammer-web/src/camera/free.ts';
 import { PerspectiveOrbitRig } from '../../packages/wallhammer-web/src/camera/orbit.ts';
@@ -163,12 +164,43 @@ export function runMarkChecks(): FollowCase[] {
     add('collision pick and pixel', !!hit && hit.place.solid === id && hit.place.tag === 7 && hit.distanceM < 8 && pxErr < 0.01 && facts.camera === 'follow' && below?.surface === 'base surface', hit ? `${hit.surface} tag ${hit.place.tag} at ${hit.distanceM} m, pixel ${pxErr.toExponential(1)} px off, lower ray: ${below?.surface ?? 'nothing'}` : 'no hit');
   }
 
-  // 7. While the engine draws through another kind of view marking is not possible and pins are not placed.
+  // 7. An orbit view comes back bit for bit (its own fields, past the clamps of `setState`); its host's view names the
+  //    camera, picks through a height function and gives the picked point's pixel back.
   {
-    const orbit = new PerspectiveOrbitRig();
-    orbit.width = 800;
-    orbit.height = 600;
-    const host = engineMarkHost(fakeEngine(orbit), { pick: heightPick(ground) });
+    const orbitRig = (): PerspectiveOrbitRig => {
+      const r = new PerspectiveOrbitRig({ fovYDeg: 40, minDistance: 5, maxDistance: 400, groundAt: ground, minEyeHeight: 1 });
+      r.width = 1280;
+      r.height = 720;
+      return r;
+    };
+    const a = orbitRig();
+    a.setState({ target: [12.345, 31.5, -7.25], yawDeg: 37.123, pitchDeg: 24.7, distance: 95.5 });
+    const text = rigViewText(a);
+    const b = orbitRig();
+    const ok = restoreRigView(b, text);
+    const exact = same(a.target, b.target) && a.yaw === b.yaw && a.pitch === b.pitch && a.distance === b.distance && same(a.eye(), b.eye()) && a.key() === b.key();
+    const refused = !restoreRigView(b, rigViewText(freeRig())) && !restoreRigView(freeRig(), text);
+    const eng = fakeEngine(a);
+    const host = engineMarkHost(eng, { pick: heightPick(ground), hash: () => 'seed=7&yaw=37' });
+    const v = host.view();
+    const hashOk = v.hash.startsWith('seed=7&yaw=37&') && hashParam(v.hash, 'mkview') === text && v.camera === 'orbit';
+    const ray = host.ray(640, 360);
+    const hit = host.pick(ray);
+    const s = hit ? host.toScreen(hit.world) : null;
+    const gap = hit ? Math.abs(hit.world[1] - ground(hit.world[0], hit.world[2])) : NaN;
+    const pxErr = s ? Math.hypot(s[0] - 640, s[1] - 360) : NaN;
+    a.setState({ yawDeg: -100, pitchDeg: 60, distance: 20 });
+    host.goto(v);
+    const back = rigViewText(a) === text;
+    add('orbit view round trip and host', ok && exact && refused && hashOk && host.allowed() && !!hit && gap < 0.01 && pxErr < 0.01 && back && host.facts(hit, ray).camera === 'orbit', `restored ${ok}, state ${exact ? 'exact' : 'differs'}, foreign texts ${refused ? 'refused' : 'taken'}, hash ${hashOk ? 'ok' : v.hash}, pick ${hit ? `${hit.distanceM} m, off the surface ${gap.toExponential(1)} m, pixel ${pxErr.toExponential(1)} px off` : 'none'}, goto ${back ? 'back' : 'differs'}`);
+  }
+
+  // 8. While the engine draws through another kind of view marking is not possible and pins are not placed.
+  {
+    const ortho = new SteppedOrthoRig({ yawDeg: 0, pitchDegByZoom: [45], pxPerMeterByZoom: [4] });
+    ortho.width = 800;
+    ortho.height = 600;
+    const host = engineMarkHost(fakeEngine(ortho), { pick: heightPick(ground) });
     add('other view not allowed', !host.allowed() && host.toScreen([0, 0, 0]) === null, `allowed ${host.allowed()}`);
   }
 

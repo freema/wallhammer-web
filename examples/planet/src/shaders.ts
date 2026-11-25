@@ -32,9 +32,10 @@ import { COVER_FADE_GLSL, MEDIUM_GLSL } from 'wallhammer-web/core';
 import { liquidClearDistance, liquidGlsl, liquidRipplesGlsl } from 'wallhammer-web/env';
 import { DEPTH_ONLY_FS, sphereCoverThinGlsl, sphereGroundDepthVs, sphereGroundVs } from 'wallhammer-web/env';
 import type { LiquidLook } from 'wallhammer-web/env';
-import { SPHERE_PATCH_ATTRIBS, SPHERE_PATCH_COVER_ATTRIBS, SPHERE_PATCH_GLSL, WAVES_GLSL } from 'wallhammer-web/gen-core';
+import { SPHERE_PATCH_ATTRIBS, SPHERE_PATCH_COVER_ATTRIBS, SPHERE_PATCH_COVER_EXTRA_ATTRIBS, SPHERE_PATCH_GLSL, WAVES_GLSL } from 'wallhammer-web/gen-core';
 import { STRIP_ATTRIBS, STRIP_GLSL } from 'wallhammer-web/gen-mesh';
 import { PLANT_TOP_M, THIN_RANK } from './world.ts';
+import type { PlanetCellOptions } from './world.ts';
 
 export const OBJECT_ATTRIBS = { a_pos: 0, a_normal: 1, i_base: 2, i_shape: 3, i_color: 4, i_coarseShift: 5 } as const;
 
@@ -245,7 +246,8 @@ vec3 forestFloor(vec3 ground, float g) {
 
 const TERRAIN_VS = sphereGroundVs({ thinRank: THIN_RANK, thinFrom: THIN_FROM, lift: CANOPY_VS });
 
-const TERRAIN_FS = /* glsl */ `#include <header>
+/** The fragment shader of the ground; `extra`: with the tint by the slope channel (`v_extra`, world.ts `slopeExtra`). */
+const terrainFs = (extra: boolean): string => /* glsl */ `#include <header>
 #include <noise>
 #include <lighting>
 #include <atmosphere>
@@ -262,7 +264,7 @@ in vec4 v_color;
 in vec4 v_cover;
 in vec3 v_air;
 in vec3 v_airThrough;
-out vec4 o_color;
+${extra ? 'in vec4 v_extra; // r: slope (rise over run) / 2, g: 1 on a cliff\n' : ''}out vec4 o_color;
 void main() {
   vec3 n = normalize(v_normal);
   vec3 up = localUp(v_world);
@@ -280,7 +282,7 @@ void main() {
   col *= 0.88 + 0.24 * g * detailVisibleAt(8.0, v_world);
   col = mix(col, u_snow.rgb, (1.0 - sea) * u_weather.x * smoothstep(0.6, 0.9, dot(n, up)));
   if (u_showLevels > 0.5) col = mix(col, levelTint(u_cellLevel), 0.55);
-  float sun = sunVisibility(v_world, n, 1.2);
+${extra ? '  // The slope channel: amber with the slope, red on the cliffs.\n  col = mix(col, vec3(0.85, 0.6, 0.15), 0.6 * smoothstep(0.05, 0.4, v_extra.r) * (1.0 - sea));\n  col = mix(col, vec3(0.8, 0.12, 0.08), 0.75 * v_extra.g * (1.0 - sea));\n' : ''}  float sun = sunVisibility(v_world, n, 1.2);
 #ifdef WH_ATMOSPHERE
   // The air's light carries no dimming by the frame's cloud cover: the share under the clouds of this place is the
   // sun visibility times that dimming (u_cloudFieldLight.y, 1 without clouds).
@@ -295,6 +297,8 @@ void main() {
   if (depth > 0.0) lit = seaFloorLight(lit, col, v_world, n, depth, sun);
   o_color = vec4(seaView(lit, v_world, v_air, v_airThrough), 1.0);
 }`;
+
+const TERRAIN_FS = terrainFs(false);
 
 const TERRAIN_DEPTH_VS = sphereGroundDepthVs({ thinRank: THIN_RANK, thinFrom: THIN_FROM, lift: CANOPY_VS });
 
@@ -412,6 +416,29 @@ export const TERRAIN_MATERIAL: MaterialDesc = {
   attribs: SPHERE_PATCH_COVER_ATTRIBS,
   passes: { color: { vs: TERRAIN_VS, fs: TERRAIN_FS }, shadow: { vs: TERRAIN_DEPTH_VS, fs: DEPTH_FS } },
 };
+
+/** Metres the vertex hook of `extra=lift` raises a cliff: a sample of the hook, seen in both passes. */
+const CLIFF_LIFT_M = 6;
+/** The vertex hook of `extra=lift` (`SphereGroundExtra.vertex` of env): the cliffs raised along up. */
+const CLIFF_LIFT_GLSL = /* glsl */ `
+vec3 groundVertex(vec3 p, vec4 extra) {
+  return p + localUp(p) * (${CLIFF_LIFT_M.toFixed(1)} * extra.g);
+}`;
+
+/**
+ * The material of the surface for the page's `extra` option (world.ts, `PlanetCellOptions`): `TERRAIN_MATERIAL`
+ * without it; with it the cells carry the slope channel (`SPHERE_PATCH_COVER_EXTRA_ATTRIBS`), the fragment shader
+ * tints by it, and with `lift` the vertex hook raises the cliffs in the colour and the shadow pass alike.
+ */
+export function terrainMaterial(extra: PlanetCellOptions['extra']): MaterialDesc {
+  if (extra === 'none') return TERRAIN_MATERIAL;
+  const ground = { thinRank: THIN_RANK, thinFrom: THIN_FROM, lift: CANOPY_VS, extra: extra === 'lift' ? { vertex: CLIFF_LIFT_GLSL } : {} };
+  return {
+    name: `planet-terrain-${extra}`,
+    attribs: SPHERE_PATCH_COVER_EXTRA_ATTRIBS,
+    passes: { color: { vs: sphereGroundVs(ground), fs: terrainFs(true) }, shadow: { vs: sphereGroundDepthVs(ground), fs: DEPTH_FS } },
+  };
+}
 
 /** Objects standing on the surface; they leave one by one toward the far end of their level. Needs `u_coverLevel` and `u_showLevels`. */
 export const OBJECT_MATERIAL: MaterialDesc = {

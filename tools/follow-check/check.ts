@@ -12,6 +12,7 @@ import type { BoomClearance } from '../../packages/wallhammer-web/src/camera/fol
 import { newCornerRays } from '../../packages/wallhammer-web/src/base/view.ts';
 import { runMarkChecks } from './mark-cases.ts';
 import { runPathChecks } from './path-cases.ts';
+import { runSphereFollowChecks } from './sphere-cases.ts';
 
 export interface FollowCase {
   name: string;
@@ -159,7 +160,7 @@ export function runFollowChecks(): FollowCase[] {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const t0 = performance.now();
-  const cases = [...runFollowChecks(), ...runPathChecks(), ...runMarkChecks()];
+  const cases = [...runFollowChecks(), ...runPathChecks(), ...runMarkChecks(), ...runSphereFollowChecks()];
   for (const c of cases) console.log(`${c.ok ? 'ok  ' : 'FAIL'} follow: ${c.name} — ${c.detail}`);
   const failed = cases.filter((c) => !c.ok).length;
   console.log(`${cases.length - failed}/${cases.length} follow cases passed in ${(performance.now() - t0).toFixed(0)} ms`);

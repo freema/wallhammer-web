@@ -240,8 +240,12 @@ export interface Channels {
  * channel starts where no channel node drains in, or where two or more do, and ends with the first node that is a base
  * node, a pool node or the start of another channel; that end node belongs to the chain. Channels are ordered by the
  * place of their first node in `d.order`, so a channel comes before the ones below it.
+ *
+ * Only the node count of the grid and `to`, `flow`, `pool` and `order` of the drainage are read, so a drainage made
+ * elsewhere (over a plane grid, say) can be traced too: `to` −1 at a base node, `order` upstream first, `pool` 0
+ * outside pools.
  */
-export function traceChannels(g: SphereGrid, d: Drainage, o: { minFlow: number }): Channels {
+export function traceChannels(g: Pick<SphereGrid, 'count'>, d: Pick<Drainage, 'to' | 'flow' | 'pool' | 'order'>, o: { minFlow: number }): Channels {
   const count = g.count;
   const { to, flow, pool, order } = d;
   const isChannel = (i: number): boolean => to[i]! >= 0 && pool[i] === 0 && flow[i]! >= o.minFlow;

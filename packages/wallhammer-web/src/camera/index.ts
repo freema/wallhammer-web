@@ -12,3 +12,4 @@ export { FreePath, newFreePose, writeFreePose } from './free-path.ts';
 export type { FreeKey, FreePathEase, FreePathOptions, FreePathUp, FreePose } from './free-path.ts';
 export { DEFAULT_FOLLOW, FollowRig } from './follow.ts';
 export type { BoomClearance, FollowOptions, FollowSetup, FollowState } from './follow.ts';
+export { ChartFollowView } from './chart-follow.ts';

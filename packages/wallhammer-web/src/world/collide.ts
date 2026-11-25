@@ -273,6 +273,25 @@ export class CollisionWorld {
     return id >= 0 && id < this.kind.length && this.kind[id] !== KIND_FREE;
   }
 
+  /**
+   * Visits every solid whose outline comes within `radius` of the point (x, z) horizontally, whatever its height span
+   * and options, with its id, its tag and its signed horizontal distance (negative inside). Returns how many it visited.
+   * Allocates nothing; `visit` must not query this world again (the candidate list is shared).
+   */
+  query(x: number, z: number, radius: number, visit: (id: number, tag: number, distance: number) => void): number {
+    const r = radius > 0 ? radius : 0;
+    const n = this.gather(x - r, z - r, x + r, z + r);
+    let hits = 0;
+    for (let k = 0; k < n; k++) {
+      const id = this.cand[k]!;
+      const d = this.nearest(id, x, z);
+      if (d > r) continue;
+      hits++;
+      visit(id, this.tagOf[id]!, d);
+    }
+    return hits;
+  }
+
   /** Calls `fn` for every solid not removed, in id order (debug drawing; allocates). */
   forEachSolid(fn: (id: number, info: SolidInfo) => void): void {
     for (let id = 0; id < this.kind.length; id++) {

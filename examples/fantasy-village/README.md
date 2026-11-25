@@ -41,9 +41,18 @@ Each part also has its own check script (`src/*/check.ts`). Its header gives the
 | Escape | leave movie mode (a drag or the wheel on the picture does the same) or walk mode |
 | G | walk mode on / off: a figure on the square (below) |
 | F | in walk mode: first person and back |
+| N | in the orbit view, dev server only: the mark mode on / off (below) |
 
 In walk mode: W A S D or the arrows walk, Shift runs, space jumps (it does not pause there), a drag turns the view,
 the wheel moves the camera in and out, a gamepad works too (left stick, right stick, A, RT).
+
+Marks (dev server only, not in the live demo): `N` in the orbit view (not in walk mode nor during the movie) switches
+the mark mode; a click pins a note to the ground, picked against the terrain's height function (`heightPick`; the
+buildings, trees, props, villagers and the water's surface are not in it), kept in `internal/marks/` by the dev
+server's store; one call to the engine's `installEngineMarking` in `src/main.ts` (Marks in the engine's docs). The drag
+and the wheel do not orbit while the mode is on; `N` or Escape leaves it. A mark's hash is the page's own (`hash()`)
+plus the exact view and the clocks (`mkview=`, `mkclock=`). `marks=1` turns the marks on in a page driven by a
+script, `marks=0` hides the pins.
 
 The URL hash keeps the view, the mood and the toggles (`#seed=7&yaw=…&pitch=…&dist=…&tx=…&e=1&p=0&v=1`), so a link
 reopens the same picture. Measuring parameters are kept in the hash when given:

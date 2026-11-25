@@ -1,8 +1,11 @@
 // Materials of the test course. Every lit program starts with the engine's header and lighting, so sun, sky, shadows
-// and fog come from the environment, and ends with `aerialPerspective`. Four materials:
+// and fog come from the environment, and ends with `aerialPerspective`. Five materials:
 //   - ground: the base surface with a metre grid (every fifth line stronger), so gaps and heights can be read off
 //   - solid: the solids of the collision world, flat-shaded in the colour of their station
-//   - figure: the walking figure, parts of the engine's instance set (`INSTANCE_SET_GLSL`), a moving shadow caster
+//   - figure: the box figure (`figure=boxes`), parts of the engine's instance set (`INSTANCE_SET_GLSL`), a moving
+//     shadow caster
+//   - pathfinder: the shared pathfinder figure (the default), its vertices with a colour and a material each (plain,
+//     tinted by the part's colour slot, or a light: the lantern's glass)
 //   - wire: the debugging wireframe of the solids, one colour per layer, pulled a little toward the eye
 
 import type { MaterialDesc } from 'wallhammer-web/base';
@@ -121,6 +124,42 @@ void main() {
   o_color = vec4(aerialPerspective(applyFog(c, v_world), v_world), 1.0);
 }`;
 
+const PATHFINDER_VS = /* glsl */ `#include <header>
+in vec3 a_pos;
+in vec3 a_normal;
+in vec4 a_color; // rgb colour, w material: 0 plain, 1 times the instance's tint, 2 a light
+${INSTANCE_SET_GLSL}
+out vec3 v_world;
+out vec3 v_normal;
+out vec3 v_color;
+out float v_material;
+void main() {
+  vec3 w = instancePoint(a_pos);
+  v_world = w;
+  v_normal = instanceNormal(a_normal);
+  v_color = a_color.w > 0.5 && a_color.w < 1.5 ? a_color.rgb * i_extra.rgb : a_color.rgb;
+  v_material = a_color.w;
+  gl_Position = u_viewProj * vec4(w, 1.0);
+}`;
+
+const PATHFINDER_FS = /* glsl */ `#include <header>
+#include <noise>
+#include <lighting>
+#include <sky>
+in vec3 v_world;
+in vec3 v_normal;
+in vec3 v_color;
+in float v_material;
+out vec4 o_color;
+void main() {
+  vec3 n = normalize(v_normal);
+  float sun = sunVisibility(v_world, n, 0.6);
+  vec3 lit = v_color * u_warmTint.rgb * lightOn(n, sun, 1.0);
+  // The lantern's glass glows.
+  if (v_material > 1.5) lit = mix(lit, v_color * 2.2, 0.6);
+  o_color = vec4(aerialPerspective(applyFog(toDisplay(lit), v_world), v_world), 1.0);
+}`;
+
 const WIRE_VS = /* glsl */ `#include <header>
 in vec3 a_pos;
 void main() {
@@ -156,6 +195,13 @@ export const FIGURE_MATERIAL: MaterialDesc = {
   name: 'figure',
   attribs: FIGURE_ATTRIBS,
   passes: { shadow: { vs: FIGURE_DEPTH_VS, fs: DEPTH_FS }, color: { vs: FIGURE_VS, fs: FIGURE_FS } },
+};
+
+/** The pathfinder's parts: position, normal, colour and material per vertex (examples/shared mesh.ts), then the instance record. */
+export const PATHFINDER_MATERIAL: MaterialDesc = {
+  name: 'pathfinder',
+  attribs: { a_pos: 0, a_normal: 1, a_color: 2, ...instanceSetAttribs(3) },
+  passes: { shadow: { vs: FIGURE_DEPTH_VS, fs: DEPTH_FS }, color: { vs: PATHFINDER_VS, fs: PATHFINDER_FS } },
 };
 
 /** Wireframe: `LINE_LAYOUT` lines in one colour (`u_color`), drawn after the scene. */

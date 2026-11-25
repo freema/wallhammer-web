@@ -37,6 +37,12 @@ Then open <http://localhost:5281/destruction/>. Another port: `EXAMPLES_PORT=529
 - Click: an event at the point under the cursor (the first part the ray meets, else the ground). Drag orbits, the wheel zooms.
 - `[` and `]` change the radius, `-` and `=` the energy. `Z` takes back the last event, `R` resets everything.
 - `D` turns thrown chunks on or off, `H` hides the text, space runs the day.
+- `N` switches the mark mode (dev server only, not in the live demo): while it is on, a click pins a note instead of
+  blasting, picked like the blast (the standing parts, else the ground; rubble, debris and falling pieces are not in
+  it), kept in `internal/marks/` by the dev server's store; one call to the engine's `installEngineMarking` in
+  `src/main.ts` (Marks in the engine's docs). The drag and the wheel do not orbit while it is on; `N` or Escape leaves
+  it. A mark's hash is the page's own (with the state `d`) plus the exact view (`mkview=`), so it reopens the same
+  ruin from the same eye. `marks=1` turns the marks on in a page driven by a script, `marks=0` hides the pins.
 - URL hash: `#r=3&e=900&d=<state>&yaw=35&pitch=24&dist=95&tx=60&ty=4&tz=60&hour=14&day=250&w=rain`.
   `d` is the compact state (`encodeStates`), `s=cracked,corner,collapse,cut,roof,fall` applies scripted events (`cut`: three storeys of the flat block opened down to the stairs; `roof`: the same plus a roof section gone over the top storey; `fall`: the whole ground storey of the long block taken out, everything above comes down), `hud=0` hides the text.
   Scripted events load as their final state. With `at=<seconds>` they are presented and the clock stops that long

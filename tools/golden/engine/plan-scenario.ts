@@ -6,7 +6,7 @@ import type { Vec3 } from '../../../packages/wallhammer-web/src/base/index.ts';
 import { cubeDirection, cubeGrid, fractalNoise3, hashInts, rand } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
 import type { CellId } from '../../../packages/wallhammer-web/src/gen-core/index.ts';
 import {
-  HORIZON_AXES, drainGrid, fallingGrade, gridDirection, gridNeighbours, gridNodeArea, gridNodeAt, gridSample, gridWeights, horizonCodeAt,
+  HORIZON_AXES, channelFlow, channelOrder, classifyByThresholds, drainGrid, fallingGrade, gridDirection, gridNeighbours, gridNodeArea, gridNodeAt, gridSample, gridWeights, horizonCodeAt,
   horizonField, horizonLit, limitGrade, lineAt, lineLengths, lineTiles, regionLinks, routeGrid, routeRegions, smoothLine, sphereGrid,
   tileLinesAt, tileLinesOfCell, traceChannels,
 } from '../../../packages/wallhammer-web/src/gen-plan/index.ts';
@@ -258,6 +258,86 @@ export function drainageScript(): unknown[] {
   for (const k of [0, 1, 2, 87, 88, 89]) if (smooth[k] !== line[k]) fail('smoothLine moved an end');
   for (let i = 0; i < 30; i++) if (Math.abs(Math.hypot(smooth[3 * i]!, smooth[3 * i + 1]!, smooth[3 * i + 2]!) - 1) > 1e-12) fail('smoothLine: not unit');
   return [d.filled, d.to, d.order, d.flow, d.pool, d.pools.level, d.pools.nodes, d.pools.outlet, dh.to, ch.start, ch.nodes, ch.into, falling, smooth];
+}
+
+/**
+ * "gen-plan channel order and classes": the Strahler order of the channels of the drainage test field (1 where nothing
+ * runs in, else the highest inflow, plus 1 when two share it; brute force over the inflows), the flow along every
+ * channel (the node's flow, never falling within a channel, `out` the entry before the end), classes by thresholds
+ * (brute force: the count of thresholds reached; NaN class 0; a decreasing list throws), a hand-built tree, an `into`
+ * that points upstream throws, and the channels of a drainage made by hand over a plane grid (no sphere grid).
+ */
+export function channelClassesScript(): unknown[] {
+  const g = sphereGrid(10_000, 5);
+  const heights = drainHeights(g);
+  const supply = Float32Array.from({ length: g.count }, (_, i) => 0.5 + rand(5, i));
+  const d = drainGrid(g, heights, { baseLevel: 0, supply, minPoolNodes: 4, minPoolDepth: 3 });
+  const ch = traceChannels(g, d, { minFlow: 2 });
+  const n = ch.into.length;
+  const order = channelOrder(ch);
+  // Brute force: the orders of the channels that run into each one.
+  const inflows: number[][] = Array.from({ length: n }, () => []);
+  for (let c = 0; c < n; c++) if (ch.into[c]! >= 0) inflows[ch.into[c]!]!.push(c);
+  let highest = 0;
+  for (let c = 0; c < n; c++) {
+    const ins = inflows[c]!.map((k) => order[k]!);
+    const top = ins.length === 0 ? 0 : Math.max(...ins);
+    const want = ins.length === 0 ? 1 : top + (ins.filter((o) => o === top).length >= 2 ? 1 : 0);
+    if (order[c] !== want) fail(`channel order: channel ${c} has ${order[c]}, want ${want}`);
+    highest = Math.max(highest, order[c]!);
+  }
+  if (highest < 3) fail(`channel order: highest only ${highest}`);
+  const flow = channelFlow(ch, d.flow);
+  for (let c = 0; c < n; c++) {
+    const a = ch.start[c]!;
+    const b = ch.start[c + 1]!;
+    for (let k = a; k < b; k++) {
+      if (flow.along[k] !== d.flow[ch.nodes[k]!]) fail(`channel flow: entry ${k} is not its node's flow`);
+      if (k > a && flow.along[k]! < flow.along[k - 1]!) fail(`channel flow: falls along channel ${c}`);
+    }
+    if (flow.out[c] !== flow.along[b - 2]) fail(`channel flow: out of channel ${c}`);
+  }
+  const thresholds = [10, 25, 25, 80];
+  const classes = classifyByThresholds(flow.out, thresholds);
+  for (let c = 0; c < n; c++) {
+    const want = thresholds.filter((t) => flow.out[c]! >= t).length;
+    if (classes[c] !== want) fail(`classes: channel ${c} has ${classes[c]}, want ${want}`);
+  }
+  const edge = classifyByThresholds([Number.NaN, -Infinity, 9.99, 10, 25, 79, 80, Infinity], thresholds);
+  if (edge.join() !== '0,0,0,1,3,3,4,4') fail(`classes: edge values ${edge.join()}`);
+  let threw = false;
+  try {
+    classifyByThresholds([1], [2, 1]);
+  } catch {
+    threw = true;
+  }
+  if (!threw) fail('classes: decreasing thresholds did not throw');
+  // A tree by hand: 0 and 1 meet in 2 (order 2); 3 runs alone into 4 (order 1 stays 1), 4 and 5 meet in 6 (2); 2 and 6
+  // meet in 7 (3); 7 and 8 (order 1) meet in 9 (3 stays 3).
+  const hand = channelOrder({ into: Int32Array.from([2, 2, 7, 4, 6, 6, 7, 9, 9, -1]) });
+  if (hand.join() !== '1,1,2,1,1,1,2,3,1,3') fail(`channel order by hand: ${hand.join()}`);
+  threw = false;
+  try {
+    channelOrder({ into: Int32Array.from([-1, 0]) });
+  } catch {
+    threw = true;
+  }
+  if (!threw) fail('channel order: an into that points upstream did not throw');
+  // A drainage made by hand over a plane grid of 6 × 6 nodes falling toward x = 0, the column x = 0 the base; every
+  // node drains straight down the slope, and two side rows join row 2 at x = 3.
+  const N = 6;
+  const to = new Int32Array(N * N);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) to[j * N + i] = i === 0 ? -1 : j * N + i - 1;
+  to[1 * N + 4] = 2 * N + 3;
+  to[3 * N + 4] = 2 * N + 3;
+  const planeOrder = new Uint32Array(N * N);
+  for (let k = 0, i = N - 1; i >= 0; i--) for (let j = 0; j < N; j++) planeOrder[k++] = j * N + i;
+  const planeFlow = new Float32Array(N * N).fill(1);
+  for (const i of planeOrder) if (to[i]! >= 0) planeFlow[to[i]!] = planeFlow[to[i]!]! + planeFlow[i]!;
+  const plane = traceChannels({ count: N * N }, { to, flow: planeFlow, pool: new Uint16Array(N * N), order: planeOrder }, { minFlow: 2 });
+  const planeOrders = channelOrder(plane);
+  if (Math.max(...planeOrders) !== 2) fail(`plane channels: highest order ${Math.max(...planeOrders)}`);
+  return [order, flow.along, flow.out, classes, edge, hand, plane.start, plane.nodes, plane.into, planeOrders];
 }
 
 /** Chord distance (radians, small) from a direction to the segment of two directions, on the unit sphere. */

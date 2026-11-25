@@ -3,6 +3,7 @@
 
 import { naturalHeight } from './land.ts';
 import type { PathPlan } from './paths.ts';
+import { STEP_M, type BrookPlan } from './brooks.ts';
 import type { Line, Plan } from './plan.ts';
 
 export interface RiverView {
@@ -144,4 +145,115 @@ export function walkerView(position: readonly number[], forward: readonly number
   const rx = -fz;
   const rz = fx;
   return { name: 'walker', eye: [x - fx * 5.6 - rx * 1.9, y + 1.8, z - fz * 5.6 - rz * 1.9], target: [x, y + WALKER_LOOK_M, z], fov: 55 };
+}
+
+/**
+ * The views of the brooks: `brook`, one course from its spring to the water it runs into, seen from the air beside it,
+ * and `brook-near`, the last stretch of that course from its bank at walking height, looking down it. The course
+ * is the longest brook that ends in water up to 600 m long (or the shortest longer one); its tributaries enter it
+ * along the way. None without such a course. Then the close views of `brookCloseViews`.
+ */
+export function brookViews(bp: BrookPlan, groundAt?: (x: number, z: number) => number): RiverView[] {
+  const out: RiverView[] = [];
+  // The longest brook into water up to 600 m long, or the shortest longer one.
+  let best: number[] = [];
+  let bestM = 0;
+  bp.brooks.forEach((b, i) => {
+    if (!b.intoWater) return;
+    const lengthM = b.n * STEP_M;
+    const better = bestM === 0 || (lengthM <= 600 ? bestM > 600 || lengthM > bestM : bestM > 600 && lengthM < bestM);
+    if (better) {
+      bestM = lengthM;
+      best = [i];
+    }
+  });
+  if (best.length === 0) return out;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  const zs: number[] = [];
+  for (const id of best) {
+    const b = bp.brooks[id]!;
+    for (let i = 0; i < b.n; i++) {
+      xs.push(b.x[i]!);
+      ys.push(b.bank[i]!);
+      zs.push(b.z[i]!);
+    }
+  }
+  const m = xs.length;
+  const sx = xs[0]!;
+  const sz = zs[0]!;
+  const ex = xs[m - 1]!;
+  const ez = zs[m - 1]!;
+  const len = Math.hypot(ex - sx, ez - sz) || 1;
+  const dx = (ex - sx) / len;
+  const dz = (ez - sz) / len;
+  const mid = Math.floor(m / 2);
+  const reach = Math.max(45, 0.38 * len);
+  // From the air, from the side of the course and a little behind its middle.
+  add(out, 'brook', [xs[mid]! - dz * reach - dx * 0.25 * reach, Math.max(...ys) + 0.75 * reach, zs[mid]! + dx * reach - dz * 0.25 * reach], [xs[mid]!, ys[mid]!, zs[mid]!], 55);
+  // At walking height on its bank some 36 m up from where it ends, looking down it at a slant.
+  const i = Math.max(0, m - 1 - Math.round(36 / STEP_M));
+  const k = Math.min(m - 1, i + Math.round(14 / STEP_M));
+  const j = Math.max(0, i - Math.round(6 / STEP_M));
+  const fx = xs[i]! - xs[j]!;
+  const fz = zs[i]! - zs[j]!;
+  const fl = Math.hypot(fx, fz) || 1;
+  add(out, 'brook-near', [xs[i]! - (fz / fl) * 3.2 - (fx / fl) * 3, ys[i]! + 1.7, zs[i]! + (fx / fl) * 3.2 - (fz / fl) * 3], [xs[k]!, ys[k]! - 0.25, zs[k]!], 60);
+  out.push(...brookCloseViews(bp, groundAt));
+  return out;
+}
+
+/**
+ * Close views of where brooks meet water and each other: `brook-mouth-1`, `brook-mouth-2` (the two mouths with the
+ * largest basins at least 150 m apart) and `brook-join-1`, `brook-join-2` (the same for junctions, by the basin of the
+ * tributary), each low and oblique from some 8 m and, with `-top`, from 22 m straight over it. The low
+ * eye stands at least 1.6 m over `groundAt` where it is given.
+ */
+function brookCloseViews(bp: BrookPlan, groundAt?: (x: number, z: number) => number): RiverView[] {
+  const out: RiverView[] = [];
+  const pick = <T extends { x: number; z: number; flow: number }>(all: T[]): T[] => {
+    const chosen: T[] = [];
+    for (const c of [...all].sort((a, b) => b.flow - a.flow)) {
+      if (chosen.every((o) => Math.hypot(o.x - c.x, o.z - c.z) >= 150)) chosen.push(c);
+      if (chosen.length === 2) break;
+    }
+    return chosen;
+  };
+  // A place, its height and the direction the water runs there.
+  type Spot = { x: number; z: number; y: number; dx: number; dz: number; flow: number };
+  const dir = (b: BrookPlan['brooks'][number], i: number, j: number): [number, number] => {
+    const dx = b.x[j]! - b.x[i]!;
+    const dz = b.z[j]! - b.z[i]!;
+    const d = Math.hypot(dx, dz) || 1;
+    return [dx / d, dz / d];
+  };
+  const mouths: Spot[] = [];
+  for (const b of bp.brooks) {
+    if (!b.intoWater || !(b.shoreM < Infinity)) continue;
+    const s = Math.min(b.n - 1, Math.round(b.shoreM / STEP_M));
+    const [dx, dz] = dir(b, Math.max(0, s - 6), s);
+    mouths.push({ x: b.x[s]!, z: b.z[s]!, y: b.water[s]!, dx, dz, flow: b.flow });
+  }
+  const joins: Spot[] = [];
+  for (const n of bp.nodes) {
+    const s = bp.brooks[n.stem]!;
+    let e = 0;
+    for (let i = 1; i < s.n; i++) if (Math.hypot(s.x[i]! - n.x, s.z[i]! - n.z) < Math.hypot(s.x[e]! - n.x, s.z[e]! - n.z)) e = i;
+    const [dx, dz] = dir(s, Math.max(0, e - 3), Math.min(s.n - 1, e + 3));
+    joins.push({ x: n.x, z: n.z, y: n.bank, dx, dz, flow: n.flow });
+  }
+  const shoot = (name: string, p: Spot, back: number): void => {
+    // Low: from upstream of a mouth (looking out over the water), from downstream of a junction (looking up into its Y).
+    const ex = p.x - p.dx * back * 7 - p.dz * 3;
+    const ez = p.z - p.dz * back * 7 + p.dx * 3;
+    add(out, name, [ex, Math.max(p.y + 2.2, (groundAt?.(ex, ez) ?? -Infinity) + 1.6), ez], [p.x + p.dx * back * 2, p.y - 0.2, p.z + p.dz * back * 2], 60);
+    add(out, `${name}-top`, [p.x - p.dx * back * 2, p.y + 22, p.z - p.dz * back * 2], [p.x, p.y, p.z], 55);
+  };
+  pick(mouths).forEach((m, i) => shoot(`brook-mouth-${i + 1}`, m, 1));
+  pick(joins).forEach((j, i) => shoot(`brook-join-${i + 1}`, j, -1));
+  return out;
+}
+
+function add(out: RiverView[], name: string, eye: V3, target: V3, fov: number): void {
+  out.push({ name, eye, target, fov });
 }

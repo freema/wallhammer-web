@@ -23,10 +23,12 @@
 //   map=1 draws the plan's rivers and lakes over Hearth. From 5 the relief casts its shade and the settlements light
 //   up at night (lights.ts); J then shows the shade alone.
 //   life=0 leaves out the creatures that walk the lanes and roads from stage 3 (life.ts, life-layer.ts).
+//   flow: the clock of the water's flow in seconds (a mark's view). mkview, marks: the marks (marks.ts, dev server only).
 // Controls: 1–4 fly to a body, 0 to the view of the whole system, F to the next stop of the tour, Escape stops a
 // flight. W A S D fly along the view, E / Q up and down, Shift faster, drag looks around, the wheel changes the speed.
 // , and . slow the time down and speed it up, P pauses it. O paths, N names, L cell levels, B measures a frame with
-// the graphics work finished, H hides the panel, M shows the marks of the plan, R flies along the main river.
+// the graphics work finished, H hides the panel, M shows the marks of the plan, R flies along the main river. In the dev
+// server K switches the mode of the developer's marks (marks.ts).
 
 import { definePalette } from 'wallhammer-web';
 import { quatAxisTurns, quatRotate, relativeMatrix, snapRenderOrigin } from 'wallhammer-web/base';
@@ -73,7 +75,9 @@ import { routeStats } from './plan-routes.ts';
 import type { RouteStats } from './plan-routes.ts';
 import { DEFAULT_SEED, MIN_SPLIT_EDGES, ROOT_LEVEL, SELECTION, bodyShape, directionAt, findSite, generateBodyCell, horizonRadiusM, latLonOf, objectLevel, packSeed, surfaceHeight } from './world.ts';
 
-const q = new URLSearchParams(location.hash.slice(1));
+/** The hash the page was opened with (the page rewrites it while the camera moves). */
+const startHash = location.hash.slice(1);
+const q = new URLSearchParams(startHash);
 const num = (k: string, d: number): number => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d);
 const seed = Math.round(num('seed', DEFAULT_SEED));
 /** Stage of the plan of Hearth; 0: no plan at all. */
@@ -606,8 +610,11 @@ const climateArchetypes: Readonly<Record<string, StreamArchetype>> = cloudSlot
       shard: { material: 'object', lods: [{ mesh: shardMesh(true), maxDistance: 140 }, { mesh: shardMesh(false), maxDistance: 1600 }] },
     }
   : {};
-/** The clock of the flow of the water: seconds the page has run, at most real time, stopped by a pause, 0 under a script. */
-let flowTime = 0;
+/**
+ * The clock of the flow of the water: seconds the page has run, at most real time, stopped by a pause, 0 under a script.
+ * `flow=` (a mark's view, marks.ts) starts it at a value.
+ */
+let flowTime = Math.max(0, num('flow', 0));
 let world: StreamedWorld | null = null;
 let worldOf: Surface | null = null;
 
@@ -1465,7 +1472,7 @@ function panelText(): string {
     ...(inh?.life() ? [lifeLine(inh.life()!)] : []),
     ...(note ? [note] : []),
     `${surfaces.map((x) => `${x.index + 1} ${x.spec.name}`).join(' · ')} · 0 system · F next stop · WASD fly · E/Q up/down · Shift fast · drag look · wheel speed`,
-    `, . time slower/faster · P pause · O paths · N names · L levels · B measure · H hide${inh ? ' · M plan · R river flight' : ''}${cloudSlot ? ' · C clouds' : ''}${settlementLayer ? ' · X strike the structure in the middle of the view' : ''}${stage >= STAGE.shade ? ' · J shade only' : ''}`,
+    `, . time slower/faster · P pause · O paths · N names · L levels · B measure · H hide${import.meta.env.DEV ? ' · K marks' : ''}${inh ? ' · M plan · R river flight' : ''}${cloudSlot ? ' · C clouds' : ''}${settlementLayer ? ' · X strike the structure in the middle of the view' : ''}${stage >= STAGE.shade ? ' · J shade only' : ''}`,
   ].join('\n');
 }
 
@@ -1475,6 +1482,49 @@ function climateLine(): string {
   if (!w) return `weather ${showClouds ? 'only on Hearth' : 'clouds off (C)'}`;
   const fall = w.snow > 0.01 ? `snow ${fmt(w.snow * 100)} %` : w.rain > 0.01 ? `rain ${fmt(w.rain * 100)} %` : 'no precipitation';
   return `weather ${BIOME_NAMES[w.biome] ?? '?'}  cloud cover ${fmt(w.cover * 100)} %  ${fall}${showClouds ? '' : '  (clouds off, C)'}`;
+}
+
+/**
+ * The page's URL hash of the current view. `exact` (a mark's view, marks.ts): the place and the view in more digits,
+ * the time to the tick, the time stopped (`rate=0`) and the clock of the water's flow (`flow=`); otherwise the time in
+ * whole tens of seconds while it runs, so the address does not change with every frame.
+ */
+function viewHash(exact = false): string {
+  const keep = ['pace', 'px', 'cells', 'gpu', 'cover', 'volume'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+  const s = home();
+  let where = '';
+  if (s) {
+    const [lat, lon] = latLonOf(unit(rig.position));
+    const v = rig.state();
+    const [dl, dv] = exact ? [7, 3] : [4, 1];
+    where = `&body=${s.spec.name}&lat=${lat.toFixed(dl)}&lon=${lon.toFixed(dl)}&alt=${rig.clearance.toFixed(dv === 1 ? 1 : 2)}&yaw=${v.yawDeg.toFixed(dv)}&pitch=${v.pitchDeg.toFixed(dv)}`;
+  }
+  const t = exact || rate === 0 ? tick / CLOCK_HZ : Math.floor(tick / CLOCK_HZ / 10) * 10;
+  const r = exact ? 0 : rate;
+  const flow = exact && plannedMaterials ? `&flow=${flowTime}` : '';
+  return `seed=${seed}${where}&t=${t}&rate=${r}${flow}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${showPaths ? '' : '&orbits=0'}${showNames ? '' : '&names=0'}${q.has('depth') ? `&depth=${depth}` : ''}${q.has('world') ? `&world=${stage}` : ''}${scene.showMarks ? '&map=1' : ''}${cloudSlot && !showClouds ? '&clouds=0' : ''}${showDetails ? '' : '&details=0'}${showLife ? '' : '&life=0'}${keep}`;
+}
+
+/**
+ * Puts the page at a hash written by `viewHash(true)`: stops a flight and the tour, sets the time to `t` and stops it,
+ * the water's clock to `flow`, and places the camera at `body`, `lat`, `lon`, `alt`, `yaw` and `pitch`. The marks
+ * (marks.ts) then put the camera back exactly.
+ */
+function gotoHash(hash: string): void {
+  const h = new URLSearchParams(hash.replace(/^#/, ''));
+  const n = (k: string, d: number): number => (h.has(k) && Number.isFinite(Number(h.get(k))) ? Number(h.get(k)) : d);
+  river = null;
+  stopFlight(false);
+  touring = false;
+  document.body.classList.remove('movie');
+  if (rate > 0) rateBeforePause = rate;
+  rate = 0;
+  tick = Math.round(Math.max(0, n('t', tick / CLOCK_HZ)) * CLOCK_HZ);
+  system.setTick(tick, CLOCK_HZ);
+  flowTime = Math.max(0, n('flow', flowTime));
+  const s = surfaces.find((x) => x.spec.name.toLowerCase() === (h.get('body') ?? '').toLowerCase());
+  if (s) placeAt(s, directionAt(n('lat', 0), n('lon', 0)), n('alt', LAND_M), n('yaw', 0), n('pitch', 3));
+  engine.invalidate();
 }
 
 let lastHash = '';
@@ -1490,17 +1540,7 @@ setInterval(() => {
   // Once after a finished flight, when the view has loaded again: a frame with the graphics work finished.
   if (report && report.finished && report.endFrameMs === 0 && !flight && !scripted && loaded()) report.endFrameMs = measureFrame();
   if (flight || scripted) return;
-  const keep = ['pace', 'px', 'cells', 'gpu', 'cover', 'volume'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
-  const s = home();
-  let where = '';
-  if (s) {
-    const [lat, lon] = latLonOf(unit(rig.position));
-    const v = rig.state();
-    where = `&body=${s.spec.name}&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&alt=${rig.clearance.toFixed(1)}&yaw=${v.yawDeg.toFixed(1)}&pitch=${v.pitchDeg.toFixed(1)}`;
-  }
-  // The time is written in whole seconds while it runs, so the address does not change with every frame.
-  const t = rate > 0 ? Math.floor(tick / CLOCK_HZ / 10) * 10 : tick / CLOCK_HZ;
-  const h = `seed=${seed}${where}&t=${t}&rate=${rate}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${showPaths ? '' : '&orbits=0'}${showNames ? '' : '&names=0'}${q.has('depth') ? `&depth=${depth}` : ''}${q.has('world') ? `&world=${stage}` : ''}${scene.showMarks ? '&map=1' : ''}${cloudSlot && !showClouds ? '&clouds=0' : ''}${showDetails ? '' : '&details=0'}${showLife ? '' : '&life=0'}${keep}`;
+  const h = viewHash();
   if (h !== lastHash) {
     lastHash = h;
     history.replaceState(null, '', `#${h}`);
@@ -1734,4 +1774,28 @@ const routeStatsOf = new WeakMap<WorldPlan, RouteStats>();
   },
   measureFrame,
 };
+
+// Marks (marks.ts, key K; N toggles the names): notes pinned to points of the surface of the body the camera is near,
+// kept by the dev server's store. Only in the dev server: the static build of the live demos has none of it.
+// `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  void import('./marks.ts').then(({ installMarks }) => {
+    const marks = installMarks({
+      startHash,
+      engine,
+      rig,
+      key: 'KeyK',
+      body: () => {
+        const s = home();
+        return s ? { name: s.spec.name, radiusM: s.spec.radiusM, shape: s.shape, heightAt: (x, y, z) => surfaceOf(s, x, y, z) } : null;
+      },
+      allowed: () => home() !== null && !flight && !river && !document.body.classList.contains('movie'),
+      hash: () => viewHash(true),
+      gotoHash,
+      surfaceReady: () => !plannedB || plannedB.surfaceAt(0, planned.spec.radiusM, 0) !== null,
+      facts: () => ({ seed, stage, timeS: tick / CLOCK_HZ, rate, flowS: flowTime }),
+    });
+    Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+  });
+}
 engine.start();

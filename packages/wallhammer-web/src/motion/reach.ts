@@ -8,6 +8,7 @@
 // line to the target so that the middle joint points toward it.
 
 import { solvePoseBelow } from './pose-ops.ts';
+import { nlerpFrom as nlerp, rotateLocal } from './quat.ts';
 import type { Pose, Skeleton } from './skeleton.ts';
 
 /** Three bones of a chain: `upper` holds `lower`, which holds `end` (the joint that should reach the target). */
@@ -26,8 +27,6 @@ const EPS = 1e-5;
 // Scratch (module level: the post steps run one at a time).
 const QA = new Float64Array(4);
 const QB = new Float64Array(4);
-const Q = new Float64Array(4);
-const V = new Float64Array(3);
 
 /**
  * Turns the upper and lower bone of `chain` so that the end joint reaches `target` (world), as far as the chain's
@@ -158,6 +157,16 @@ export interface GroundFitOptions {
   weight?: number;
   /** World points the middle joints turn toward, 3 numbers per chain (optional). */
   poles?: ArrayLike<number> | null;
+  /**
+   * Turns every chain's end bone by the tilt of the ground under it, 0–1 (times `weight`). Default 0: the ends keep
+   * their turn. The tilt is the rotation that takes +y to the ground's normal, which comes from `heightAt` at
+   * `alignStep` on either side of the end along x and z; the end turns about its own joint.
+   */
+  align?: number;
+  /** Half the spacing of the heights the normal is taken from, metres. Default 0.1. */
+  alignStep?: number;
+  /** Largest tilt given to an end, radians (a step or an edge under it reads as a wall). Default 0.6. */
+  maxAlign?: number;
 }
 
 const TARGET = new Float64Array(3);
@@ -167,8 +176,8 @@ const ENDS = new Float64Array(64 * 3);
 
 /**
  * Keeps the ends of `chains` on the ground: every end is moved up or down by the ground height under it minus
- * `planeY` (within the limits) and reached with `reachTwoBone`. `world` must hold the solved pose and is updated.
- * At most 64 chains. Allocates nothing.
+ * `planeY` (within the limits) and reached with `reachTwoBone`; with `align` the end bone then tilts with the ground.
+ * `world` must hold the solved pose and is updated. At most 64 chains. Allocates nothing.
  */
 export function fitToGround(skeleton: Skeleton, pose: Pose, root: ArrayLike<number>, world: Float32Array | Float64Array, chains: readonly TwoBoneChain[], o: GroundFitOptions): void {
   const n = Math.min(chains.length, 64);
@@ -176,6 +185,9 @@ export function fitToGround(skeleton: Skeleton, pose: Pose, root: ArrayLike<numb
   const drop = o.maxDrop ?? 0.5;
   const w = o.weight ?? 1;
   if (w <= 0 || n === 0) return;
+  const align = (o.align ?? 0) * w;
+  const step = o.alignStep ?? 0.1;
+  const maxAlign = o.maxAlign ?? 0.6;
   let deepest = 0;
   for (let i = 0; i < n; i++) {
     const u = chains[i]!.end * 12;
@@ -204,7 +216,21 @@ export function fitToGround(skeleton: Skeleton, pose: Pose, root: ArrayLike<numb
       pole = POLE;
     }
     reachTwoBone(skeleton, pose, root, world, chains[i]!, TARGET, w, pole);
+    if (align > 0) alignEnd(skeleton, pose, root, world, chains[i]!.end, o.heightAt, step, maxAlign, align);
   }
+}
+
+/** Turns the solved bone `end` about its joint by the ground's tilt under it, `weight` of it, at most `maxAngle`. */
+function alignEnd(skeleton: Skeleton, pose: Pose, root: ArrayLike<number>, world: Float32Array | Float64Array, end: number, heightAt: (x: number, z: number) => number, e: number, maxAngle: number, weight: number): void {
+  const u = end * 12;
+  const x = world[u + 9]!, z = world[u + 11]!;
+  const gx = (heightAt(x + e, z) - heightAt(x - e, z)) / (2 * e);
+  const gz = (heightAt(x, z + e) - heightAt(x, z - e)) / (2 * e);
+  const s = Math.hypot(gx, gz);
+  if (!(s > 1e-9)) return;
+  // The normal is (−gx, 1, −gz); +y turns onto it about up × normal, by the slope's angle.
+  rotateLocal(pose.rot, end * 4, world, u, -gz / s, 0, gx / s, Math.min(maxAngle, Math.atan(s)) * weight);
+  solvePoseBelow(skeleton, pose, root, world, end);
 }
 
 const DEFAULT_BEND: readonly [number, number, number] = [1, 0, 0];
@@ -216,95 +242,4 @@ function clamp(v: number, a: number, b: number): number {
 function dist(world: ArrayLike<number>, bone: number, x: number, y: number, z: number): number {
   const u = bone * 12;
   return Math.hypot(world[u + 9]! - x, world[u + 10]! - y, world[u + 11]! - z);
-}
-
-/** Global rotation of a solved bone (its matrix columns normalised) into Q. */
-function globalRot(world: ArrayLike<number>, u: number): void {
-  const l0 = Math.hypot(world[u]!, world[u + 1]!, world[u + 2]!) || 1;
-  const l1 = Math.hypot(world[u + 3]!, world[u + 4]!, world[u + 5]!) || 1;
-  const l2 = Math.hypot(world[u + 6]!, world[u + 7]!, world[u + 8]!) || 1;
-  const m00 = world[u]! / l0, m10 = world[u + 1]! / l0, m20 = world[u + 2]! / l0;
-  const m01 = world[u + 3]! / l1, m11 = world[u + 4]! / l1, m21 = world[u + 5]! / l1;
-  const m02 = world[u + 6]! / l2, m12 = world[u + 7]! / l2, m22 = world[u + 8]! / l2;
-  const tr = m00 + m11 + m22;
-  let x: number, y: number, z: number, w: number;
-  if (tr > 0) {
-    const s = Math.sqrt(tr + 1) * 2;
-    w = s / 4;
-    x = (m21 - m12) / s;
-    y = (m02 - m20) / s;
-    z = (m10 - m01) / s;
-  } else if (m00 > m11 && m00 > m22) {
-    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
-    w = (m21 - m12) / s;
-    x = s / 4;
-    y = (m01 + m10) / s;
-    z = (m02 + m20) / s;
-  } else if (m11 > m22) {
-    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
-    w = (m02 - m20) / s;
-    x = (m01 + m10) / s;
-    y = s / 4;
-    z = (m12 + m21) / s;
-  } else {
-    const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
-    w = (m10 - m01) / s;
-    x = (m02 + m20) / s;
-    y = (m12 + m21) / s;
-    z = s / 4;
-  }
-  Q[0] = x;
-  Q[1] = y;
-  Q[2] = z;
-  Q[3] = w;
-}
-
-/** World axis into a bone's frame (conjugate of its global rotation in Q) into V. */
-function toLocal(nx: number, ny: number, nz: number): void {
-  // v' = q* v q for unit q = (x, y, z, w): rotate by the conjugate.
-  const x = -Q[0]!, y = -Q[1]!, z = -Q[2]!, w = Q[3]!;
-  const ix = w * nx + y * nz - z * ny;
-  const iy = w * ny + z * nx - x * nz;
-  const iz = w * nz + x * ny - y * nx;
-  const iw = -x * nx - y * ny - z * nz;
-  V[0] = ix * w + iw * -x + iy * -z - iz * -y;
-  V[1] = iy * w + iw * -y + iz * -x - ix * -z;
-  V[2] = iz * w + iw * -z + ix * -y - iy * -x;
-}
-
-/** rot[q] = rot[q] · R(local axis of the world axis n, angle), with the bone's global rotation from `world`. */
-function rotateLocal(rot: Float32Array, q: number, world: ArrayLike<number>, u: number, nx: number, ny: number, nz: number, angle: number): void {
-  if (angle === 0) return;
-  globalRot(world, u);
-  toLocal(nx, ny, nz);
-  mulAxisAngle(rot, q, V[0]!, V[1]!, V[2]!, angle);
-}
-
-function mulAxisAngle(rot: Float32Array, q: number, ax: number, ay: number, az: number, angle: number): void {
-  const l = Math.hypot(ax, ay, az);
-  if (l < 1e-12) return;
-  const s = Math.sin(angle / 2) / l, c = Math.cos(angle / 2);
-  const bx = ax * s, by = ay * s, bz = az * s;
-  const x = rot[q]!, y = rot[q + 1]!, z = rot[q + 2]!, w = rot[q + 3]!;
-  rot[q] = w * bx + x * c + y * bz - z * by;
-  rot[q + 1] = w * by - x * bz + y * c + z * bx;
-  rot[q + 2] = w * bz + x * by - y * bx + z * c;
-  rot[q + 3] = w * c - x * bx - y * by - z * bz;
-}
-
-function nlerp(rot: Float32Array, q: number, from: Float64Array, w: number): void {
-  // rot[q] = from blended toward rot[q] by w.
-  let bx = rot[q]!, by = rot[q + 1]!, bz = rot[q + 2]!, bw = rot[q + 3]!;
-  if (from[0]! * bx + from[1]! * by + from[2]! * bz + from[3]! * bw < 0) {
-    bx = -bx;
-    by = -by;
-    bz = -bz;
-    bw = -bw;
-  }
-  const x = from[0]! + (bx - from[0]!) * w, y = from[1]! + (by - from[1]!) * w, z = from[2]! + (bz - from[2]!) * w, ww = from[3]! + (bw - from[3]!) * w;
-  const l = Math.hypot(x, y, z, ww) || 1;
-  rot[q] = x / l;
-  rot[q + 1] = y / l;
-  rot[q + 2] = z / l;
-  rot[q + 3] = ww / l;
 }

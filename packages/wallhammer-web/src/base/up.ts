@@ -52,6 +52,21 @@ export function upFrame(up: readonly [number, number, number]): UpFrame {
   return { x: [1 - ux * ux * k, -ux, -ux * uz * k], y: [ux, uy, uz], z: [-ux * uz * k, -uz, 1 - uz * uz * k] };
 }
 
+/**
+ * `v` made square to the unit `up`: the part along up dropped and the rest made a unit vector, when `v` is off square
+ * by more than 1e-12; otherwise `v` itself, untouched (an axis of `upFrame` away from −y keeps its bits). Near −y
+ * `upFrame` gives the world's fixed axes whatever `up` leans to (the shaders' `localFrame` does the same, so a turn
+ * measured in it means the same on the GPU); this is the tangent direction nearest to such an axis. Engine-internal
+ * (not exported from the base entry).
+ */
+export function squareToUp(up: readonly number[], v: readonly number[]): readonly number[] {
+  const k = v[0]! * up[0]! + v[1]! * up[1]! + v[2]! * up[2]!;
+  if (!(Math.abs(k) > 1e-12)) return v;
+  const h0 = v[0]! - up[0]! * k, h1 = v[1]! - up[1]! * k, h2 = v[2]! - up[2]! * k;
+  const m = Math.sqrt(h0 * h0 + h1 * h1 + h2 * h2);
+  return [h0 / m, h1 / m, h2 / m];
+}
+
 /** A world direction as the (x, z) pair of a local frame (its part along up is dropped): the inverse of the note above. */
 export function toFramePlane(frame: UpFrame, dir: readonly [number, number, number]): [number, number] {
   return [frame.x[0] * dir[0] + frame.x[1] * dir[1] + frame.x[2] * dir[2], frame.z[0] * dir[0] + frame.z[1] * dir[1] + frame.z[2] * dir[2]];

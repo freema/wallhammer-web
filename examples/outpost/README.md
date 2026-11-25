@@ -45,6 +45,7 @@ docker compose exec -T dev sh -c 'cd /app/examples/outpost && pnpm inspect'
 | wheel | zoom (6–180 m) |
 | R or Home, button "Default view" | back to the default view |
 | space | pause / resume the motion |
+| N | dev server only: the mark mode on / off (below) |
 
 The pitch is limited to 4–86°. The orbit rig keeps the eye at least 1.5 m over the ground (its `groundAt` and
 `minEyeHeight`), so the camera never goes under the terrain.
@@ -58,6 +59,14 @@ The address keeps the view: `#seed=1&yaw=0&pitch=18&dist=33&tx=3.5&ty=2&tz=0&p=0
 | `p=1` | Start paused. |
 | `pr` | Cap of the canvas pixel ratio (default 1.5; `pr=0` uses the device ratio). |
 | `views=default,crew` | Limits the views that `__wh.presets()` lists. |
+| `tick=<n>` | Shows the state at simulation tick `n`, paused (a mark's view carries it). |
+
+Marks (dev server only, not in the live demo): `N` switches the mark mode; a click pins a note to the ground, picked
+against its height function (`heightPick`; the station, its props, the crew and the rover are not in it), kept in
+`internal/marks/` by the dev server's store; one call to the engine's `installEngineMarking` in `src/main.ts` (Marks
+in the engine's docs). The drag and the wheel do not orbit while the mode is on; `N` or Escape leaves it. A mark's hash
+is the page's own plus the simulation tick (`tick=`) and the exact view (`mkview=`); the light is fixed, so no clocks
+are recorded. `marks=1` turns the marks on in a page driven by a script, `marks=0` hides the pins.
 
 ## Script interface (`window.__wh`)
 

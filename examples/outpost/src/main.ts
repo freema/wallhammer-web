@@ -5,10 +5,13 @@
 // from them; the scene (src/render/scene.ts) turns those into engine layers.
 //
 // URL hash: #seed=1&yaw=0&pitch=18&dist=33&tx=3.5&ty=2&tz=0&p=0      (p paused; views=a,b limits __wh.presets)
-// Controls: drag orbits, the wheel zooms, R or Home the default view (also the HUD button), space pauses.
+//   tick=<n> shows the state at that simulation tick, paused (a mark's view carries it).
+// Controls: drag orbits, the wheel zooms, R or Home the default view (also the HUD button), space pauses. N switches
+// the mark mode (dev server only: a click pins a note to the ground; marks=1 turns the marks on in a page driven by a
+// script, marks=0 hides the pins).
 
 import { PerspectiveOrbitRig, definePalette } from 'wallhammer-web';
-import { createEngine } from 'wallhammer-web/runtime';
+import { createEngine, heightPick, installEngineMarking } from 'wallhammer-web/runtime';
 import { Simulation } from 'wallhammer-web/sim';
 import { formatProfile, profileFrame } from 'wallhammer-web/tools';
 import type { FrameProfile } from 'wallhammer-web/tools';
@@ -19,6 +22,7 @@ import { outpostLayout } from './layout.ts';
 import { outpostModules } from './modules.ts';
 import { OutpostScene } from './render/scene.ts';
 import { terrain } from './terrain/height.ts';
+import type { Terrain } from './terrain/height.ts';
 
 const q = new URLSearchParams(location.hash.slice(1));
 const num = (k: string, d: number): number => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d);
@@ -80,6 +84,8 @@ env.setFixedLight([...layout.sunDir]);
 // --- State ---------------------------------------------------------------------------------------------------------------
 let paused = q.get('p') === '1';
 let scene: OutpostScene | null = null;
+/** The ground, once built (the pick of the marks reads it). */
+let ground: Terrain | null = null;
 /** Size facts of every static mesh and part mesh, for `__wh.inspect`. */
 let meshes: { name: string; triangles: number; vertices: number; size: number[]; count: number }[] = [];
 function facts(name: string, m: MeshData, count: number): (typeof meshes)[number] {
@@ -149,6 +155,7 @@ const refreshHud = (force = false): void => {
 function build(): void {
   const t0 = performance.now();
   const t = terrain(layout);
+  ground = t;
   const ctx = buildContext(seed, layout, t);
   const contributions: { name: string; c: Contribution }[] = [];
   const list: typeof meshes = [];
@@ -270,6 +277,20 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
   profileText: (frames = 20): string => formatProfile(profile(frames)),
 };
 
+// Marks (key N): notes pinned to points of the ground, picked against its height function (the station, its props,
+// the crew and the rover are not in it). A mark's hash is the page's own (`hash()`) with the simulation tick (`tick=`)
+// and the exact view; the light is fixed, so no clocks are recorded. Only in the dev server (the live demos have none);
+// `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  const marks = installEngineMarking(engine, {
+    pick: heightPick((x, z) => (ground ? ground.heightAt(x, z) : 0), { maxDistanceM: 2000, surface: 'ground' }),
+    hash: () => `${hash()}&tick=${sim.tick}`,
+    clocks: false,
+    allowed: () => scene !== null,
+  });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
+
 function begin(): void {
   const loading = document.getElementById('loading');
   try {
@@ -282,6 +303,7 @@ function begin(): void {
     return;
   }
   engine.start();
+  if (q.has('tick')) setTick(num('tick', 0));
   refreshHud(true);
   loading?.classList.add('done');
   // Ready once the loading screen has faded out, so a screenshot shows the scene alone.

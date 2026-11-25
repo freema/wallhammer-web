@@ -1,5 +1,6 @@
 // Layer 3, gen-plan: coarse plans over a whole sphere. A grid of nodes at the middles of the cells of one level of the
-// cube sphere, drainage of a height field over it (filled hollows, pools, flow, channels), lines over the sphere
+// cube sphere, drainage of a height field over it (filled hollows, pools, flow, channels, their stream order and
+// classes by thresholds), lines over the sphere
 // (smoothing, a profile that never rises, a limited grade, lengths and points along them), least-cost ways and regions
 // over the grid, picks of nodes by a score (sites), plots along lines on a plane, an index from tiles to the lines that
 // can reach them and the skyline (horizon) of a height field. Imports only `base` and `gen-core`. Pure, run anywhere.
@@ -8,6 +9,8 @@ export { gridDirection, gridNeighbours, gridNodeArea, gridNodeAt, gridSample, gr
 export type { SphereGrid } from './grid.ts';
 export { drainGrid, traceChannels } from './drain.ts';
 export type { Channels, DrainOptions, Drainage } from './drain.ts';
+export { channelFlow, channelOrder, classifyByThresholds } from './channels.ts';
+export type { ChannelFlow } from './channels.ts';
 export { fallingGrade, limitGrade, lineAt, lineLengths, smoothLine } from './lines.ts';
 export { regionLinks, routeGrid, routeRegions, routeScratch } from './route.ts';
 export type { RegionLinks, RouteRegions, RouteScratch, StepCost } from './route.ts';

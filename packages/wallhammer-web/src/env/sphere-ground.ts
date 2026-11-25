@@ -3,7 +3,9 @@
 // of the far look by level (`sphereCoverThinGlsl`), and the parts that find where the ground goes under a level.
 //
 // The content keeps its look: the vertex shader calls four functions the caller defines (the `lift` block), and the
-// fragment shader is the caller's own, reading the varyings documented on `sphereGroundVs`.
+// fragment shader is the caller's own, reading the varyings documented on `sphereGroundVs`. With `extra` the vertex
+// shaders also read the patch's extra channel (`extraAt` of gen-core), hand it on as `v_extra` and may move the vertex
+// by a hook of the caller's (`groundVertex`), the same in the colour and the shadow pass.
 //
 // A vertex's colour alpha marks the ground under the level (0.5 or more) and holds a number of the caller's on the
 // rest. Interpolated over a triangle that crosses the level, a test of that alpha makes teeth along the line, and the
@@ -73,6 +75,25 @@ export interface SphereGroundOptions {
    * `vec3 coverShade(float sinE)` (the factor on the cover's colour at that angle). It may read the thin functions.
    */
   lift: string;
+  /**
+   * The patch's extra channel (made with `extraAt`; the material binds `SPHERE_PATCH_COVER_EXTRA_ATTRIBS`, or
+   * `SPHERE_PATCH_EXTRA_ATTRIBS` for a patch without `coverAt`). Default: none, and both programs are unchanged byte
+   * for byte. Give both shaders the same value, so the colour and the shadow pass move the ground alike.
+   */
+  extra?: SphereGroundExtra;
+}
+
+/** The extra channel of the ground: see `SphereGroundOptions.extra`. */
+export interface SphereGroundExtra {
+  /**
+   * GLSL defining `vec3 groundVertex(vec3 p, vec4 extra)`: the vertex in render space after the blend between levels
+   * and the extra blended with the same factor (`mix(a_extra, a_coarseExtra, m)`, 0–1 per byte); returns the point
+   * to draw. Called before the cover's lift, so the lift, `v_world`, `v_lift.w` and the air see the moved point; the
+   * normal is not changed. Pasted after `lift` at global scope: it may declare its own uniforms and read the header
+   * (`localUp`, `localHeight`), `spherePatchMorph`, the thin functions and the lift's hooks. Default: none, the
+   * channel is only handed on (`v_extra`) and the shadow pass does not read it.
+   */
+  vertex?: string;
 }
 
 export interface SphereGroundVsOptions extends SphereGroundOptions {
@@ -84,10 +105,12 @@ export interface SphereGroundVsOptions extends SphereGroundOptions {
  * The vertex shader of the ground's colour pass. Varyings: `v_world` (render position), `v_normal`, `v_color` (rgb the
  * colour, alpha the mark), `v_cover` (rgb the cover at this angle, a the share it hides), `v_lift` (x metres the cover
  * lifts the surface, y the sine of the view's angle above the ground, z the share of the far look, w the height of the
- * ground), `v_air` and `v_airThrough` (the air to the vertex), and with `waterline` `v_landMark`.
+ * ground), `v_air` and `v_airThrough` (the air to the vertex), with `waterline` `v_landMark`, and with `extra`
+ * `v_extra` (the extra channel blended between levels like the colour, 0–1 per byte).
  */
 export function sphereGroundVs(o: SphereGroundVsOptions): string {
   const w = o.waterline === true;
+  const x = extraParts(o.extra, true);
   return /* glsl */ `#include <header>
 #include <atmosphere>
 uniform vec3 u_cellOffset;
@@ -97,7 +120,7 @@ uniform float u_cellLevel;
 uniform float u_coverLevel; // coarsest level whose cells hold every object the cover stands for
 ${sphereCoverThinGlsl(o.thinRank, o.thinFrom)}
 ${o.lift}
-in vec3 a_pos;
+${x.globals}in vec3 a_pos;
 in vec4 a_normal; // xyz normal (int16), w: 0 surface, 1 skirt
 in vec4 a_color;  // rgb colour, a: 0.5 or more under the level
 in float a_coarseShift;  // metres along up to the surface of the coarser level
@@ -117,7 +140,7 @@ ${w ? 'out vec2 v_landMark; // x: share of the vertices above the level, y: thei
   vec3 p = a_pos + u_cellOffset;
   float m = spherePatchMorph(p);
   p += localUp(p) * (a_coarseShift * m);
-  vec4 cover = mix(a_cover, a_coarseCover, m);
+${x.main}  vec4 cover = mix(a_cover, a_coarseCover, m);
   v_color = mix(a_color, a_coarseColor, m);
 ${w ? '  float landFine = 1.0 - step(0.5, a_color.a);\n  float landCoarse = 1.0 - step(0.5, a_coarseColor.a);\n  v_landMark = mix(vec2(landFine, landFine * a_color.a), vec2(landCoarse, landCoarse * a_coarseColor.a), m);\n' : ''}  float share = coverShareAt(p);
   float ground = localHeight(p);
@@ -135,6 +158,8 @@ ${w ? '  float landFine = 1.0 - step(0.5, a_color.a);\n  float landCoarse = 1.0 
 
 /** The vertex shader of the ground's shadow pass: the surface lifted by the cover as the colour pass lifts it. */
 export function sphereGroundDepthVs(o: SphereGroundOptions): string {
+  // The shadow pass reads the channel only to move the vertex as the colour pass does.
+  const x = extraParts(o.extra?.vertex === undefined ? undefined : o.extra, false);
   return /* glsl */ `#include <header>
 uniform mat4 u_lightRender;
 uniform vec3 u_cellOffset;
@@ -144,7 +169,7 @@ uniform float u_cellLevel;
 uniform float u_coverLevel;
 ${sphereCoverThinGlsl(o.thinRank, o.thinFrom)}
 ${o.lift}
-in vec3 a_pos;
+${x.globals}in vec3 a_pos;
 in float a_coarseShift;
 in vec4 a_color;
 in vec4 a_coarseColor;
@@ -154,11 +179,27 @@ void main() {
   vec3 p = a_pos + u_cellOffset;
   float m = spherePatchMorph(p);
   p += localUp(p) * (a_coarseShift * m);
-  // The cover casts its shadow as the colour pass lifts it.
+${x.main}  // The cover casts its shadow as the colour pass lifts it.
   float lift = coverLift(mix(a_color.a, a_coarseColor.a, m), coverShareAt(p), localHeight(p)) * coverLiftShare(mix(a_cover.a, a_coarseCover.a, m));
   p += localUp(p) * lift;
   gl_Position = u_lightRender * vec4(p, 1.0);
 }`;
+}
+
+/**
+ * The text the extra channel adds to a vertex shader: at global scope the hook and the attributes (and, `varying`,
+ * `v_extra`), in `main` after the blend between levels the blended channel and the hook's call. Empty without it.
+ */
+function extraParts(extra: SphereGroundExtra | undefined, varying: boolean): { globals: string; main: string } {
+  if (!extra) return { globals: '', main: '' };
+  const hook = extra.vertex !== undefined;
+  return {
+    globals: `${hook ? `${extra.vertex}\n` : ''}in vec4 a_extra;       // the extra channel of the patch (extraAt)
+in vec4 a_coarseExtra; // the same on the coarser level
+${varying ? 'out vec4 v_extra;      // the extra channel blended between levels, 0 to 1 per byte\n' : ''}`,
+    main: `  vec4 extra = mix(a_extra, a_coarseExtra, m);
+${varying ? '  v_extra = extra;\n' : ''}${hook ? '  p = groundVertex(p, extra);\n' : ''}`,
+  };
 }
 
 /** A fragment shader that writes nothing: depth only. */

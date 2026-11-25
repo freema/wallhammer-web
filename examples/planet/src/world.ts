@@ -21,9 +21,9 @@
 // patches, darker silt deeper down); the water is a second mesh of every cell that reaches below sea level, at the
 // base sphere (`waterPatch`), drawn translucent over the floor (shaders.ts).
 
-import type { InstanceData, MeshData, VertexLayout } from 'wallhammer-web/base';
-import { cubeDirection, cubeGrid, fractalNoise3, hashInts, shapeHash, spherePatchMesh, spherePatchRadius, unit, valueNoise3 } from 'wallhammer-web/gen-core';
-import type { CellContent, CellId, CellInstances, LocalBounds, SpherePatchOptions } from 'wallhammer-web/gen-core';
+import type { InstanceData, InstanceSolid, MeshData, VertexLayout } from 'wallhammer-web/base';
+import { cubeDirection, cubeFaceOf, cubeGrid, directionTangents, fractalNoise3, hashInts, shapeHash, spherePatchMesh, spherePatchRadius, unit, valueNoise3 } from 'wallhammer-web/gen-core';
+import type { CellContent, CellId, CellInstances, LocalBounds, SpherePatchOptions, SpherePatchSplit } from 'wallhammer-web/gen-core';
 import { SphereWorld } from 'wallhammer-web/world';
 
 /** Radius of the base sphere: sea level. */
@@ -74,6 +74,20 @@ export const OBJECT_LAYOUT: VertexLayout = {
     { name: 'i_color', size: 4, type: 'f32', offset: 32 },
     { name: 'i_coarseShift', size: 1, type: 'f32', offset: 48 },
   ],
+};
+
+/**
+ * The solids a walker meets (walk.ts): where the records of `OBJECT_LAYOUT` keep them (base 0, reach 3, height 4, turn 5,
+ * width 6, depth 7). The trees are their trunks, a share of the reach of the crown (the trunks of shapes.ts are 0.05,
+ * 0.05 and 0.04 of the width), not to be stood on; a rock is a box turned with it, its half extents 0.45 of the width
+ * and the depth (the mesh is a lumpy ball of 0.4 to 0.56), to be stood on. Shrubs are not solid. All stand along the
+ * sphere's up and reach a metre under their base, which is sunk into the ground and taken from a coarser mesh.
+ */
+export const OBJECT_SOLIDS: Readonly<Record<string, InstanceSolid>> = {
+  tree: { position: 0, radius: 3, radiusScale: 0.07, height: 4, belowM: 1, up: 'radial', standable: false },
+  broadleaf: { position: 0, radius: 3, radiusScale: 0.12, height: 4, belowM: 1, up: 'radial', standable: false },
+  'flat-crown': { position: 0, radius: 3, radiusScale: 0.1, height: 4, belowM: 1, up: 'radial', standable: false },
+  rock: { position: 0, height: 4, heightScale: 0.95, belowM: 1, up: 'radial', box: { turn: 5, sizeX: 6, sizeZ: 7, scale: 0.45 } },
 };
 
 const smooth = (a: number, b: number, x: number): number => {
@@ -446,15 +460,88 @@ export interface PlanetCellHooks {
   domainVersion?: number;
 }
 
+/**
+ * Options of the page's cells beyond the seed, from the URL hash (main.ts). `split`: how the quads of the surface are
+ * cut into triangles (`split=shorter`, `SpherePatchOptions.split`). `extra`: the slope of the ground in the extra
+ * channel of the surface (`extra=slope` tints steep ground, `extra=lift` also raises the cliffs by the vertex hook of
+ * the ground's shaders; the cells are the same for both). The defaults give the plain cells, byte for byte.
+ */
+export interface PlanetCellOptions {
+  split: SpherePatchSplit;
+  extra: 'none' | 'slope' | 'lift';
+}
+
+/** The cells of the page without options. */
+export const PLAIN_CELLS: PlanetCellOptions = { split: 'fixed', extra: 'none' };
+
+/** The options of the cells from URL parameters (the page's hash, or a worker's own URL). */
+export function planetCellOptions(params: URLSearchParams): PlanetCellOptions {
+  const extra = params.get('extra');
+  return { split: params.get('split') === 'shorter' ? 'shorter' : 'fixed', extra: extra === 'slope' || extra === 'lift' ? extra : 'none' };
+}
+
+/** The URL parameters that carry the options to a cell worker; '' for the plain cells. */
+export function planetCellQuery(o: PlanetCellOptions): string {
+  const parts: string[] = [];
+  if (o.split !== 'fixed') parts.push(`split=${o.split}`);
+  if (o.extra !== 'none') parts.push(`extra=${o.extra}`);
+  return parts.join('&');
+}
+
+/** Spacing in metres of the samples the slope is taken from: the same at every level, so the bytes depend on the point alone. */
+const SLOPE_STEP_M = 4;
+/** Slope (rise over run) from which the ground counts as a cliff: about 40 degrees. */
+export const CLIFF_SLOPE = 0.84;
+
+/**
+ * The extra bytes of the surface with `extra`: r the slope (rise over run, 0–2 over 0–255), g 255 on a cliff (a
+ * category: the coarser level takes it from the nearest parent vertex, `coarseExtra: 'nearest'`), b and a 0. A pure
+ * function of the point, from four heights of the same function the surface is made of.
+ */
+function slopeExtra(heightAt: (x: number, y: number, z: number) => number): NonNullable<SpherePatchOptions['extraAt']> {
+  return (x, y, z) => {
+    const l = Math.sqrt(x * x + y * y + z * z);
+    const d: [number, number, number] = [x / l, y / l, z / l];
+    const { t1, t2 } = directionTangents(d);
+    const e = SLOPE_STEP_M / RADIUS_M;
+    const h = (t: readonly number[], s: number): number => {
+      const px = d[0] + t[0]! * s;
+      const py = d[1] + t[1]! * s;
+      const pz = d[2] + t[2]! * s;
+      const k = RADIUS_M / Math.sqrt(px * px + py * py + pz * pz);
+      return heightAt(px * k, py * k, pz * k);
+    };
+    const gu = (h(t1, e) - h(t1, -e)) / (2 * SLOPE_STEP_M);
+    const gv = (h(t2, e) - h(t2, -e)) / (2 * SLOPE_STEP_M);
+    const slope = Math.sqrt(gu * gu + gv * gv);
+    return [Math.min(255, Math.round(slope * 127.5)), slope >= CLIFF_SLOPE ? 255 : 0, 0, 0];
+  };
+}
+
+/** The surface options with the page's cell options; the very same object for the plain cells. */
+function withCellOptions(o: SpherePatchOptions, options: PlanetCellOptions): SpherePatchOptions {
+  if (options.split === 'fixed' && options.extra === 'none') return o;
+  return {
+    ...o,
+    ...(options.split !== 'fixed' ? { split: options.split } : {}),
+    ...(options.extra !== 'none' ? { extraAt: slopeExtra(o.heightAt), coarseExtra: 'nearest' as const } : {}),
+  };
+}
+
 /** Generates one cell. Pure: (seed, cell) → content. */
 export function generatePlanetCell(seed: number, cell: CellId): CellContent {
   return buildPlanetCell(seed, cell, null);
 }
 
-/** The body of `generatePlanetCell`, with hooks. Pure: (seed, cell, hooks) → content. */
-export function buildPlanetCell(seed: number, cell: CellId, hooks: PlanetCellHooks | null): CellContent {
+/** The generator of the cells with options; `generatePlanetCell` for the plain cells. */
+export function planetCellGenerator(options: PlanetCellOptions): (seed: number, cell: CellId) => CellContent {
+  return (seed, cell) => buildPlanetCell(seed, cell, null, options);
+}
+
+/** The body of `generatePlanetCell`, with hooks and options. Pure: (seed, cell, hooks, options) → content. */
+export function buildPlanetCell(seed: number, cell: CellId, hooks: PlanetCellHooks | null, options: PlanetCellOptions = PLAIN_CELLS): CellContent {
   const edge = SHAPE.edgeM(cell.level);
-  const patchOptions = hooks?.patch ? hooks.patch(patchOptionsOf(seed, cell)) : patchOptionsOf(seed, cell);
+  const patchOptions = withCellOptions(hooks?.patch ? hooks.patch(patchOptionsOf(seed, cell)) : patchOptionsOf(seed, cell), options);
   const patch = spherePatchMesh(patchOptions);
   const o = patch.origin;
   const min: [number, number, number] = [patch.bounds.min[0], patch.bounds.min[1], patch.bounds.min[2]];
@@ -597,6 +684,123 @@ export function findStart(seed: number): StartPlace {
   }
   const [latDeg, lonDeg] = candidate(0);
   return { latDeg, lonDeg, toward: step(directionAt(latDeg, lonDeg), 0, 8000) };
+}
+
+/**
+ * The objects of `RULES` whose anchors lie within `radiusM` of the direction `d`, as the cells place them (the same
+ * anchors, draws and kinds; on the base sphere): the archetype's name, the distance from `d` along the sphere and the
+ * object's reach. Pure.
+ */
+export function objectsNear(seed: number, d: readonly [number, number, number], radiusM: number, visit: (name: string, distanceM: number, reachM: number, at: [number, number, number]) => void): void {
+  const f = cubeFaceOf(d);
+  for (const rule of RULES) {
+    const n = 2 ** rule.gridLevel;
+    // Anchors are about (π/2 · R) / n apart at the middle of a face, more near its edges; one more each way is safe.
+    const span = Math.ceil(radiusM / ((Math.PI / 2) * RADIUS_M / n)) + 1;
+    const ci = Math.floor(((f.s + 1) / 2) * n);
+    const cj = Math.floor(((f.t + 1) / 2) * n);
+    for (let j = Math.max(0, cj - span); j <= Math.min(n - 1, cj + span); j++) {
+      for (let i = Math.max(0, ci - span); i <= Math.min(n - 1, ci + span); i++) {
+        const rank = rule.rank ? rule.rank(seed, f.face, i, j) : 0;
+        const r = (q: number): number => unit(hashInts(seed, rule.id, f.face, i, j, q));
+        const a = cubeDirection(f.face, cubeGrid(i + 0.1 + 0.8 * r(1), n), cubeGrid(j + 0.1 + 0.8 * r(2), n));
+        const m = Math.acos(Math.min(1, a[0] * d[0] + a[1] * d[1] + a[2] * d[2])) * RADIUS_M;
+        if (m > radiusM) continue;
+        const x = a[0] * RADIUS_M;
+        const y = a[1] * RADIUS_M;
+        const z = a[2] * RADIUS_M;
+        const placed = rule.place(seed, x, y, z, groundHeight(seed, x, y, z), r, rank);
+        if (placed) visit(rule.names[placed.kind]!, m, placed.p[0]!, [a[0], a[1], a[2]]);
+      }
+    }
+  }
+}
+
+export interface WalkStart {
+  latDeg: number;
+  lonDeg: number;
+  /** A direction from the centre 1 km away along the way the walker faces: toward the highest ground in view. */
+  toward: [number, number, number];
+}
+
+/**
+ * A place to start walking from, a pure function of the seed: the first point of a fixed sequence over the latitudes
+ * 18–42° of the northern half (a high sun in the page's season) that stands on gentle land well above the sea, with
+ * relief round it, some trees and at least one rock within 50 m and none within 2 m, facing the bearing where the
+ * ground rises most within 3 km with no object in the first 10 m of the view. `keep` may refuse a direction (the page
+ * keeps the places of its strips out). Falls back to `findStart`.
+ */
+export function findWalkStart(seed: number, keep?: (d: readonly [number, number, number]) => boolean): WalkStart {
+  const ground = (d: readonly [number, number, number]): number => groundHeight(seed, d[0] * RADIUS_M, d[1] * RADIUS_M, d[2] * RADIUS_M);
+  const step = (d: readonly [number, number, number], a: number, m: number): [number, number, number] => {
+    const [lat, lon] = latLonOf(d);
+    const north = directionAt(lat + 90, lon);
+    const east: [number, number, number] = [d[1] * north[2] - d[2] * north[1], d[2] * north[0] - d[0] * north[2], d[0] * north[1] - d[1] * north[0]];
+    const c = Math.cos(m / RADIUS_M);
+    const s = Math.sin(m / RADIUS_M);
+    return [d[0] * c + (north[0] * Math.cos(a) + east[0] * Math.sin(a)) * s, d[1] * c + (north[1] * Math.cos(a) + east[1] * Math.sin(a)) * s, d[2] * c + (north[2] * Math.cos(a) + east[2] * Math.sin(a)) * s];
+  };
+  const TREES = new Set(['tree', 'broadleaf', 'flat-crown']);
+  for (let k = 0; k < 6000; k++) {
+    const latDeg = 18 + 24 * ((k * 0.6180339887) % 1);
+    const lonDeg = ((k * 137.50776) % 360) - 180;
+    const d = directionAt(latDeg, lonDeg);
+    const h = ground(d);
+    if (h < 30 || h > 800) continue;
+    if (keep && !keep(d)) continue;
+    // Gentle under the feet: less than 1 in 5 over 3 m.
+    let gentle = true;
+    for (let q = 0; q < 4 && gentle; q++) gentle = Math.abs(ground(step(d, (q * Math.PI) / 2, 3)) - h) < 0.6;
+    if (!gentle) continue;
+    // Relief: 20–200 m between the lowest and the highest of eight points 250 m away, none of them sea or refused.
+    let lo = Infinity;
+    let hi = -Infinity;
+    let land = true;
+    for (let q = 0; q < 8 && land; q++) {
+      const e = step(d, (q * Math.PI) / 4, 250);
+      const g = ground(e);
+      lo = Math.min(lo, g);
+      hi = Math.max(hi, g);
+      land = g > 5 && (!keep || keep(e));
+    }
+    if (!land || hi - lo < 20 || hi - lo > 200) continue;
+    // Trees and rocks near, none on the spot.
+    let trees = 0;
+    let rocks = 0;
+    let clear = true;
+    const near: { at: [number, number, number]; reach: number }[] = [];
+    objectsNear(seed, d, 50, (name, m, reach, at) => {
+      if (TREES.has(name)) trees++;
+      if (name === 'rock') rocks++;
+      if (m - reach < 2) clear = false;
+      near.push({ at, reach });
+    });
+    if (!clear || trees < 3 || trees > 24 || rocks < 1) continue;
+    // The view: the bearing (of sixteen) where the ground rises most, seen as an angle over 0.8–3 km.
+    let best = -1;
+    let rise = -Infinity;
+    for (let q = 0; q < 16; q++) {
+      const a = (q * Math.PI) / 8;
+      // Nothing within 10 m ahead, ±25°.
+      const ahead = step(d, a, 1);
+      const fx = ahead[0] - d[0], fy = ahead[1] - d[1], fz = ahead[2] - d[2];
+      const fl = Math.hypot(fx, fy, fz) || 1;
+      const blocked = near.some((o) => {
+        const ox = o.at[0] - d[0], oy = o.at[1] - d[1], oz = o.at[2] - d[2];
+        const ol = Math.hypot(ox, oy, oz);
+        const m = ol * RADIUS_M;
+        return m - o.reach < 10 && (ox * fx + oy * fy + oz * fz) / (ol * fl) > Math.cos((25 * Math.PI) / 180);
+      });
+      if (blocked) continue;
+      let r = -Infinity;
+      for (const m of [800, 1600, 3000]) r = Math.max(r, (ground(step(d, a, m)) - h) / m);
+      if (r > rise) (rise = r), (best = q);
+    }
+    if (best < 0 || rise < 0.03) continue;
+    return { latDeg, lonDeg, toward: step(d, (best * Math.PI) / 8, 1000) };
+  }
+  const s = findStart(seed);
+  return { latDeg: s.latDeg, lonDeg: s.lonDeg, toward: s.toward };
 }
 
 export interface SeaPlace {

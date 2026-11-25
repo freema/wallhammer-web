@@ -44,7 +44,7 @@ Members: `sim`, `env`, `onInput`, `onExtract`, `system`, `command`, `frame(realS
 ## What needs a GPU
 
 - Any image, including bakes (`renderer.bake`, for example the `gen-ground` ground bake).
-- Shader compile errors. Type checks and golden hashes do not compile GLSL. A broken shader shows only in the browser console.
+- Shader compile errors. Type checks and golden hashes do not compile GLSL. A broken shader shows in the browser console, or in `tools/shot/shader-check.mjs` ([Shader check](tools.md#shader-check)), which compiles every program a page makes in headless Chromium on the software renderer.
 - Shadow fitting, culling by `InstancedLayer`, the data view.
 
 To check those, open the page or take a screenshot ([Tools](tools.md#screenshots)).

@@ -24,7 +24,7 @@ export type { Mat34, Vec3Out } from './mat34.ts';
 export { boxInVolume, depthViewProj, distanceToBox, newCornerRays, newOrthoFrame, snapRenderOrigin, toRenderSpace } from './view.ts';
 export type { Box3, CullBox, CullFrustum, CullVolume, DepthMode, DepthProjection, OriginAxes, Ray, View } from './view.ts';
 export { primitiveCount, texelBytes } from './data.ts';
-export type { InstanceBounds, InstanceData, MeshData, Primitive, ScalarType, TextureData, TextureFormat, TextureSampling, VertexAttrib, VertexLayout } from './data.ts';
+export type { InstanceBounds, InstanceData, InstanceSolid, InstanceSolidBox, MeshData, Primitive, ScalarType, TextureData, TextureFormat, TextureSampling, VertexAttrib, VertexLayout } from './data.ts';
 export type { BakeDesc, BakeTarget, BlendFactor, BlendSpec, CullMode, DrawState, MaterialDesc, PassName, ShaderSource, UniformValue, Uniforms } from './material.ts';
 export type { EnvSlot, FogLayer, FrameEnvironment, FrameField, FrameRegion, LightMode } from './env-slot.ts';
 export { DAMAGE, PART_FLAG, PART_ROLE, RUBBLE, entryDir, entryRung, entryVariant, packEntry } from './destructible.ts';
@@ -38,5 +38,6 @@ export { FRAME_NONE, FrameSet, directionFromDeg, directionToDeg, quatAxisTurns, 
 export type { FrameBearing, FramePose, FrameState, Quat } from './frames.ts';
 export { radialHeight, radialUpAt, toFramePlane, upFrame } from './up.ts';
 export type { RadialUp, UpFrame } from './up.ts';
+export { SurfaceChart } from './chart.ts';
 export { MARK_CATEGORIES, MARK_STATUSES, lastAfterPicture, lastLog, statusOf } from './marks.ts';
 export type { Mark, MarkCategory, MarkDraft, MarkLogEntry, MarkPatch, MarkStatus, MarkView, PickHit } from './marks.ts';

@@ -28,7 +28,7 @@ import { HALF_M, SIZE_M, naturalHeight, smooth } from './land.ts';
 export const GRID_M = 20;
 export const GRID_N = SIZE_M / GRID_M + 1;
 /** A node carries a line from this many nodes of basin on. */
-const MIN_FLOW = 220;
+export const MIN_FLOW = 220;
 /** A filled hollow is a lake from this many nodes and this depth on; smaller ones are cut through. */
 const MIN_LAKE_NODES = 10;
 const MIN_LAKE_DEPTH_M = 1.5;
@@ -145,6 +145,12 @@ export interface Plan {
   /** Buckets of `BUCKET_M`: per bucket + 1 its first entry in `segs`; an entry is line · 65536 + station. */
   bucketStart: Uint32Array;
   segs: Uint32Array;
+  /**
+   * The drainage of the grid (`GRID_N` nodes a side, every `GRID_M`), as the engine's `traceChannels` reads one: per
+   * node the node it drains to (−1 in the sea and on the square's edge), the basin in nodes, and all nodes upstream
+   * first. The lines are drawn from it; so are the brooks (brooks.ts).
+   */
+  drain: { to: Int32Array; flow: Float32Array; order: Uint32Array };
 }
 
 export const BUCKET_M = 40;
@@ -1161,5 +1167,8 @@ function planUnder(seed: number, tops: Map<number, number>): { plan: Plan; lower
   const segs = new Uint32Array(all);
   for (let b = 0; b < BUCKET_N * BUCKET_N; b++) if (lists[b]) segs.set(lists[b]!, bucketStart[b]!);
 
-  return { plan: { seed, lakeFine, hollowOf, lakes, lines, bucketStart, segs }, lower };
+  const upstream = new Uint32Array(count);
+  for (let k = 0; k < count; k++) upstream[k] = order[count - 1 - k]!;
+  const drain = { to, flow: Float32Array.from(flow), order: upstream };
+  return { plan: { seed, lakeFine, hollowOf, lakes, lines, bucketStart, segs, drain }, lower };
 }

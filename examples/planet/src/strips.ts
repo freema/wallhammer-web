@@ -7,7 +7,8 @@
 import { cubeDirection, cubeGrid, hashInts, sphereStripSurface, stripCarve, stripNearest, stripNet, stripTouches, unit } from 'wallhammer-web/gen-core';
 import type { CellContent, CellId, SpherePatchOptions, StripHit, StripLine, StripNet, StripProfile, StripSurface } from 'wallhammer-web/gen-core';
 import { stripMesh } from 'wallhammer-web/gen-mesh';
-import { QUADS, RADIUS_M, ROOT_LEVEL, buildPlanetCell, findStart, groundHeight, surfaceColor, surfaceCover } from './world.ts';
+import { PLAIN_CELLS, QUADS, RADIUS_M, ROOT_LEVEL, buildPlanetCell, findStart, groundHeight, surfaceColor, surfaceCover } from './world.ts';
+import type { PlanetCellOptions } from './world.ts';
 
 /** Domain version of the cells with strips (the plain generator has 6). */
 export const STRIP_DOMAIN_VERSION = 7;
@@ -245,10 +246,19 @@ function cellReach(cell: CellId): { c: V3; r: number } {
 
 /** Generates one cell with the strips. Pure: (seed, cell) → content. */
 export function generatePlanetStripCell(seed: number, cell: CellId): CellContent {
+  return buildPlanetStripCell(seed, cell, PLAIN_CELLS);
+}
+
+/** The generator of the cells with the strips and options (world.ts, `PlanetCellOptions`). */
+export function planetStripCellGenerator(options: PlanetCellOptions): (seed: number, cell: CellId) => CellContent {
+  return (seed, cell) => buildPlanetStripCell(seed, cell, options);
+}
+
+function buildPlanetStripCell(seed: number, cell: CellId, options: PlanetCellOptions): CellContent {
   const net = planetStrips(seed);
   const { c, r } = cellReach(cell);
   // A cell no line reaches is the plain cell under the domain version of the strips.
-  if (!stripTouches(net, c[0], c[1], c[2], r)) return buildPlanetCell(seed, cell, { domainVersion: STRIP_DOMAIN_VERSION });
+  if (!stripTouches(net, c[0], c[1], c[2], r)) return buildPlanetCell(seed, cell, { domainVersion: STRIP_DOMAIN_VERSION }, options);
   const hit: StripHit = { line: 0, alongM: 0, acrossM: 0, halfWidthM: 0, gradeM: 0, share: 0 };
   // Heights of the carved ground by point: the mesher asks for the same grid vertices again and again.
   const memo = new Map<string, number>();
@@ -272,7 +282,8 @@ export function generatePlanetStripCell(seed: number, cell: CellId): CellContent
     }
     return lastK;
   };
-  const surface = sphereStripSurface({ radiusM: RADIUS_M, quads: QUADS, heightAt: carved });
+  // The strips lie on the triangles the cells draw, cut by the same diagonals.
+  const surface = sphereStripSurface({ radiusM: RADIUS_M, quads: QUADS, heightAt: carved, ...(options.split !== 'fixed' ? { split: options.split } : {}) });
   return buildPlanetCell(seed, cell, {
     domainVersion: STRIP_DOMAIN_VERSION,
     patch: (o: SpherePatchOptions): SpherePatchOptions => ({
@@ -295,5 +306,5 @@ export function generatePlanetStripCell(seed: number, cell: CellId): CellContent
       const m = stripMesh(net, surface, cell, { coarsestLevel: ROOT_LEVEL, liftM: (level) => stripLiftM(surface, level) });
       return m ? [{ material: 'strip', mesh: m.mesh, bounds: m.bounds }] : [];
     },
-  });
+  }, options);
 }

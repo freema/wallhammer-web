@@ -22,6 +22,9 @@
 //   depth: reversed (default) or logarithmic. src: workers (default) or main. horizon=0 switches the horizon culling
 //   off. px and cells set the tolerance in pixels and the budget of cells; gpu the ceiling of GPU memory in MB
 //   (default 560, 0 = none). levels=1 tints the cells by level.
+//   split=shorter cuts every quad of the surface along its diagonal whose ends differ less in height (default: one
+//   fixed diagonal); extra=slope carries the slope in the surface's extra channel and tints steep ground by it,
+//   extra=lift also raises the cliffs by the ground's vertex hook (world.ts, `PlanetCellOptions`; shaders.ts).
 //   strip=0 switches the strips off (strips.ts): the page is then the one without them, its generator, worker and
 //   materials. With the strips and without lat and lon the page starts 3 m above the main line, 300 m from its start.
 //   view=<name> starts in one of the views of `__wh.presets()`.
@@ -31,31 +34,39 @@
 //   time: the animation time in seconds, held there (it places the clouds).
 //   marks=0 hides the pins of the marks (dev server only, marks.ts); marks=1 turns the marks on in a page driven by a
 //   script, which otherwise has none.
+//   walk=1 starts walking on the ground under the place (walk.ts); pitch is then the following view's, dist its boom.
+//   Without lat and lon it starts at a place found from the seed for walking (`walkStart`: trees, rocks and relief,
+//   the sun high behind or beside), also the view `walk`. profile=default|heavy|light: how the walker carries its
+//   weight (examples/shared profiles.ts: its run-up, braking, running turn, stride and lean; key P cycles them).
 // Controls: F starts and stops the flight. W A S D fly along the view, E / Q up and down, Shift faster, drag looks
 // around, the wheel changes the speed, 1 jumps to the top, 2 down to the surface, [ ] move the hour, L shows cell
 // levels, B measures a frame with the graphics work finished, R switches the air between its tables and the reference
 // quality, C hides and shows the clouds, H hides the panel, M plays and stops the movie, N switches the mark mode (dev
-// server only).
+// server only), G drops to the ground below the camera and walks there (W A S D, Shift runs, Space jumps, drag turns,
+// the wheel moves the view in and out; E greets the figure near the start and passes it the box, T waves, J reads, X
+// sits, P switches the movement profile), G again flies on from the view.
 
 import { definePalette } from 'wallhammer-web';
-import type { DepthMode, Vec3 } from 'wallhammer-web/base';
+import type { DepthMode, Vec3, View } from 'wallhammer-web/base';
 import { FreeRig } from 'wallhammer-web/camera';
 import { DEFAULT_WEATHER, atmosphereFor, cloudFieldSlot, sphereSunDirection } from 'wallhammer-web/env';
 import type { Material } from 'wallhammer-web/render';
 import { bindFreeInput, workersAvailable } from 'wallhammer-web/platform';
-import { GeneratorCellProvider, pixelsPerRadian } from 'wallhammer-web/world';
+import { GeneratorCellProvider, SolidIndex, pixelsPerRadian } from 'wallhammer-web/world';
 import type { CellProvider, StreamingConfig } from 'wallhammer-web/world';
-import { CloudShellLayer, StreamedWorld, WorkerCellProvider, createEngine, viewerTickets } from 'wallhammer-web/runtime';
+import { CloudShellLayer, StreamedWorld, WorkerCellProvider, createEngine, streamSolids, viewerTickets } from 'wallhammer-web/runtime';
 import { DEFAULT_FLIGHT, flightDuration, flightPose, wholeSphereHeight } from './flight.ts';
 import type { FlightPlan } from './flight.ts';
 import { flightStreaming } from './flight-check.ts';
 import { MoviePlayer, planMovie } from './movie.ts';
 import { SeaBackdrop, SeaLensLayer, SeaShaftsLayer, SeaSurfaceLayer, seaState, seaSurfaceHeight, seaUniforms } from './sea.ts';
-import { OBJECT_MATERIAL, STRIP_MATERIAL, TERRAIN_MATERIAL, TREE_MATERIAL, WATER_MATERIAL } from './shaders.ts';
+import { OBJECT_MATERIAL, STRIP_MATERIAL, TREE_MATERIAL, WATER_MATERIAL, terrainMaterial } from './shaders.ts';
 import { broadleafMesh, flatCrownMesh, rockMesh, shrubMesh, treeMesh } from './shapes.ts';
-import { STRIP_HALF_WIDTHS, generatePlanetStripCell, planetStrips, stripGroundHeight } from './strips.ts';
+import { STRIP_HALF_WIDTHS, planetStripCellGenerator, planetStrips, stripGroundHeight } from './strips.ts';
+import { moveProfile, nextMoveProfile } from '../../shared/src/figures/profiles.ts';
+import { PlanetWalk } from './walk.ts';
 import { NO_CLOUD_FIELD, PLANET_WIND, planetCloudField, planetWeatherAt } from './weather.ts';
-import { AIR_HEIGHT_M, DEFAULT_SEED, HORIZON_RADIUS_M, MIN_SPLIT_EDGES, OBJECT_LEVEL, RADIUS_M, SELECTION, SHAPE, directionAt, findSeaPlaces, findStart, generatePlanetCell, groundHeight, latLonOf, surfaceHeight } from './world.ts';
+import { AIR_HEIGHT_M, DEFAULT_SEED, HORIZON_RADIUS_M, MIN_SPLIT_EDGES, OBJECT_LEVEL, OBJECT_SOLIDS, RADIUS_M, SELECTION, SHAPE, directionAt, findSeaPlaces, findStart, findWalkStart, groundHeight, latLonOf, planetCellGenerator, planetCellOptions, planetCellQuery, surfaceHeight } from './world.ts';
 
 const q = new URLSearchParams(location.hash.slice(1));
 const num = (k: string, d: number): number => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d);
@@ -78,6 +89,13 @@ const topM = Math.max(1000, num('top', 1.25 * wholeSphereHeight(RADIUS_M, atmOn 
 const climbS = Math.max(5, num('flyS', DEFAULT_FLIGHT.climbS));
 /** The strips (strips.ts): on unless `strip=0`. */
 const stripOn = q.get('strip') !== '0';
+/** `split=` and `extra=`: options of the cells (world.ts); a worker gets them in its URL. */
+const cellOptions = planetCellOptions(q);
+const cellQuery = planetCellQuery(cellOptions);
+const withCellQuery = (u: URL): URL => {
+  if (cellQuery) u.search = cellQuery;
+  return u;
+};
 const strips = stripOn ? planetStrips(seed) : null;
 /** The clouds (weather.ts): on unless `clouds=0`; `vol=0` keeps the cloud shell alone, without the volumetric clouds. */
 const cloudsOn = q.get('clouds') !== '0';
@@ -136,14 +154,56 @@ const stripEnd = (line: number): number => {
 // Without a place in the URL: low land with something to look at, found from the seed; with the strips a point of the
 // main line 300 m from its start, looking along it.
 const placed = q.has('lat') && q.has('lon');
-const found = placed || strips ? null : findStart(seed);
-const onStrip = !placed && strips ? latLonOf(stripPoint(0, 300)) : null;
-const startLat = found ? found.latDeg : onStrip ? onStrip[0] : num('lat', 0);
-const startLon = found ? found.lonDeg : onStrip ? onStrip[1] : num('lon', 0);
+/**
+ * The start of a bare `walk=1` (and of the `walk` view): land with trees, rocks and relief round it, away from the
+ * strips, facing the ground that rises most (world.ts, `findWalkStart`), at the first hour of the page's day when the
+ * sun stands 35–55° high behind or beside the walker. Found once, on first use.
+ */
+let walkStartOf: { lat: number; lon: number; hour: number; toward: [number, number, number] } | null = null;
+function walkStart(): { lat: number; lon: number; hour: number; toward: [number, number, number] } {
+  if (walkStartOf) return walkStartOf;
+  const boxes = strips ? strips.lines.map((l) => l.box) : [];
+  const keep = (d: readonly [number, number, number]): boolean =>
+    boxes.every((b) => {
+      const m = 500;
+      const x = d[0] * RADIUS_M, y = d[1] * RADIUS_M, z = d[2] * RADIUS_M;
+      return x < b[0]! - m || y < b[1]! - m || z < b[2]! - m || x > b[3]! + m || y > b[4]! + m || z > b[5]! + m;
+    });
+  const w = findWalkStart(seed, keep);
+  const d = directionAt(w.latDeg, w.lonDeg);
+  // The way the walker faces, in the horizon.
+  const k = w.toward[0] * d[0] + w.toward[1] * d[1] + w.toward[2] * d[2];
+  const f = [w.toward[0] - d[0] * k, w.toward[1] - d[1] * k, w.toward[2] - d[2] * k];
+  const fl = Math.hypot(f[0]!, f[1]!, f[2]!) || 1;
+  let hour = (((10 - w.lonDeg / 15) % 24) + 24) % 24;
+  let best = Infinity;
+  for (let i = 0; i < 96; i++) {
+    const h = i / 4;
+    const s = sphereSunDirection(DAY_OF_YEAR, h);
+    const up = s[0] * d[0] + s[1] * d[1] + s[2] * d[2];
+    const elevation = (Math.asin(Math.max(-1, Math.min(1, up))) * 180) / Math.PI;
+    if (elevation < 35 || elevation > 55) continue;
+    // Ahead of the walker counts against the hour, behind it for; the elevation nearest 45° breaks the ties.
+    const ahead = (s[0] * f[0]! + s[1] * f[1]! + s[2] * f[2]!) / fl / Math.max(1e-6, Math.sqrt(1 - up * up));
+    const score = (ahead > 0.35 ? 10 : 0) + ahead + Math.abs(elevation - 45) / 100;
+    if (score < best) (best = score), (hour = h);
+  }
+  walkStartOf = { lat: w.latDeg, lon: w.lonDeg, hour, toward: w.toward };
+  return walkStartOf;
+}
+/** The view behind the walker at its start: pitch and boom. */
+const WALK_START_VIEW = { pitchDeg: 8, distance: 6.5 };
+const walkBare = q.get('walk') === '1' && !placed;
+const walkAt = walkBare ? walkStart() : null;
+const found = placed || strips || walkAt ? null : findStart(seed);
+const onStrip = !placed && strips && !walkAt ? latLonOf(stripPoint(0, 300)) : null;
+const startLat = walkAt ? walkAt.lat : found ? found.latDeg : onStrip ? onStrip[0] : num('lat', 0);
+const startLon = walkAt ? walkAt.lon : found ? found.lonDeg : onStrip ? onStrip[1] : num('lon', 0);
 // The hour is universal time; the default puts the start place into the morning (the sun stands over the longitude
 // 180° − 15° × hour).
-// On the strips, which may lie in a winter half of the sphere, the default is the local noon.
-const startHour = num('hour', ((((onStrip ? 12 : 8.5) - startLon / 15) % 24) + 24) % 24);
+// On the strips, which may lie in a winter half of the sphere, the default is the local noon; a bare `walk=1` takes the
+// hour of `walkStart`.
+const startHour = num('hour', walkAt ? walkAt.hour : ((((onStrip ? 12 : 8.5) - startLon / 15) % 24) + 24) % 24);
 
 // --- Engine ----------------------------------------------------------------------------------------------------------
 // The camera takes up from the shape and keeps itself above the surface; its speed follows its height.
@@ -155,6 +215,10 @@ const rig = new FreeRig(
 if (found && !q.has('yaw')) {
   rig.lookAt(above(found.toward, 0));
   rig.setState({ pitchDeg: num('pitch', DEFAULT_FLIGHT.lowPitchDeg) });
+}
+if (walkAt) {
+  rig.setState({ position: above(directionAt(walkAt.lat, walkAt.lon), 2) });
+  if (!q.has('yaw')) rig.lookAt(above(walkAt.toward, 0));
 }
 if (onStrip) {
   rig.setState({ position: above(stripPoint(0, 300), num('alt', 3)) });
@@ -204,7 +268,8 @@ const engine = createEngine({
   // volumetric clouds, which hand over to the cloud shell between 15 and 30 km up.
   ...(cloudsOn ? { cloudShadows: true, precipitation: true, ...(volumeOn ? { cloudVolume: true } : {}) } : {}),
   canvas: document.querySelector<HTMLCanvasElement>('#view')!,
-  view: rig,
+  // A `View`: the walk mode (key G) draws through its following view instead.
+  view: rig as View,
   palette: definePalette({ sky: '#05070c' }),
   background: [0.02, 0.027, 0.047],
   // `radialUp`: up points away from the sphere's centre in every shader that asks for it.
@@ -226,16 +291,16 @@ const src = q.get('src') ?? (workersAvailable() ? 'workers' : 'main');
 const onMain = src === 'main' || !workersAvailable();
 const provider: CellProvider = stripOn
   ? onMain
-    ? new GeneratorCellProvider(seed, generatePlanetStripCell)
-    : new WorkerCellProvider(new URL('./strip-cell-worker.ts', import.meta.url), seed)
+    ? new GeneratorCellProvider(seed, planetStripCellGenerator(cellOptions))
+    : new WorkerCellProvider(withCellQuery(new URL('./strip-cell-worker.ts', import.meta.url)), seed)
   : onMain
-    ? new GeneratorCellProvider(seed, generatePlanetCell)
-    : new WorkerCellProvider(new URL('./cell-worker.ts', import.meta.url), seed);
+    ? new GeneratorCellProvider(seed, planetCellGenerator(cellOptions))
+    : new WorkerCellProvider(withCellQuery(new URL('./cell-worker.ts', import.meta.url)), seed);
 // No `face`: cells of all six faces are streamed. Every root is always wanted, so the far side stays covered. The
 // headless check of the flight (flight-check.ts) runs on the same configuration.
 const streaming = flightStreaming(Math.max(64, Math.round(num('cells', SELECTION.maxCells))));
 const config: StreamingConfig = { ...streaming, screenError: { ...streaming.screenError!, maxErrorPx: Math.max(0.25, num('px', SELECTION.maxErrorPx)) } };
-const [terrain, object, tree, water] = [TERRAIN_MATERIAL, OBJECT_MATERIAL, TREE_MATERIAL, WATER_MATERIAL].map((m) => renderer.material(m)) as [Material, Material, Material, Material];
+const [terrain, object, tree, water] = [terrainMaterial(cellOptions.extra), OBJECT_MATERIAL, TREE_MATERIAL, WATER_MATERIAL].map((m) => renderer.material(m)) as [Material, Material, Material, Material];
 /** Where a tree changes to its coarse mesh: at 700 m a crown is 10 to 15 pixels wide on a screen 900 pixels high. */
 const TREE_FINE_M = 700;
 /** The thinned trees of level 7 reach about 5 km from the eye (world.ts, `THIN_RANK`). */
@@ -380,6 +445,7 @@ let pendingFlight = q.get('fly') === '1';
 let benchMs = 0;
 
 function startFlight(held = false): Flight {
+  setWalk(false);
   const dir = SHAPE.directionOf(rig.position);
   const v = rig.state();
   // From where the camera is: a flight started in the air comes back to that height.
@@ -504,6 +570,64 @@ function syncWeather(eye: Vec3, sunDir: Vec3): void {
 
 // --- Camera → streaming ----------------------------------------------------------------------------------------------
 const input = bindFreeInput(engine.canvas, rig, { onChange: () => engine.invalidate() });
+/**
+ * The trees and rocks of the resident cells of `OBJECT_LEVEL`, as solids in world space: the coarsest level that holds
+ * every object, resident wherever it or a finer level is drawn, so near the walker always (world.ts, `OBJECT_SOLIDS`).
+ */
+const solids = new SolidIndex({ solids: OBJECT_SOLIDS, shape: SHAPE, center: SHAPE.centerM });
+streamSolids(world, solids, { level: OBJECT_LEVEL });
+/** The walk mode (walk.ts, key G): a body on the ground the cells draw, seen from behind; trees and rocks stop it. */
+// The second figure of the walk stands near the walk's start of the seed (walk-scene.ts `meetPlace`).
+const meetStart = walkStart();
+const meetDir = directionAt(meetStart.lat, meetStart.lon);
+const c0 = SHAPE.centerM;
+const meet = { feet: [c0[0] + meetDir[0] * RADIUS_M, c0[1] + meetDir[1] * RADIUS_M, c0[2] + meetDir[2] * RADIUS_M], toward: meetStart.toward };
+const walk = new PlanetWalk({ renderer, canvas: engine.canvas, heightAt: floorAt, split: cellOptions.split, fovDeg: FOV_DEG, onChange: () => engine.invalidate(), solids, meet, profile: moveProfile(q.get('profile')) });
+/** The free camera's heading as a direction in the horizon (its view with the pitch left out). */
+function freeHeading(): Vec3 {
+  const pitchDeg = rig.state().pitchDeg;
+  rig.setState({ pitchDeg: 0 });
+  const f = rig.axes().forward;
+  rig.setState({ pitchDeg });
+  return [f[0], f[1], f[2]];
+}
+/**
+ * Starts walking on the ground under the camera (facing its heading; `pitchDeg` and `distance` set the view behind
+ * the body) or ends it, the free camera then standing where the following view was.
+ */
+/** The shadow map's fit while walking, and the page's own while it is away. */
+const WALK_SHADOWS = { softnessM: 0.12, distanceM: 60 };
+let shadowsBeforeWalk: { softnessM: number; distanceM: number } | null = null;
+function setWalk(on: boolean, pitchDeg?: number, distance?: number): void {
+  if (on === walk.active) return;
+  if (on) {
+    if (flight) stopFlight(false);
+    if (moviePlayer.active) moviePlayer.stop();
+    if (distance !== undefined) walk.rig.distance = Math.min(walk.rig.setup.maxDistance, Math.max(0, distance));
+    walk.enter(rig.position, freeHeading(), pitchDeg ?? walk.rig.pitchDeg);
+    engine.setView(walk.view);
+    // Shadows sized for a figure: the page's shadow map spreads over 4 km with a 1.2 m penumbra, which leaves a body
+    // of 1.75 m only a smudge. While walking it covers the near 60 m with a sharp edge; leaving puts it back.
+    shadowsBeforeWalk = renderer.shadowFit;
+    renderer.setShadowFit(WALK_SHADOWS);
+  } else {
+    walk.exit();
+    if (shadowsBeforeWalk) renderer.setShadowFit(shadowsBeforeWalk);
+    shadowsBeforeWalk = null;
+    mirrorWalk();
+    engine.setView(rig);
+  }
+  engine.invalidate();
+}
+/** Puts the free camera at the following view's eye, looking the same way (the panel, the URL and streaming read it). */
+function mirrorWalk(): void {
+  const v = walk.view;
+  const eye = v.worldEye();
+  const f = v.axes().forward;
+  const up = SHAPE.directionOf(eye);
+  const down = -(f[0] * up[0] + f[1] * up[1] + f[2] * up[2]);
+  rig.setState({ position: eye, yawDeg: v.heading / DEG, pitchDeg: Math.asin(Math.max(-1, Math.min(1, down))) / DEG });
+}
 let scripted = false;
 /** True while `measureFrame` renders: its frames stay out of the frame times. */
 let measuring = false;
@@ -535,6 +659,9 @@ renderer.beforeFrame.unshift(() => {
     applyFlight(f, f.t);
     if (!f.held && f.t >= flightDuration(f.plan)) stopFlight(true);
     else engine.invalidate();
+  } else if (walk.active) {
+    if (!scripted && walk.frame(Math.min(0.1, engine.frameSeconds))) engine.invalidate();
+    mirrorWalk();
   } else if (!scripted) input.step();
   rideSea();
   const p = rig.position;
@@ -545,6 +672,7 @@ renderer.beforeFrame.unshift(() => {
   env.observer = { up: SHAPE.directionOf(eye), sunDir };
   world.setFocus(eye);
   rig.origin = [world.origin[0], world.origin[1], world.origin[2]];
+  if (walk.active) walk.draw(world.origin);
   syncWeather(eye, sunDir);
   syncSea(eye);
   world.setEye(eye);
@@ -554,6 +682,7 @@ renderer.beforeFrame.unshift(() => {
 /** Jumps to `alt` metres above the surface under the camera, looking `pitchDeg` below the horizon. */
 function jump(alt: number, pitchDeg: number): void {
   stopFlight(false);
+  setWalk(false);
   rig.setState({ position: above(SHAPE.directionOf(rig.position), alt), pitchDeg });
 }
 
@@ -589,7 +718,14 @@ const KEYS: Record<string, () => void> = {
   KeyR: () => setAirReference(!air?.reference),
   KeyC: () => void (showClouds = cloudsOn && !showClouds),
   KeyH: () => panel.classList.toggle('hidden'),
-  KeyM: () => moviePlayer.toggle(),
+  KeyM: () => (setWalk(false), moviePlayer.toggle()),
+  KeyG: () => setWalk(!walk.active),
+  // While walking (walk-scene.ts): E greets the figure near the start and passes the box, T waves, J reads, X sits.
+  KeyE: () => void (walk.active && walk.act('meet')),
+  KeyT: () => void (walk.active && walk.act('wave')),
+  KeyJ: () => void (walk.active && walk.act('read')),
+  KeyX: () => void (walk.active && walk.act('sit')),
+  KeyP: () => void (walk.active && walk.setProfile(nextMoveProfile(walk.profile.name))),
 };
 window.addEventListener('keydown', (e) => {
   const k = KEYS[e.code];
@@ -617,7 +753,7 @@ const moviePlayer = new MoviePlayer({
     env.time.set(f.timeS);
   },
   settled: () => world.settled && !world.busy,
-  onStart: () => stopFlight(false),
+  onStart: () => (setWalk(false), stopFlight(false)),
   panels: [hud, panel],
   bars: q.get('bars') !== '0',
 });
@@ -634,6 +770,9 @@ function hudText(): string {
   const s = world.stats();
   const speed = Math.hypot(rig.velocity[0], rig.velocity[1], rig.velocity[2]);
   const frame = meter.intervalMs > 0 ? `${meter.intervalMs.toFixed(1)} ms (cpu ${meter.cpuMs.toFixed(1)})` : `cpu ${meter.cpuMs.toFixed(1)} ms`;
+  if (walk.active) {
+    return [walk.hudText(), `patches ${s.cellsVisible} of ${s.drawn}`, `frame ${frame}`, `GPU ${mb(engine.device.memory().total)}`].join('  ·  ');
+  }
   return [
     `height ${metres(aboveSurface(rig.position))}`,
     `speed ${metres(speed)}/s`,
@@ -680,7 +819,9 @@ function panelText(): string {
     ...(seaState.nearM > 0 ? [`sea     eye ${seaState.aboveSurfaceM.toFixed(2)} m above the waves, ${seaState.aboveLevelM.toFixed(2)} m above the level`] : []),
     ...(strips ? [`strips  main ${metres(stripEnd(0))} across a cube edge, at the node it branches into ${metres(stripEnd(1))} and ${metres(stripEnd(2))}, width ${STRIP_HALF_WIDTHS.map((w) => fmt(2 * w)).join(' / ')} m   (strip=0 turns them off)`] : []),
     ...(report ? [reportText(report)] : []),
-    `F flight · WASD fly · E/Q up/down · Shift fast · drag look · wheel speed · 1 top · 2 surface · [ ] hour · L levels · B measure · R reference air${cloudsOn ? ' · C clouds' : ''} · H hide`,
+    walk.active
+      ? `WASD walk · Shift run · Space jump · drag turn · wheel boom · E greet / pass the box (near the other) · T wave · J read · X sit · H hide · G free camera`
+      : `F flight · WASD fly · E/Q up/down · Shift fast · drag look · wheel speed · 1 top · 2 surface · [ ] hour · L levels · B measure · R reference air${cloudsOn ? ' · C clouds' : ''} · H hide · G walk`,
   ].join('\n');
 }
 
@@ -689,11 +830,14 @@ function panelText(): string {
  * time (`time=`), so the hash puts back the very picture (the marks' views).
  */
 function viewHash(exact = false): string {
-  const [lat, lon] = latLonOf(SHAPE.directionOf(rig.position));
-  const v = rig.state();
-  const keep = ['flyS', 'top', 'air', 'px', 'cells', 'gpu', 'clouds', 'vol', 'cover'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+  // Walking: the place of the feet and the following view's heading, pitch and boom.
+  const feet = walk.active ? walk.walker.position([0, 0, 0] as Vec3) : null;
+  const [lat, lon] = latLonOf(SHAPE.directionOf(feet ?? rig.position));
+  const v = walk.active ? { yawDeg: walk.view.heading / DEG, pitchDeg: walk.rig.pitchDeg } : rig.state();
+  const walking = walk.active ? `&walk=1&dist=${walk.rig.distance.toFixed(exact ? 3 : 1)}${walk.profile.name !== 'default' ? `&profile=${walk.profile.name}` : ''}` : '';
+  const keep = ['flyS', 'top', 'air', 'px', 'cells', 'gpu', 'clouds', 'vol', 'cover', 'split', 'extra'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
   const [dp, da, dv, dh] = exact ? [6, 2, 3, 4] : [4, 1, 1, 2];
-  return `seed=${seed}&lat=${lat.toFixed(dp)}&lon=${lon.toFixed(dp)}&alt=${aboveSurface(rig.position).toFixed(da)}&yaw=${v.yawDeg.toFixed(dv)}&pitch=${v.pitchDeg.toFixed(dv)}&hour=${env.day.time.toFixed(dh)}${exact ? `&time=${env.time.time.toFixed(2)}` : ''}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${q.has('depth') ? `&depth=${depth}` : ''}${horizonOn ? '' : '&horizon=0'}${atmOn ? (air?.reference ? '&atm=ref' : '') : '&atm=0'}${stripOn ? '' : '&strip=0'}${keep}`;
+  return `seed=${seed}&lat=${lat.toFixed(dp)}&lon=${lon.toFixed(dp)}&alt=${aboveSurface(feet ?? rig.position).toFixed(da)}&yaw=${v.yawDeg.toFixed(dv)}&pitch=${v.pitchDeg.toFixed(dv)}&hour=${env.day.time.toFixed(dh)}${exact ? `&time=${env.time.time.toFixed(2)}` : ''}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${q.has('depth') ? `&depth=${depth}` : ''}${horizonOn ? '' : '&horizon=0'}${atmOn ? (air?.reference ? '&atm=ref' : '') : '&atm=0'}${stripOn ? '' : '&strip=0'}${walking}${keep}`;
 }
 
 let lastHash = '';
@@ -728,6 +872,8 @@ interface ViewSpec {
   toward?: readonly [number, number, number];
   /** The eye rides the moving sea this many metres above its waves, until the camera is moved. */
   onWater?: number;
+  /** Walks there: on the ground under the place, facing `toward` (or the view's heading), the view behind at this pitch and boom. */
+  walk?: { pitchDeg: number; distance: number };
 }
 /** The views along the strips: from orbit, over the edge of the cube, along the main line, at its node. */
 function stripPresets(): ViewSpec[] {
@@ -814,6 +960,7 @@ function seaPresets(): ViewSpec[] {
 }
 /** Puts the camera where a view says. */
 function applyView(v: ViewSpec): void {
+  setWalk(false);
   const [lat, lon] = latLonOf(SHAPE.directionOf(rig.position));
   rig.setState({ position: above(directionAt(v.lat ?? lat, v.lon ?? lon), v.height ?? aboveSurface(rig.position)), ...(v.yawDeg !== undefined ? { yawDeg: v.yawDeg } : {}), ...(v.pitchDeg !== undefined && !v.toward ? { pitchDeg: v.pitchDeg } : {}) });
   if (v.toward) {
@@ -826,6 +973,12 @@ function applyView(v: ViewSpec): void {
   applyUniforms();
   const p = rig.position;
   seaRide = v.onWater !== undefined ? { aboveM: v.onWater, at: [p[0], p[1], p[2]] } : null;
+  if (v.walk) setWalk(true, v.walk.pitchDeg, v.walk.distance);
+}
+/** The walk's view: the start of a bare `walk=1`, walking. */
+function walkPreset(): ViewSpec {
+  const w = walkStart();
+  return { name: 'walk', lat: w.lat, lon: w.lon, height: 2, hour: w.hour, toward: w.toward, pitchDeg: 0, walk: WALK_START_VIEW };
 }
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 /** Renders frames until the streaming has settled (every wanted cell drawn, nothing in flight). */
@@ -851,6 +1004,7 @@ async function settle(limit = 6000): Promise<boolean> {
     ...stripPresets(),
     ...cloudPresets(),
     ...seaPresets(),
+    walkPreset(),
   ],
   setView: (v: ViewSpec): void => {
     scripted = true;
@@ -860,6 +1014,48 @@ async function settle(limit = 6000): Promise<boolean> {
     engine.renderNow();
   },
   getView: () => ({ ...rig.state(), height: aboveSurface(rig.position) }),
+  /** The walk mode (key G): on or off; on drops to the ground under the camera, `pitchDeg` and `distance` set the view. */
+  setWalk: (on: boolean, pitchDeg?: number, distance?: number): void => (setWalk(on, pitchDeg, distance), engine.renderNow()),
+  /**
+   * Walks for `seconds` in fixed frames of `dt` with the given controls (forward and right −1 to 1 in the view's frame),
+   * as the keys would, then draws. For headless checks; the clock does not walk the body while a script drives it.
+   */
+  walkFor: (seconds: number, forward = 1, right = 0, run = false, dt = 1 / 60): void => {
+    scripted = true;
+    if (!walk.active) setWalk(true);
+    walk.drive(seconds, forward, right, run, dt);
+    engine.renderNow();
+  },
+  /**
+   * An act of the walker as its key would ask for it (starts walking if needed): 'wave' (T), 'greet' (E the first
+   * time: greet, then pass the box), 'give' (E later: pass the box), 'read' (J), 'sit' (X). Returns what came of it;
+   * `walkFor` plays it.
+   */
+  walkAct: (name: 'wave' | 'greet' | 'give' | 'read' | 'sit'): string => {
+    scripted = true;
+    if (!walk.active) setWalk(true);
+    const r = name === 'greet' ? walk.act('meet') : walk.act(name);
+    engine.renderNow();
+    return r;
+  },
+  /** The walker and its view: feet, height above the drawn ground, recharts, the boom, the cost of the ground; `acts`: the acts' state. */
+  walkState: () => walk.report(),
+  /** The walker's movement profile ('default', 'heavy', 'light'); with a name, switches to it first. Returns the name. */
+  walkProfile: (name?: string): string => {
+    if (name !== undefined) walk.setProfile(moveProfile(name));
+    engine.renderNow();
+    return walk.profile.name;
+  },
+  /**
+   * The trees and rocks within `radius` metres (default 10) of the walker's feet, or of the camera when not walking,
+   * nearest first, with the index's totals and the solids in the walker's current chart.
+   */
+  solidsNear: (radius = 10) => ({
+    ...walk.solidsNear(radius, walk.active ? undefined : [rig.position[0], rig.position[1], rig.position[2]]),
+    indexed: solids.solidCount,
+    cells: solids.cellCount,
+    inChart: walk.feed?.count ?? 0,
+  }),
   /** The URL hash of the current view (what the page writes to the address bar). */
   hash: viewHash,
   settled: async (): Promise<boolean> => {
@@ -915,8 +1111,11 @@ async function settle(limit = 6000): Promise<boolean> {
   },
 };
 // `view=<name>`: start in a view of the presets.
-const startView = q.has('view') ? [...stripPresets(), ...cloudPresets(), ...seaPresets()].find((v) => v.name === q.get('view')) : undefined;
+const startView = q.has('view') ? (q.get('view') === 'walk' ? walkPreset() : [...stripPresets(), ...cloudPresets(), ...seaPresets()].find((v) => v.name === q.get('view'))) : undefined;
 if (startView) applyView(startView);
+// `walk=1`: walking on the ground under the start place.
+// A bare `walk=1` (no lat and lon) starts at `walkStart` with its view unless pitch and dist are given.
+if (q.get('walk') === '1') setWalk(true, q.has('pitch') ? num('pitch', 12) : walkBare ? WALK_START_VIEW.pitchDeg : undefined, q.has('dist') ? num('dist', 6) : walkBare ? WALK_START_VIEW.distance : undefined);
 // Marks (marks.ts, key N): notes pinned to points of the planet, kept by the dev server's store. Only in the dev server:
 // the static build drops this branch and the module with it.
 if (import.meta.env.DEV) {
@@ -924,6 +1123,7 @@ if (import.meta.env.DEV) {
     installMarks({
       canvas: engine.canvas,
       rig,
+      walkView: () => (walk.active ? walk.view : null),
       seed,
       params: q,
       endpoint: `${import.meta.env.BASE_URL}__marks`,
@@ -939,6 +1139,7 @@ if (import.meta.env.DEV) {
         stopFlight(false);
         if (moviePlayer.active) moviePlayer.stop();
         applyView({ lat: n('lat'), lon: n('lon'), height: n('alt'), yawDeg: n('yaw'), pitchDeg: n('pitch'), hour: n('hour'), time: n('time') });
+        if (h.get('walk') === '1') setWalk(true, n('pitch'), n('dist'));
       },
       renderNow: () => engine.renderNow(),
       invalidate: () => engine.invalidate(),

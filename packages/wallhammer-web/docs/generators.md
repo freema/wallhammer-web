@@ -499,14 +499,15 @@ The vegetation shader reads the season slot and includes `<snow>`, both from `ge
 Import from `wallhammer-web/gen-plan`. A coarse plan over a whole sphere, made once before any cell is generated, so that a cell can ask what passes through it without knowing its neighbours. The module names nothing; the code that uses it gives the lines and hollows their meaning.
 
 - **Grid.** `sphereGrid(radiusM, level)` is one node at the middle of every cell of one level of the cube sphere (`6 · 4^level` nodes, node = `face · n² + y · n + x`). `gridNeighbours` gives the up to eight neighbours, across the seams of the faces too (a corner of the cube has seven). `gridNodeAt` finds the node of a direction, `gridDirection` the direction of a node, `gridNodeArea` its area in m², and `gridSample` reads a field of one value per node bilinearly at any direction. `gridWeights` gives the nodes and weights behind that read (three at a corner of the cube, else four, summing to 1), so a caller can blend a share of its own, for example the part of a point that belongs to one region of nodes; the sum of weight times value in their order is `gridSample` bit for bit.
-- **Drainage.** `drainGrid(grid, heights, options)` fills every hollow to its sill (a priority flood from the base nodes, the nodes at or under `baseLevel`) and returns per node the filled height, the node it drains to, an order in which every node comes before the one it drains to, the gathered flow and the pool it lies in. A filled hollow counts as a pool from `minPoolNodes` nodes and `minPoolDepth` depth on. `traceChannels(grid, drainage, { minFlow })` cuts the nodes with enough flow into chains; each ends in a base node, a pool or another chain.
+- **Drainage.** `drainGrid(grid, heights, options)` fills every hollow to its sill (a priority flood from the base nodes, the nodes at or under `baseLevel`) and returns per node the filled height, the node it drains to, an order in which every node comes before the one it drains to, the gathered flow and the pool it lies in. A filled hollow counts as a pool from `minPoolNodes` nodes and `minPoolDepth` depth on. `traceChannels(grid, drainage, { minFlow })` cuts the nodes with enough flow into chains; each ends in a base node, a pool or another chain. It reads only the node count of the grid and `to`, `flow`, `pool` and `order` of the drainage, so a drainage made elsewhere (over a plane grid, say) is traced the same way.
+- **Channel classes.** `channelOrder(channels)` gives the Strahler order of every channel: 1 where nothing runs in, otherwise the highest order running in, plus 1 when two or more share it. `channelFlow(channels, flow)` copies the gathered flow to every entry of the chains (`along`) and gives per channel the flow it hands on (`out`: its last own node, the one before the node it shares with what it runs into). `classifyByThresholds(values, thresholds)` turns any values into classes: how many of the ascending thresholds each value reaches. Trace once from the smallest threshold of interest and classify the channels by `out`, or by order; the caller gives each class its meaning (its width, its profile, how it is drawn).
 - **Lines.** `smoothLine(points, rounds)` smooths a line of unit directions and keeps its ends; `fallingGrade(heights, minDrop)` makes a profile that never rises along it.
 - **Index.** `lineTiles({ level, radiusM, start, points, reachM })` lists per tile (a cell of `level`) every line that comes within its reach of it. `tileLinesAt` reads the lines of the tile at a direction, `tileLinesOfCell` those of any cell, finer or coarser than the tiles. A tile may list a line that does not reach it; it never misses one that does.
 
 The results are typed arrays only, so a plan can go into a worker or a file as it is. The same inputs give the same bits.
 
 ```ts
-import { drainGrid, gridDirection, lineTiles, smoothLine, sphereGrid, tileLinesAt, traceChannels } from 'wallhammer-web/gen-plan';
+import { channelFlow, channelOrder, classifyByThresholds, drainGrid, gridDirection, lineTiles, smoothLine, sphereGrid, tileLinesAt, traceChannels } from 'wallhammer-web/gen-plan';
 
 const grid = sphereGrid(1_000_000, 5);
 const heights = new Float32Array(grid.count);
@@ -516,6 +517,9 @@ for (let i = 0; i < grid.count; i++) {
 }
 const drainage = drainGrid(grid, heights, { baseLevel: 0, minPoolNodes: 4, minPoolDepth: 5 });
 const channels = traceChannels(grid, drainage, { minFlow: 30 });
+// Classes by the flow each channel hands on: 0 below 100, 1 from 100, 2 from 400. And the order of each.
+const classes = classifyByThresholds(channelFlow(channels, drainage.flow).out, [100, 400]);
+const order = channelOrder(channels);
 
 // One line per channel: the directions of its nodes, smoothed.
 const start = new Uint32Array(channels.start.length);

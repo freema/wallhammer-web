@@ -348,9 +348,9 @@ export class Renderer {
   /** Measuring hooks (`RenderProbe`). Null in normal use; set only while profiling and reset afterwards. */
   probe: RenderProbe | null = null;
 
-  private readonly shadowSoftnessM: number;
+  private shadowSoftnessM: number;
   private shadowMapSize: number;
-  private readonly shadowDistanceM: number;
+  private shadowDistanceM: number;
   private readonly frameBlock: UniformBlock;
   private readonly frameData: Float32Array;
   private readonly shadowTarget: DepthTarget;
@@ -556,6 +556,23 @@ export class Renderer {
   invalidateShadows(): void {
     this.shadowKey = '';
     this.singleKeyValid = false;
+  }
+
+  /**
+   * Changes the penumbra width (`shadowSoftnessM`) and, in mode `'single'`, how far from the eye shadows reach
+   * (`shadowDistanceM`; Infinity: the whole scene) while running, and draws the shadows again. A short reach with a
+   * small softness gives sharp shadows of small things near the eye (a figure seen from close by); setting the values
+   * back restores the look. In the modes with areas the reach stays as built (`ShadowOptions.reachM`).
+   */
+  setShadowFit(o: { softnessM?: number; distanceM?: number }): void {
+    if (o.softnessM !== undefined && o.softnessM > 0) this.shadowSoftnessM = o.softnessM;
+    if (o.distanceM !== undefined && o.distanceM > 0) this.shadowDistanceM = o.distanceM;
+    this.invalidateShadows();
+  }
+
+  /** The penumbra width and the reach of shadows now, metres (`setShadowFit`). */
+  get shadowFit(): { softnessM: number; distanceM: number } {
+    return { softnessM: this.shadowSoftnessM, distanceM: this.shadowDistanceM };
   }
 
   /**

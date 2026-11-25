@@ -11,7 +11,9 @@
 //   s=<scenario,...> scripted events; with at=<seconds> the scenario is presented and the clock frozen that long
 //   after its last event (reproducible collapse frames). budget=<n> caps the pieces in flight.
 // Controls: click blasts at the point under the cursor, drag orbits, the wheel zooms, [ ] radius, - = energy,
-// Z undo, R reset, H hides the text, D toggles debris, space runs the day.
+// Z undo, R reset, H hides the text, D toggles debris, space runs the day. N switches the mark mode (dev server only:
+// a click then pins a note instead of blasting; marks=1 turns the marks on in a page driven by a script, marks=0 hides
+// the pins).
 
 import { DEFAULT_WEATHER, PerspectiveOrbitRig, heightFieldMesh } from 'wallhammer-web';
 import type { MeshData, StructureDesc, StructureState, WeatherState } from 'wallhammer-web';
@@ -20,7 +22,8 @@ import { MeshLayer, TransientLayer } from 'wallhammer-web/render';
 import type { DustPuff } from 'wallhammer-web';
 import type { Mesh } from 'wallhammer-web/gpu';
 import type { Material } from 'wallhammer-web/render';
-import { createEngine } from 'wallhammer-web/runtime';
+import { createEngine, installEngineMarking } from 'wallhammer-web/runtime';
+import type { MarkPick } from 'wallhammer-web/runtime';
 import {
   applyEventToAll,
   compileStructure,
@@ -455,4 +458,34 @@ const now = <T>(f: () => T): T => {
     return ms;
   },
 };
+
+// Marks (key N): notes pinned to points of the structures or the ground. The pick is the blast's: the standing parts
+// (`raycastParts`, gone ones left out), else the ground plane; rubble, debris and falling pieces are not in it. The
+// page's hash holds the state of every structure, so a mark's view shows the same ruin. Only in the dev server (the
+// live demos have none); `__wh.marks` is the script interface.
+if (import.meta.env.DEV) {
+  const r2 = (v: number): number => Math.round(v * 100) / 100;
+  const pick: MarkPick = (ray, pixelGrowth) => {
+    const hit = raycastParts(DESCS, ray.origin, ray.dir, (st, part) => {
+      const state = states.get(st);
+      return !!state && (state.ruin || (state.parts.get(part) ?? 0) % 4 === 3);
+    });
+    const t = hit ? hit.t : ray.dir[1] < -1e-4 ? (GROUND_Y - ray.origin[1]) / ray.dir[1] : -1;
+    if (t < 0 || t > 2000) return null;
+    const world: [number, number, number] = hit ? hit.point : [ray.origin[0] + ray.dir[0] * t, GROUND_Y, ray.origin[2] + ray.dir[2] * t];
+    return {
+      world,
+      distanceM: r2(t),
+      surface: hit ? `structure ${hit.structure} part ${hit.part}` : 'ground',
+      place: { x: r2(world[0]), z: r2(world[2]), heightM: r2(world[1]), structure: hit ? hit.structure : null, part: hit ? hit.part : null },
+      accuracy: {
+        method: hit ? 'raycastParts against the standing parts (exact prisms)' : 'the ground plane',
+        metresPerPixel: Number((pixelGrowth * t).toPrecision(3)),
+        misses: 'rubble, debris, falling pieces and gone parts',
+      },
+    };
+  };
+  const marks = installEngineMarking(engine, { pick });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
 engine.start();

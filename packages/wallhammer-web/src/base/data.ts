@@ -55,6 +55,61 @@ export interface InstanceBounds {
   height: number;
 }
 
+/**
+ * The solid an instance stands for, read from its record: where the base point, the size and the turn sit, as float
+ * offsets inside one instance, or constants. Plain data, one per archetype; an index of solids (`SolidIndex` of world)
+ * reads instance records with it. The solid is an upright cylinder round the axis from `belowM` under the base point
+ * to `height` above it, or with `box` an upright turned box.
+ */
+export interface InstanceSolid {
+  /** Base point x, y, z (three consecutive floats), relative to the cell origin like every instance position. */
+  position: number;
+  /** Float offset of the radius. Without it the radius is `radiusM`. */
+  radius?: number;
+  /** Radius in metres when there is no `radius` offset. Default 0 (no solid, unless `box` gives the size). */
+  radiusM?: number;
+  /** Factor on the radius (a narrow solid core inside a wider shape whose reach the record keeps). Default 1. */
+  radiusScale?: number;
+  /** Float offset of the height above the base point. Without it the height is `heightM`. */
+  height?: number;
+  /** Height in metres when there is no `height` offset. Default 0 (no solid). */
+  heightM?: number;
+  /** Factor on the height. Default 1. */
+  heightScale?: number;
+  /** How far the solid reaches under its base point, metres (a base on a slope, a base sunk into the ground). Default 0. */
+  belowM?: number;
+  /**
+   * Which way the solid stands: `'y'` along +y (a flat world), `'radial'` away from the centre the index is given (a
+   * sphere). Default `'y'`.
+   */
+  up?: 'y' | 'radial';
+  /** An upright turned box instead of a cylinder. */
+  box?: InstanceSolidBox;
+  /** Instances whose radius (a box: its smaller half extent) is below this are skipped, metres. Default 0: only a radius of 0 is. */
+  minRadiusM?: number;
+  /** Its top can be stood on. Default true. */
+  standable?: boolean;
+  /** It stops rays and a camera boom. Default true. */
+  blocksSight?: boolean;
+}
+
+/**
+ * An upright box read from an instance record. Its own +x axis is turned by `turn` about up the way a view's yaw turns
+ * (`CollisionWorld.addBox`): to (cos turn, −sin turn) in the x, z of the local frame of up (`upFrame` of base, the
+ * shaders' `localFrame`; the world's own axes for +y up). Within 1e-5 of −y, where that frame's axes are fixed, the
+ * axis is that direction made square to up.
+ */
+export interface InstanceSolidBox {
+  /** Float offset of the turn about up, radians. */
+  turn: number;
+  /** Float offset of the size along the box's own x. */
+  sizeX: number;
+  /** Float offset of the size along its own z; a value of 0 (or no offset) takes the size along x. */
+  sizeZ?: number;
+  /** Half extent = size × scale. Default 0.5 (the sizes are full widths). */
+  scale?: number;
+}
+
 export type TextureFormat = 'r8' | 'r8ui' | 'rg8' | 'rgba8';
 
 /**

@@ -4,10 +4,14 @@
 // exactly that: the ground as chunked meshes, and one water sheet that lies at those levels (water-mesh.ts).
 //
 // URL hash: #seed=3&view=fall&free   (seed default 1; view one of the presets below, default island; free, or
-// mode=free, opens in free flight)
+// mode=free, opens in free flight; fov=<degrees> the field of view after the preset, as a mark's view carries it;
+// brooks=0 leaves the brooks out, brooks=<nodes> starts them from that basin in nodes of the plan's grid, 8–219,
+// default 40 (brooks.ts))
 // Controls: orbit (drag orbits, the wheel zooms) or free flight (F toggles; drag looks, W A S D / arrows fly, E / Space
 // up, Q / C down, Shift faster, the wheel sets the speed); keys 1–9 and 0 jump to the presets in both; K follows the
-// walkers on the paths in turn (walkers.ts), the first, the second, …, none.
+// walkers on the paths in turn (walkers.ts), the first, the second, …, none. N switches the mark mode in both (dev
+// server only: a click pins a note to the ground or the water; marks=1 turns the marks on in a page driven by a script,
+// marks=0 hides the pins).
 //
 // The build takes about two seconds of work on the main thread. It runs in slices of a few tens of milliseconds that
 // yield to the browser between them, and reports its stages through the engine's `Progress` (loading.ts draws it).
@@ -18,7 +22,11 @@ import { FreeRig } from 'wallhammer-web/camera';
 import { bindFreeInput, type FreeInput } from 'wallhammer-web/platform';
 import { ParticleLayer, PieceLayer } from 'wallhammer-web/render';
 import type { Material } from 'wallhammer-web/render';
-import { createEngine } from 'wallhammer-web/runtime';
+import { createEngine, heightPick, installEngineMarking } from 'wallhammer-web/runtime';
+import { BROOK_BED_MATERIAL, BROOK_WATER_MATERIAL } from './brook-material.ts';
+import { BED_LIFT_M, WATER_LIFT_M, brookPieces } from './brook-mesh.ts';
+import { brookStones } from './brook-stones.ts';
+import { DEFAULT_BROOK_FLOW, MAX_BROOK_FLOW, MIN_BROOK_FLOW, brookCrowding, brookPlan, brookStats, carveBrooks, type BrookPlan } from './brooks.ts';
 import { fieldRows, fieldSize, type Field } from './field.ts';
 import { FigureCast } from './figures/cast.ts';
 import { GROUND_MATERIAL } from './ground-material.ts';
@@ -32,7 +40,7 @@ import { pathPlan, pathStats, type PathPlan } from './paths.ts';
 import { coverOf, treePieces } from './trees.ts';
 import { pathKinds } from './path-kinds.ts';
 import { pathProps } from './path-props.ts';
-import { WALKER_LOOK_M, viewsOf, walkerView, type RiverView } from './views.ts';
+import { WALKER_LOOK_M, brookViews, viewsOf, walkerView, type RiverView } from './views.ts';
 import { walkerPlace, walkerStates, walkersOf, type Walkers } from './walkers.ts';
 import { WATER_MATERIAL } from './water-material.ts';
 import { openSeaPiece, waterPieces } from './water-mesh.ts';
@@ -41,6 +49,14 @@ const q = new URLSearchParams(location.hash.slice(1));
 const seedText = Number(q.get('seed') ?? 1);
 const seed = Number.isFinite(seedText) ? Math.round(seedText) : 1;
 const freeAtStart = (q.has('free') && q.get('free') !== '0') || q.get('mode') === 'free';
+/** The basin brooks start from, in nodes of the plan's grid; 0 without brooks. */
+const brookFlow = ((): number => {
+  const v = q.get('brooks');
+  if (v === null || v === '' || v === 'on' || v === '1') return DEFAULT_BROOK_FLOW;
+  if (v === 'off' || v === '0') return 0;
+  const k = Math.round(Number(v));
+  return Number.isFinite(k) ? Math.min(MAX_BROOK_FLOW, Math.max(MIN_BROOK_FLOW, k)) : DEFAULT_BROOK_FLOW;
+})();
 const panel = document.querySelector<HTMLPreElement>('#panel')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#view')!;
 
@@ -49,6 +65,7 @@ let plan: Plan | null = null;
 let field: Field | null = null;
 let paths: PathPlan | null = null;
 let walkers: Walkers | null = null;
+let brooks: BrookPlan | null = null;
 
 /** A value of the field at a point (bilinear), or `outside` beyond the square (and before the field is built). */
 function fieldAt(values: Float32Array, x: number, z: number, outside: number): number {
@@ -247,7 +264,7 @@ renderer.beforeFrame.unshift(() => {
 // --- Building --------------------------------------------------------------------------------------------------------
 let buildMs = 0;
 let loadMs = 0;
-const counts = { ground: 0, water: 0, groundTriangles: 0, waterTriangles: 0 };
+const counts = { ground: 0, water: 0, groundTriangles: 0, waterTriangles: 0, brooks: 0, brookTriangles: 0 };
 
 // Weights from times measured on the main thread (Apple M4 Pro, seed 1), in about tenths of a second: the plan ~0.2 s,
 // the field ~1.65 s, the ground pieces ~0.18 s, the water pieces ~0.05 s; the uploads (estimated) ~0.06 s; the shaders
@@ -297,7 +314,7 @@ function checksOf(p: Plan): { lines: number; joining: number; lakes: number; fal
 async function build(): Promise<void> {
   const t0 = performance.now();
   // The programs start compiling now and link in the driver while the main thread works on the plan and the field.
-  const [groundMat, waterMat] = [GROUND_MATERIAL, WATER_MATERIAL].map((m) => renderer.material(m)) as [Material, Material];
+  const [groundMat, waterMat, bedMat, brookWaterMat] = [GROUND_MATERIAL, WATER_MATERIAL, BROOK_BED_MATERIAL, BROOK_WATER_MATERIAL].map((m) => renderer.material(m)) as [Material, Material, Material, Material];
   // Let the bar show its first stage before the plan holds the main thread.
   await nextTask();
   plan = waterPlan(seed);
@@ -324,24 +341,32 @@ async function build(): Promise<void> {
   progress.complete('field');
   await pause();
 
+  // The brooks are planned over the finished water; the paths, laid next, cross them but do not follow them, and the
+  // brooks' beds are cut into the ground last, round the paths' treads.
+  const brookPlanned = brookFlow > 0 ? brookPlan(plan, field, brookFlow) : null;
+  brooks = brookPlanned;
+  await pause();
   // The paths are laid over the finished water: they read the field and then cut their treads into it.
-  const laid = pathPlan(plan, field);
+  const laid = pathPlan(plan, field, brookPlanned?.edge);
   paths = laid;
   layPaths(field, laid);
+  const brookUncut = brookPlanned ? carveBrooks(field, brookPlanned, laid) : undefined;
   await pause();
   const cover = coverOf(field, seed);
-  const treeData = treePieces(field, cover, seed, laid);
+  const treeData = treePieces(field, cover, seed, laid, brookPlanned?.edge);
   await pause();
   const kinds = pathKinds(laid, field, cover, seed);
   walkers = walkersOf(laid, kinds, field, seed);
-  const groundData = [...groundPieces(field, cover, laid, kinds), seaFloorPiece(field), ...treeData, ...pathProps(field, cover, laid, kinds, seed)];
+  const groundData = [...groundPieces(field, cover, laid, kinds, brookUncut), seaFloorPiece(field), ...treeData, ...pathProps(field, cover, laid, kinds, seed), ...(brookPlanned ? brookStones(field, brookPlanned, seed) : [])];
   progress.complete('ground');
   await pause();
   const waterData = [...waterPieces(field), openSeaPiece(field)];
+  const bedData = brookPlanned ? brookPieces(field, brookPlanned, brookPlanned.bed, BED_LIFT_M) : [];
+  const brookWaterData = brookPlanned ? brookPieces(field, brookPlanned, brookPlanned.water, WATER_LIFT_M) : [];
   progress.complete('water');
   await pause();
 
-  progress.total('upload', groundData.length + waterData.length);
+  progress.total('upload', groundData.length + waterData.length + bedData.length + brookWaterData.length);
   const ground = new PieceLayer({ material: groundMat, order: 'front-to-back', name: 'ground' });
   let top = 0;
   for (const p of groundData) {
@@ -360,6 +385,19 @@ async function build(): Promise<void> {
     progress.advance('upload');
     await pause();
   }
+  // The brooks: their beds blend into the ground at their edges, their water over the beds. Both are drawn before the
+  // water of the lines, which blends over the end of a brook where it runs into it.
+  const bed = new PieceLayer({ material: bedMat, order: 'front-to-back', name: 'brook-bed' });
+  const brookWater = new PieceLayer({ material: brookWaterMat, name: 'brook-water' });
+  for (const [layer, data, mat] of [[bed, bedData, bedMat], [brookWater, brookWaterData, brookWaterMat]] as const) {
+    for (const p of data) {
+      layer.add({ mesh: renderer.createMesh(p.data, mat), min: p.min, max: p.max });
+      counts.brooks++;
+      counts.brookTriangles += p.data.count / 3;
+      progress.advance('upload');
+      await pause();
+    }
+  }
   // The walkers are opaque and drawn after the ground; the water blends over both, so it is drawn after them.
   const cast = new FigureCast(renderer);
   cast.prepare(['pathfinder']);
@@ -377,6 +415,10 @@ async function build(): Promise<void> {
   });
   engine.add(ground);
   engine.add(cast.layer);
+  if (brookPlanned) {
+    engine.add(bed);
+    engine.add(brookWater);
+  }
   engine.add(water);
   // The mist of the falls, over the water.
   engine.add(new ParticleLayer(renderer, mistSources(plan), { name: 'mist' }));
@@ -384,7 +426,7 @@ async function build(): Promise<void> {
   renderer.bounds = { min: [-R, SEA_FLOOR_M - 1, -R], max: [R, top + 20, R] };
   view.setup.groundAt = groundAt;
   view.setup.minEyeHeight = 1;
-  presets = viewsOf(plan, laid).map(presetOf);
+  presets = [...viewsOf(plan, laid), ...(brookPlanned ? brookViews(brookPlanned, groundAt) : [])].map(presetOf);
   const firstWalker = walkerPreset(0);
   if (firstWalker) presets.push(firstWalker);
   if (freeAtStart) setMode('free');
@@ -405,6 +447,13 @@ async function build(): Promise<void> {
   showPanel();
 }
 
+/** The panel's line on the brooks. */
+function brookLine(): string {
+  if (!brooks) return 'brooks: off  (#brooks=N from N nodes of basin)';
+  const b = brookStats(brooks);
+  return `brooks from ${brooks.threshold} nodes: ${b.brooks} brooks, ${b.streams} streams, ${b.lengthKm} km, order ≤ ${b.highestOrder}`;
+}
+
 function showPanel(): void {
   if (!plan) return;
   const c = checksOf(plan);
@@ -420,6 +469,7 @@ function showPanel(): void {
     `lakes (nodes@level): ${lakes}`,
     `paths: ${paths ? `${paths.paths.length}, ${(pathStats(paths).reduce((m, p) => m + p.lengthM, 0) / 1000).toFixed(1)} km` : 'none'}`,
     `walkers: ${walkers ? `${walkers.walkers.length} on ${walkers.loops.length} loops` : 'none'}`,
+    brookLine(),
     `built in ${(buildMs / 1000).toFixed(1)} s`,
     '',
     ...controls,
@@ -493,6 +543,8 @@ const now = (f: () => void): void => (f(), engine.renderNow());
   setTime: (s: number) => now(() => (env.time.pause(), env.time.set(s))),
   stats: () => ({ ...renderer.lastStats, renderer: engine.device.name, seed, buildMs: Math.round(buildMs), loadMs: Math.round(loadMs), pieces: { ...counts }, fieldPoints: field ? field.n * field.n : 0 }),
   checks: () => (plan ? checksOf(plan) : null),
+  /** The brooks' numbers (`brookStats` and `brookCrowding` of brooks.ts), or null without brooks. */
+  brooks: () => (brooks ? { threshold: brooks.threshold, ...brookStats(brooks), ...brookCrowding(brooks) } : null),
   /** Per path: the places it joins, its length, its steepest grade and its fords. */
   paths: () => (paths ? pathStats(paths) : null),
   /** Per walker at the current animation time: its place on the ground, heading (degrees, 0 toward −z, 90 toward +x), look, path and loop. */
@@ -512,10 +564,29 @@ const now = (f: () => void): void => (f(), engine.renderNow());
   measureFrame: (frames = 30) => renderer.benchmark(mode === 'free' ? free : view, frames),
 };
 
+/**
+ * Marks (key N, in the orbit and in free flight): notes pinned to points of the ground or the water, picked against
+ * `surfaceAt` (trees, props, walkers and the mist are not in it). A mark's hash is the seed, the mode and the field of
+ * view (the presets change it) with the exact view of the rig the engine draws through; installed once the build has
+ * set its first view, so a mark's view opened from its hash is the last word. Only in the dev server (the live demos
+ * have none); `__wh.marks` is the script interface.
+ */
+function installMarks(): void {
+  const marks = installEngineMarking(engine, {
+    pick: heightPick(surfaceAt, { maxDistanceM: 20_000, surface: 'ground or water' }),
+    hash: () => `seed=${seed}${mode === 'free' ? '&free=1' : ''}&fov=${(mode === 'free' ? free : view).setup.fovYDeg}`,
+  });
+  Object.assign((window as unknown as { __wh: object }).__wh, { marks });
+}
+
 async function begin(): Promise<void> {
   const t0 = performance.now();
   try {
     await build();
+    // `fov=` after the build's first view: the field of view a mark's view was seen through.
+    const fov = Number(q.get('fov'));
+    if (fov > 0 && fov < 180) view.setup.fovYDeg = free.setup.fovYDeg = fov;
+    if (import.meta.env.DEV) installMarks();
     engine.start();
     // The bar says what is coming before the first frame holds the main thread (shadow map, first draws).
     await nextFrame();

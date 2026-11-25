@@ -251,6 +251,38 @@ Budgets: `uploadMsPerFrame` (default 3), `blockingMsPerFrame` for blocking provi
 
 Archetypes: the meshes of an archetype's levels of detail are uploaded once, the first time a cell uses it, and shared by every cell; a cell uploads only its instance data (and a vertex array per level). They stay until `dispose`. A cell's GPU bytes (`counters().gpuBytes`, `resident`) are therefore its meshes and its instance data; the archetype meshes are counted by `Device.memory()`, so with a GPU ceiling they are part of what everything but the cells holds.
 
+**Following the resident cells.** `onResident(cell, meshes, content)` and `onReleased(cell)` in the options see every
+cell that reaches or leaves the GPU (a refreshed cell arrives again with its new content; `reupload` releases all and
+they arrive again). More than one part of a page can follow them: `world.listen({ resident?, released? })` adds a
+listener and returns the function that removes it, and `world.forEachResident((cell, content) => …)` visits the cells
+resident now (not those uploaded ahead, which are not announced until they are drawn), so a listener added late catches
+up.
+
+### Solids of resident cells
+
+`streamSolids(world, index, { level })` (in `runtime`) keeps a `SolidIndex` (in `world`) in step with the resident
+cells of one level: those resident now at once, later ones as they arrive, and a released cell's solids leave. One
+level, because a streamed world holds a place at several levels at once (a parent stays resident under its children):
+choose the coarsest level whose cells hold every instance that should be solid near the viewer; its cells are resident
+wherever it or a finer level is drawn. The returned function ends the link. What the index answers and how a
+`SolidFeed` puts the solids into a walker's collision world is in [Solids of streamed
+cells](walking.md#solids-of-streamed-cells).
+
+<!-- check: wrap -->
+```ts
+import type { InstanceSolid } from 'wallhammer-web/base';
+import type { StreamedWorld } from 'wallhammer-web/runtime';
+import { streamSolids } from 'wallhammer-web/runtime';
+import { SolidIndex, SphereWorld } from 'wallhammer-web/world';
+declare const world: StreamedWorld;
+declare const shape: SphereWorld;
+declare const solids: Record<string, InstanceSolid>; // per archetype: where its records keep position, radius, height
+
+const index = new SolidIndex({ solids, shape, center: shape.centerM });
+const stop = streamSolids(world, index, { level: 10 });
+// later: stop(); index.clear();
+```
+
 ### Preloading along a coming path
 
 When the viewer's path is known ahead (a scripted camera, a flight on rails), the cells it will need can be loaded before it gets there. `preloadTickets(poses, prefix?)` turns coming poses (`PreloadPose`: `eye`, `altitude`, optional `forward` and `pixelsPerRadian`) into one `preload` ticket per pose, kind `'travel'`, base 0 (the rings of the viewer itself), with stable ids `preload-000`, `preload-001`, …. Hand them to `setTickets` together with the viewer's own tickets.
@@ -293,7 +325,7 @@ const ready = (): boolean => world.preloaded;
 - **Up.** `upAt(p)` points away from the centre. `noiseDomain(p)` is the point of the base sphere under `p`: sample `valueNoise3` / `fractalNoise3` there and the content has no seam and no pole.
 - **Shape hash.** `hashKey` holds the radius and the centre, so cell files of another sphere are refused.
 
-**Cells of a sphere.** `spherePatchMesh` (module `gen-core`) builds the surface of one cell: a grid of `quads × quads` on the face, every vertex at the base radius plus `heightAt(x, y, z)` of its point of the base sphere. Heights and colours must be functions of that point alone. Then neighbours agree on their shared border, across the edges of the cube as well, and the mesh carries the shape of the cell one level coarser (`a_coarseShift` along the vertex's own up, `a_coarseNormal`, `a_coarseColor`) and a skirt, like the cell morph mesh of the flat world. `spherePatchRadius` tells where a direction meets the triangles of a level (or of the level above it): stand instances there, with the difference as their own shift.
+**Cells of a sphere.** `spherePatchMesh` (module `gen-core`) builds the surface of one cell: a grid of `quads × quads` on the face, every vertex at the base radius plus `heightAt(x, y, z)` of its point of the base sphere. Heights and colours must be functions of that point alone. Then neighbours agree on their shared border, across the edges of the cube as well, and the mesh carries the shape of the cell one level coarser (`a_coarseShift` along the vertex's own up, `a_coarseNormal`, `a_coarseColor`) and a skirt, like the cell morph mesh of the flat world. `spherePatchRadius` tells where a direction meets the triangles of a level (or of the level above it): stand instances there, with the difference as their own shift. How each quad is cut into its two triangles is `split` (see below).
 
 <!-- check: wrap -->
 ```ts
@@ -461,7 +493,25 @@ vec3 world = base + axes * (a_pos * scale * coverKeep(fade, order));
 
 `u_coverLevel` is the content's own uniform (set it through `StreamedWorld.uniforms`). Return the colour of the objects from `coverAt` also where the share is 0, so the colour does not darken toward the border of a covered area. The sphere page of the endless example does all of this with `#cover=1` (`surfaceCover` in `sphere-world.ts`, the cover materials in `sphere-shaders.ts`). Limits: the cover is a property of the sphere patch only (the flat `cellMorphMesh` has no such attribute), one cover per vertex stands for all content of the cell, and its share does not follow the angle of view.
 
-- **Four more bytes per vertex.** `SpherePatchOptions.extraAt(x, y, z, height)` (off by default) returns four bytes the content gives a meaning, for example the skyline code of `horizonCodeAt` ([The plan of a sphere](generators.md#gen-plan-the-plan-of-a-sphere)) so the surface shader knows where a far light is hidden. The mesh then has `SPHERE_PATCH_EXTRA_LAYOUT` (or `SPHERE_PATCH_COVER_EXTRA_LAYOUT` with `coverAt` too): `a_extra` and `a_coarseExtra` (thinned to the level one coarser like the colour, for the blend) after the other attributes, at the locations of `SPHERE_PATCH_EXTRA_ATTRIBS` or `SPHERE_PATCH_COVER_EXTRA_ATTRIBS`. Blend them in the vertex shader with the same factor as the height. Make the bytes a function of the point alone, so a vertex on the border of two cells and of two levels gets the same bytes from both. Without `extraAt` the bytes of a patch are what they were.
+- **Four more bytes per vertex.** `SpherePatchOptions.extraAt(x, y, z, height)` (off by default) returns four bytes the content gives a meaning, for example the skyline code of `horizonCodeAt` ([The plan of a sphere](generators.md#gen-plan-the-plan-of-a-sphere)) so the surface shader knows where a far light is hidden. The mesh then has `SPHERE_PATCH_EXTRA_LAYOUT` (or `SPHERE_PATCH_COVER_EXTRA_LAYOUT` with `coverAt` too): `a_extra` and `a_coarseExtra` (thinned to the level one coarser like the colour, for the blend) after the other attributes, at the locations of `SPHERE_PATCH_EXTRA_ATTRIBS` or `SPHERE_PATCH_COVER_EXTRA_ATTRIBS`. Blend them in the vertex shader with the same factor as the height. Make the bytes a function of the point alone, so a vertex on the border of two cells and of two levels gets the same bytes from both. Without `extraAt` the bytes of a patch are what they were. The ground's vertex shaders of `env` read the channel with `extra` and hand it on as `v_extra`, with an optional hook that moves the vertex in the colour and the shadow pass alike ([The ground of a sphere from patch cells](rendering.md#the-ground-of-a-sphere-from-patch-cells)).
+- **A category in the extra bytes.** The coarse copy is a blend, so a byte that holds an id would show a mix of two ids at the coarser level. `coarseExtra: 'nearest'` gives a vertex off the parent's vertices the four bytes of one end of the parent's edge (or diagonal) it lies on instead: the end nearer in space, on a tie the larger value (the bytes read as one number, the first byte highest). The rule reads only the two ends, so neighbours agree. Only the coarse copy changes; between vertices the rasteriser still interpolates (declare the varying `flat`, or round it in the fragment shader, where an id must stay whole).
+- **The diagonal of each quad.** `split: 'shorter'` cuts every quad along the diagonal whose two ends differ less in height instead of always along the one from (i + 1, j) to (i, j + 1) (`'fixed'`, the default), so the edge of a steep wall is no longer a saw. The rule is the pure `spherePatchSplitsAD(split, ra, rb, rc, rd)` on the corners' distances from the centre, which carry the same bits in every cell; the parent's surface the patch blends into is cut by the same rule. Pass the same `split` to `spherePatchRadius` (objects on the drawn ground) and to `sphereStripSurface` (strips on it). A diagonal never lies on a cell's border, so seams and skirts do not change.
+
+<!-- check: wrap -->
+```ts
+import { spherePatchMesh, spherePatchRadius } from 'wallhammer-web/gen-core';
+import type { SpherePatchOptions } from 'wallhammer-web/gen-core';
+
+declare const patch: SpherePatchOptions; // the cell, heightAt, colorAt, skirtDepth
+declare const kindAt: (x: number, y: number, z: number) => number; // a category id of the content, 0–255
+declare const dir: [number, number, number]; // a direction into the cell
+
+const options: SpherePatchOptions = { ...patch, split: 'shorter', extraAt: (x, y, z) => [kindAt(x, y, z), 0, 0, 0], coarseExtra: 'nearest' };
+const { mesh } = spherePatchMesh(options);
+// mesh.layout is SPHERE_PATCH_EXTRA_LAYOUT; the material lists SPHERE_PATCH_EXTRA_ATTRIBS.
+const r = spherePatchRadius(options, dir, 1); // on the triangles drawn with the same split
+console.log(mesh.count, r);
+```
 
 Narrow, long content (a strip along a broken line) is a second mesh of the cells it passes, at every level, rather than colour in the surface: at a vertex spacing of metres a baked colour blurs and vanishes from afar. The cell generator cuts and fills its ground with `stripCarve`, adds the mesh of `stripMesh` under its own material name, and merges its bounds into the cell's; a cell that `stripTouches` rejects stays as it was apart from its domain version. The strip blends between levels with the surface's blend factor and its vertex shader keeps it a least number of pixels wide, so it stays a thin unbroken line on far levels with no second kind of geometry. Nothing in the runtime changes: a cell already carries several meshes by material name. See [Strips along a surface](generators.md#strips-along-a-surface).
 
@@ -627,3 +677,5 @@ From the project's status notes:
 - Cells a preload ticket fetched wait on the CPU until the viewer arrives; then they are uploaded within `uploadMsPerFrame` and, until they are, their parent stands in for them for a frame or a few. There is no way to upload a cell ahead without drawing it.
 - The render origin of `StreamedWorld` follows the focus in x and z only, unless it is created with `originAxes: 'all'`.
 - Two world shapes exist: the flat one and `SphereWorld` (see [A sphere world](#a-sphere-world) for its limits).
+- `streamSolids` follows one level; instances that exist only in coarser cells near the viewer (because the finer ones
+  have not arrived) are not solid until a cell of that level is resident there.

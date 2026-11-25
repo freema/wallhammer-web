@@ -1,9 +1,9 @@
 // Walker: a kinematic body (an upright cylinder) that moves over a collision world in fixed steps. It speeds up and
-// brakes, slides along sides and out of corners, climbs steps up to a height, falls off edges, does not climb a base
+// brakes (with its own braking rate and a slower run-up as options), turns in an arc at speed (an option), slides along sides and out of corners, climbs steps up to a height, falls off edges, does not climb a base
 // surface steeper than a limit (and slides down one), jumps from the ground and keeps the velocity and the heading of
 // take-off in the air (a share of control and a turn rate in the air are options, both 0 by default), stops its head
 // under undersides and turns smoothly toward where it is asked to go. Between steps it gives a position for
-// drawing. Plain Node, no DOM; only + − × ÷ and Math.sqrt in a step (detAtan2 for the heading), so the same inputs
+// drawing. Plain Node, no DOM; only + − × ÷ and Math.sqrt in a step (detAtan2 and detSinCos for the heading and an arc), so the same inputs
 // give the same path bit for bit.
 //
 // State: everything a step reads or writes, also the drawing state between steps, saves to a fixed number of bytes
@@ -27,11 +27,24 @@ export interface WalkerSetup {
   walkSpeed: number;
   /** Speed when running, m/s. */
   runSpeed: number;
-  /** Acceleration and braking on the ground, m/s². */
+  /** Acceleration on the ground, m/s²; also the braking unless `deceleration` is set. */
   acceleration: number;
+  /**
+   * Braking on the ground, m/s²: used when the wanted speed is lower than the current one (no input, or a slower
+   * gait). 0 (default): `acceleration`. A body that runs at `runSpeed` v stops in v² / (2 deceleration) metres in the
+   * continuous limit; in fixed steps of dt (a step brakes before it moves) a little sooner, in v² / (2 deceleration) −
+   * v · dt / 2 metres (exactly when v / (deceleration · dt) is a whole number of steps, otherwise at most deceleration ·
+   * dt² / 8 more): 1.988 m instead of 2.025 m from 4.5 m/s with deceleration 5 at 60 steps a second. Not used in the
+   * air (see `airControl`).
+   */
+  deceleration: number;
+  /** Acceleration on the ground while running, m/s² (a slower run-up than a walk's start). 0 (default): `acceleration`. Not used in the air. */
+  runAcceleration: number;
   /**
    * Share of the acceleration available in the air, 0–1. 0 (default): the horizontal velocity of take-off is kept until
    * landing, so the body cannot be steered or braked in the air. A small share (0.05–0.1) allows a slight correction.
+   * In the air every change of the velocity (speeding up, braking, turning) is at most `acceleration` × this per
+   * second: `deceleration` and `runAcceleration` are the grip of the feet and apply only on the ground.
    */
   airControl: number;
   /**
@@ -52,6 +65,15 @@ export interface WalkerSetup {
   /** Fastest turn of `yaw` toward the wanted direction on the ground, radians per second (in the air: `airTurnSpeed`). */
   turnSpeed: number;
   /**
+   * Fastest turn on the ground at `runSpeed`, radians per second. 0 (default): `turnSpeed` at every speed, and the
+   * velocity moves straight toward the wanted one (a body turns on the spot). Set: the turn rate falls linearly from
+   * `turnSpeed` at `walkSpeed` (and below) to this at `runSpeed` (and above), and the direction of the velocity turns no
+   * faster than that rate, so a runner turns in an arc of radius speed / rate instead of on the spot. The velocity
+   * still changes by at most the acceleration (in a turn at the same speed the larger of `acceleration` and
+   * `deceleration`), so the arc is no tighter than speed² / that.
+   */
+  turnSpeedAtRun: number;
+  /**
    * Seconds over which a step up or down is eased out in the drawn position (`renderPosition`), so a body climbing
    * stairs does not jump; the simulated position is not affected. 0 draws the steps as they are.
    */
@@ -60,12 +82,20 @@ export interface WalkerSetup {
   maxStepsPerAdvance: number;
 }
 
+/** The numbers of a setup that may change while a walker lives (`Walker.retune`): speeds, rates and the jump. */
+export type WalkerTuning = Pick<WalkerSetup, 'walkSpeed' | 'runSpeed' | 'acceleration' | 'deceleration' | 'runAcceleration' | 'turnSpeed' | 'turnSpeedAtRun' | 'airControl' | 'airTurnSpeed' | 'jumpSpeed'>;
+
+/** The fields of `WalkerTuning`. */
+export const WALKER_TUNING_KEYS: readonly (keyof WalkerTuning)[] = ['walkSpeed', 'runSpeed', 'acceleration', 'deceleration', 'runAcceleration', 'turnSpeed', 'turnSpeedAtRun', 'airControl', 'airTurnSpeed', 'jumpSpeed'];
+
 export const DEFAULT_WALKER: Readonly<WalkerSetup> = Object.freeze({
   radius: 0.3,
   height: 1.7,
   walkSpeed: 1.6,
   runSpeed: 4.5,
   acceleration: 20,
+  deceleration: 0,
+  runAcceleration: 0,
   airControl: 0,
   airTurnSpeed: 0,
   jumpSpeed: 4.2,
@@ -74,6 +104,7 @@ export const DEFAULT_WALKER: Readonly<WalkerSetup> = Object.freeze({
   maxSlopeDeg: 45,
   stepHz: 60,
   turnSpeed: 12,
+  turnSpeedAtRun: 0,
   stepSmoothing: 0.1,
   maxStepsPerAdvance: 15,
 });
@@ -166,6 +197,7 @@ export class Walker {
   private prevStepOffset = 0;
   private readonly slid = newSlideResult();
   private readonly grad = new Float64Array(2);
+  private readonly turnSc: [number, number] = [0, 0];
   private readonly scratch: WalkIntent = newWalkIntent();
   private readonly stateScratch = new Float64Array(WALKER_STATE_BYTES / 8);
   private readonly stateBytes = new Uint8Array(this.stateScratch.buffer);
@@ -181,6 +213,19 @@ export class Walker {
     this.tanMax = sc[1] > 0 ? sc[0] / sc[1] : Infinity;
     // Share of the step offset kept per step: exp(−3 dt / stepSmoothing) (95 % gone after stepSmoothing seconds).
     this.smoothKeep = s.stepSmoothing > 0 ? Math.exp((-3 * this.dt) / s.stepSmoothing) : 0;
+  }
+
+  /**
+   * Changes the speeds, rates and jump of the setup from the next step on (a heavier or lighter body); a field left
+   * out keeps its value. The state (position, velocity, heading) is kept. The size, the step rate and the limits of the
+   * ground are fixed at construction.
+   */
+  retune(o: Partial<WalkerTuning>): void {
+    const s = this.setup as WalkerSetup;
+    for (const k of WALKER_TUNING_KEYS) {
+      const v = o[k];
+      if (v !== undefined) s[k] = v;
+    }
   }
 
   /** Seconds of one fixed step. */
@@ -277,6 +322,48 @@ export class Walker {
     let wantZ = mz * speed;
     const y = p[1]!;
 
+    // Momentum (all off by default, so the default setup steps exactly as without these options). The turn rate at
+    // the current speed and, on the ground, the wanted direction turned no farther from the velocity's than that
+    // rate allows in a step (an arc); braking or the run's acceleration as the rate of change of the velocity.
+    let turnRate = s.turnSpeed;
+    let rate = s.acceleration;
+    if (s.turnSpeedAtRun > 0 || s.deceleration > 0 || s.runAcceleration > 0) {
+      const vx0 = v[0]!;
+      const vz0 = v[2]!;
+      const cur2 = vx0 * vx0 + vz0 * vz0;
+      const cur = Math.sqrt(cur2);
+      if (s.turnSpeedAtRun > 0) {
+        const span = s.runSpeed - s.walkSpeed;
+        let k = span > 0 ? (cur - s.walkSpeed) / span : cur > s.walkSpeed ? 1 : 0;
+        k = k < 0 ? 0 : k > 1 ? 1 : k;
+        turnRate = s.turnSpeed + (s.turnSpeedAtRun - s.turnSpeed) * k;
+        if (onGround && cur > STILL_SPEED && (wantX !== 0 || wantZ !== 0)) {
+          // UP: the plane of the turn would be the local horizon.
+          const ang = detAtan2(vx0 * wantZ - vz0 * wantX, vx0 * wantX + vz0 * wantZ);
+          const lim = turnRate * h;
+          if (ang > lim || ang < -lim) {
+            const sc = detSinCos(ang > 0 ? lim : -lim, this.turnSc);
+            const wl = Math.sqrt(wantX * wantX + wantZ * wantZ);
+            const ux = vx0 / cur;
+            const uz = vz0 / cur;
+            wantX = (ux * sc[1] - uz * sc[0]) * wl;
+            wantZ = (ux * sc[0] + uz * sc[1]) * wl;
+          }
+        }
+      }
+      // On the ground, slower than now: braking. Faster: the run-up's rate (running) or the acceleration. The same speed
+      // (a turn): the larger of the acceleration and the braking, the grip of the feet. In the air there are no feet:
+      // the rate is the acceleration (times airControl below) whatever the wanted speed.
+      if (onGround) {
+        const want2 = wantX * wantX + wantZ * wantZ;
+        const decel = s.deceleration > 0 ? s.deceleration : s.acceleration;
+        if (want2 < cur2 * (1 - 1e-9)) rate = decel;
+        else if (want2 > cur2 * (1 + 1e-9)) {
+          if (intent.run && s.runAcceleration > 0) rate = s.runAcceleration;
+        } else rate = decel > s.acceleration ? decel : s.acceleration;
+      }
+    }
+
     // UP: the slope of the base and the split into downhill and across would use the local up.
     let steep = false;
     let downX = 0;
@@ -291,7 +378,7 @@ export class Walker {
       }
     }
     this.steep = steep;
-    const accel = s.acceleration * (onGround ? 1 : s.airControl) * h;
+    const accel = rate * (onGround ? 1 : s.airControl) * h;
     if (steep) {
       // Across the slope the body is steered as usual; down the slope it slides (the horizontal part of gravity along
       // the incline, g·sinθ·cosθ = g·tanθ / (1 + tan²θ)) and the intent may only add speed downhill, never brake or climb.
@@ -409,9 +496,9 @@ export class Walker {
       p[1] = ny;
     }
 
-    // Heading: toward the wanted direction (or, without one, the direction moved), at most turnSpeed on the ground and
-    // airTurnSpeed in the air.
-    const lim = (onGround ? s.turnSpeed : s.airTurnSpeed) * h;
+    // Heading: toward the wanted direction (or, without one, the direction moved), at most turnSpeed (or the rate at
+    // this speed, with turnSpeedAtRun) on the ground and airTurnSpeed in the air.
+    const lim = (onGround ? turnRate : s.airTurnSpeed) * h;
     let fx = wantX;
     let fz = wantZ;
     if (fx * fx + fz * fz < STILL_SPEED * STILL_SPEED) {

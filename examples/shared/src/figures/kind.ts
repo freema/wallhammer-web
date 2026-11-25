@@ -1,6 +1,7 @@
 // What a kind of figure is: a skeleton of the engine's motion module, one rigid mesh per bone (or none), motions that
 // are pure functions of a time in seconds, named anchors on bones (a lantern, a saddle, a wisp of smoke) and the
-// looks of its variants.
+// looks of its variants. A kind may also name its arms and its gaze as chains of the engine's post steps, sockets on
+// its bones where held things sit, and the meshes of such things (props), which are drawn apart from its parts.
 //
 // The motions are `MotionSource`s of `wallhammer-web/motion` driven by the clock (`unit` seconds): the page gives each
 // figure a motion name and a motion time, and the pose follows from them alone. A walk also names the metres one pass
@@ -8,7 +9,7 @@
 
 import type { MeshData } from 'wallhammer-web/base';
 import { Skeleton, setBoneEuler } from 'wallhammer-web/motion';
-import type { BoneSpec, MotionSource, Pose } from 'wallhammer-web/motion';
+import type { AimChain, BoneSpec, LagChain, MotionSource, Pose, Socket, TwoBoneChain } from 'wallhammer-web/motion';
 import { FigureMesh } from './mesh.ts';
 import type { P, RGB } from './mesh.ts';
 
@@ -48,6 +49,31 @@ export interface FigureKind {
   readonly capacity: number;
   /** A figure of the kind casts a shadow while one of them is nearer to the eye than this, m. 0: never. */
   readonly shadowRangeM: number;
+  /**
+   * The legs as chains of the engine's reach (hip, knee, ankle), for keeping the feet on uneven ground
+   * (`fitToGround`); `pelvis` is the bone lowered when a foot must reach down. Absent: the kind has no such legs.
+   */
+  readonly legs?: { chains: readonly TwoBoneChain[]; pelvis: number };
+  /**
+   * The arms as chains of the engine's reach (shoulder, elbow, wrist), each with a point in the figure's frame the
+   * elbow turns toward (`TwoBoneReach.pole`). Absent: the arms do not reach.
+   */
+  readonly arms?: { left: FigureArm; right: FigureArm };
+  /** Trunk and head as a chain that turns to look at a point (`aimChain`). */
+  readonly gaze?: AimChain;
+  /** Chains of bones that may lag behind the figure's motion (a ponytail, a scarf's end): `ChainLag` of the engine. */
+  readonly lag?: readonly LagChain[];
+  /** Places on bones where held things sit: a 3 × 4 transform in the bone's frame each (`socketTransform`). */
+  readonly sockets?: Readonly<Record<string, Socket>>;
+  /** Things a figure of the kind can hold: a mesh each, in the frame of the socket that holds it. Not in `parts`. */
+  readonly props?: Readonly<Record<string, MeshData>>;
+}
+
+/** One arm of a kind. */
+export interface FigureArm {
+  chain: TwoBoneChain;
+  /** In the figure's frame (at the kind's size): the elbow turns toward it. */
+  pole: P;
 }
 
 /** One rigid part of a kind. */

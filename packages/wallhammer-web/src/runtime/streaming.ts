@@ -101,6 +101,14 @@ export interface StreamedWorldOptions {
   onReleased?: (cell: CellId) => void;
 }
 
+/** Told when a cell of a `StreamedWorld` reaches the GPU or leaves it (`StreamedWorld.listen`); both parts optional. */
+export interface StreamedCellListener {
+  /** As `StreamedWorldOptions.onResident`: also for new content of a cell already resident (`refresh`). */
+  resident?(cell: CellId, meshes: readonly { material: Material; mesh: Mesh }[], content: CellContent): void;
+  /** As `StreamedWorldOptions.onReleased`. */
+  released?(cell: CellId): void;
+}
+
 interface GpuCell {
   cell: CellId;
   key: string;
@@ -166,8 +174,8 @@ export class StreamedWorld implements Layer {
   private readonly aheadGpu = new Map<string, number>();
   private aheadBytes = 0;
   private aheadWaiting = 0;
-  private readonly onResident: StreamedWorldOptions['onResident'];
-  private readonly onReleased: StreamedWorldOptions['onReleased'];
+  /** Replaced, never changed in place, so a listener that stops itself (or another) during a notification skips no one. */
+  private listeners: readonly StreamedCellListener[] = [];
   /** Uniforms set for every material before its cells are drawn. */
   uniforms: Uniforms = {};
   private readonly materials: Readonly<Record<string, Material>>;
@@ -215,8 +223,7 @@ export class StreamedWorld implements Layer {
     this.uploadAhead = o.uploadAhead ?? false;
     this.textures = o.textures ?? {};
     this.materialUniforms = o.materialUniforms ?? {};
-    this.onResident = o.onResident;
-    this.onReleased = o.onReleased;
+    if (o.onResident || o.onReleased) this.listeners = [{ ...(o.onResident ? { resident: o.onResident } : {}), ...(o.onReleased ? { released: o.onReleased } : {}) }];
     this.provider = o.provider;
     this.materials = o.materials;
     this.archetypes = o.archetypes ?? {};
@@ -252,7 +259,7 @@ export class StreamedWorld implements Layer {
     for (const key of [...this.gpu.keys()]) {
       const g = this.gpu.get(key)!;
       this.gpu.delete(key);
-      if (!this.aheadGpu.has(key)) this.onReleased?.(g.cell);
+      if (!this.aheadGpu.has(key)) this.emitReleased(g.cell);
     }
     this.aheadGpu.clear();
     this.aheadBytes = 0;
@@ -392,7 +399,7 @@ export class StreamedWorld implements Layer {
         there.push({ cell: c, gpuBytes: bytes });
       }
       m.residentAll(there);
-      for (const { cell } of there) this.onResident?.(cell, this.gpu.get(cellKey(cell))!.meshes, this.cpu.get(cellKey(cell))!);
+      for (const { cell } of there) this.emitResident(cell, this.gpu.get(cellKey(cell))!.meshes, this.cpu.get(cellKey(cell))!);
     }
     this.pendingUploads = a.uploads.filter((c) => this.cpu.has(cellKey(c)) && !this.gpu.has(cellKey(c)));
     const u0 = this.now();
@@ -405,7 +412,7 @@ export class StreamedWorld implements Layer {
       const g = this.upload(content);
       this.gpu.set(k, g);
       m.resident(c, g.bytes);
-      this.onResident?.(c, g.meshes, content);
+      this.emitResident(c, g.meshes, content);
       this.totals.upMs += this.now() - tu;
       this.totals.upCells++;
       ups++;
@@ -470,10 +477,43 @@ export class StreamedWorld implements Layer {
     this.release(k);
     this.gpu.set(k, g);
     this.manager.swapped(cell, g.bytes);
-    this.onResident?.(cell, g.meshes, content);
+    this.emitResident(cell, g.meshes, content);
     this.renderer.invalidateShadows();
     this.totals.upMs += this.now() - tu;
     this.totals.upCells++;
+  }
+
+  /**
+   * Calls `listener` when a cell reaches the GPU and when it leaves it, beside the options' `onResident` and
+   * `onReleased` and any other listener. Cells already resident are not announced again: `forEachResident` lists them.
+   * Returns the function that stops it. A listener added or stopped while the listeners are being told takes effect
+   * from the next notification.
+   */
+  listen(listener: StreamedCellListener): () => void {
+    this.listeners = [...this.listeners, listener];
+    return () => {
+      const i = this.listeners.indexOf(listener);
+      if (i >= 0) this.listeners = this.listeners.filter((_, k) => k !== i);
+    };
+  }
+
+  /** Calls `fn` for every cell that is resident now (announced and not released), with its content. */
+  forEachResident(fn: (cell: CellId, content: CellContent) => void): void {
+    for (const [key, g] of this.gpu) {
+      if (this.aheadGpu.has(key)) continue;
+      const content = this.cpu.get(key);
+      if (content) fn(g.cell, content);
+    }
+  }
+
+  private emitResident(cell: CellId, meshes: readonly { material: Material; mesh: Mesh }[], content: CellContent): void {
+    const ls = this.listeners;
+    for (let i = 0; i < ls.length; i++) ls[i]!.resident?.(cell, meshes, content);
+  }
+
+  private emitReleased(cell: CellId): void {
+    const ls = this.listeners;
+    for (let i = 0; i < ls.length; i++) ls[i]!.released?.(cell);
   }
 
   /**
@@ -600,7 +640,7 @@ export class StreamedWorld implements Layer {
       this.aheadBytes -= ahead;
       return;
     }
-    this.onReleased?.(g.cell);
+    this.emitReleased(g.cell);
   }
 
   /** Render-space box of a drawn cell. */

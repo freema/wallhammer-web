@@ -10,10 +10,19 @@
 // Two shapes: `'soft'` is a puff of noise, lit like a surface facing up and toward the eye, turned a little per
 // particle; `'core'` is a bright core that fades to the rim, unlit, with a fast flicker.
 //
+// Bursts are particles fired once (`fire`): the game fires a burst at a place and a time, and its particles are written
+// into a ring of fixed capacity (`ParticleBurstRing` of `gen-core`, one per blend mode, made on the first burst of the
+// mode) whose changed span is uploaded before the next frame. The same vertex shader evaluates them from their time
+// against `burstTime`, a clock the game sets every frame (its own fixed steps, so a script that steps the game
+// without drawing sees the same particles), and hides them before and after their life. Every random choice of a
+// burst particle comes from the burst's seed (`gen-core`), so the same bursts give the same particles.
+//
 // `TransientLayer` dust is kept apart: its puffs are one-shot events at absolute clock times that come and go with
 // batches (the mesh is rebuilt then), while these sources loop with no start or end.
 
 import type { MaterialDesc, MeshData, VertexLayout } from '../base/index.ts';
+import { PARTICLE_FLOATS, ParticleBurstRing } from '../gen-core/index.ts';
+import type { ParticleBurst } from '../gen-core/index.ts';
 import type { InstanceBuffer, Mesh, Program } from '../gpu/index.ts';
 import type { Layer } from './renderer.ts';
 import { MeshLayer } from './renderer.ts';
@@ -58,12 +67,11 @@ export interface ParticleCounts {
 export interface ParticleLayerOptions {
   /** Most particles over all sources. Default 4096. */
   budget?: number;
+  /** Particles of fired bursts kept per blend mode (the ring's capacity; the oldest give way). Default 1024. */
+  burstCapacity?: number;
   /** Layer name for profiles and statistics. */
   name?: string;
 }
-
-/** Floats per particle record. */
-const PARTICLE_FLOATS = 24;
 
 const PARTICLE_ATTRIBS = { a_corner: 0, i_origin: 1, i_life: 2, i_motion: 3, i_c0: 4, i_c1: 5, i_kind: 6 } as const;
 
@@ -94,8 +102,9 @@ in vec4 i_life;    // x life s, y size at birth, z size at death, w rise m/s
 in vec4 i_motion;  // x birth disc radius, y spread speed, z gravity, w wind share
 in vec4 i_c0;      // colour and opacity at birth
 in vec4 i_c1;      // at death
-in vec4 i_kind;    // x shape (0 soft, 1 core), y seed, z gain group, w unused
+in vec4 i_kind;    // x shape (0 soft, 1 core), y seed, z gain group, w 1 when fired once
 uniform vec4 u_particleGain;
+uniform float u_burstTime;
 out vec4 v_color;
 out vec2 v_uv;
 out float v_shape;
@@ -103,19 +112,35 @@ out float v_seed;
 float h1(float a, float b) { return hash2(ivec2(int(a), int(b)), 77u); }
 void main() {
   float life = max(i_life.x, 0.05);
-  float cyc = u_time.x / life + i_origin.w;
-  float t = fract(cyc);
-  float k = floor(cyc);
+  bool once = i_kind.w > 0.5;
+  // A looping particle: its phase in the loop of the clock. Fired once: its age since the burst.
+  float cyc = once ? (u_burstTime - i_origin.w) / life : u_time.x / life + i_origin.w;
+  float t = once ? cyc : fract(cyc);
+  float k = once ? 0.0 : floor(cyc);
   float seed = i_kind.y;
-  // Random per particle and per life: birth point and drift.
+  if (once && (t < 0.0 || t >= 1.0)) {
+    // Not fired yet, or gone: behind the far plane, nothing drawn.
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    v_color = vec4(0.0);
+    v_uv = a_corner;
+    v_shape = 0.0;
+    v_seed = 0.0;
+    return;
+  }
+  // Random per particle and per life: birth point and drift (a burst particle carries its own, from the burst's seed).
   float r1 = h1(seed, k), r2 = h1(seed + 101.0, k), r3 = h1(seed + 211.0, k), r4 = h1(seed + 307.0, k);
   float age = t * life;
-  float ang = r1 * 6.2831853;
-  float rad = sqrt(r2) * i_motion.x;
-  vec3 p = i_origin.xyz + vec3(cos(ang) * rad, 0.0, sin(ang) * rad);
-  float ang2 = r3 * 6.2831853;
-  vec3 v = vec3(cos(ang2) * i_motion.y * (0.4 + 0.6 * r4), i_life.w * (0.75 + 0.5 * r4), sin(ang2) * i_motion.y * (0.4 + 0.6 * r4));
-  p += v * age;
+  vec3 p;
+  if (once) {
+    p = i_origin.xyz + vec3(i_motion.x, i_life.w, i_motion.y) * age;
+  } else {
+    float ang = r1 * 6.2831853;
+    float rad = sqrt(r2) * i_motion.x;
+    p = i_origin.xyz + vec3(cos(ang) * rad, 0.0, sin(ang) * rad);
+    float ang2 = r3 * 6.2831853;
+    vec3 v = vec3(cos(ang2) * i_motion.y * (0.4 + 0.6 * r4), i_life.w * (0.75 + 0.5 * r4), sin(ang2) * i_motion.y * (0.4 + 0.6 * r4));
+    p += v * age;
+  }
   p.y -= 0.5 * i_motion.z * age * age;
   // The wind carries a particle more the older it gets, with a slow curl.
   p.xz += u_wind.xy * i_motion.w * 1.6 * age * (0.3 + 0.7 * t);
@@ -182,33 +207,123 @@ const PARTICLE_ADD_MATERIAL: MaterialDesc = {
   state: { color: { depthWrite: false, cullBack: false, blend: { src: 'one', dst: 'one', srcAlpha: 'zero', dstAlpha: 'one' } } },
 };
 
+/** What `ParticleLayer.burstStats` reports. */
+export interface ParticleBurstStats {
+  /** Bursts and particles fired in all (both blend modes). */
+  bursts: number;
+  fired: number;
+  /** Particles alive at the layer's `burstTime`. */
+  alive: number;
+}
+
+/** A ring of burst particles of one blend mode and the instanced draw of it. */
+interface BurstDraw {
+  ring: ParticleBurstRing;
+  draw: ParticleDraw;
+  instances: InstanceBuffer;
+}
+
 /**
- * Looping particle sources in two draws (blended, then added). Add it after the opaque layers. The materials read
- * `u_time`, `u_wind`, `u_warmTint` and the `lighting` include of the environment.
+ * Looping particle sources in two draws (blended, then added), and bursts fired once in two more. Add it after the
+ * opaque layers. The materials read `u_time`, `u_wind`, `u_warmTint` and the `lighting` include of the environment.
  */
 export class ParticleLayer implements Layer {
   name?: string;
   readonly budget: number;
+  /** Particles of fired bursts kept per blend mode. */
+  readonly burstCapacity: number;
   /** Opacity gain per group (`ParticleSource.group`), 1 by default. Change at run time. */
   readonly gains = new Float32Array([1, 1, 1, 1]);
   /** What the last `setSources` packed. */
   counts: ParticleCounts = { sources: 0, particles: 0, dropped: 0 };
+  /**
+   * The time burst particles are drawn at, in the clock their bursts' `time` was given in (seconds). The game sets it
+   * every frame; the looping sources keep the environment's clock.
+   */
+  burstTime = 0;
 
   private readonly renderer: Renderer;
   private readonly layers: [ParticleDraw, ParticleDraw];
+  private readonly bind: (program: Program) => void;
+  /** Rings of fired bursts: blended, added (made on the first burst of the mode). */
+  private readonly bursts: [BurstDraw | null, BurstDraw | null] = [null, null];
   /** Instance buffer of each mesh the layer made, deleted with it. */
   private readonly owned = new Map<Mesh, InstanceBuffer>();
 
   constructor(renderer: Renderer, sources: readonly ParticleSource[] = [], o: ParticleLayerOptions = {}) {
     this.renderer = renderer;
     this.budget = Math.max(0, Math.floor(o.budget ?? 4096));
+    this.burstCapacity = Math.max(1, Math.floor(o.burstCapacity ?? 1024));
     if (o.name !== undefined) this.name = o.name;
-    const bind = (program: Program): void => program.vec4v('u_particleGain', this.gains);
+    this.bind = (program: Program): void => {
+      program.vec4v('u_particleGain', this.gains);
+      program.float('u_burstTime', this.burstTime);
+    };
+    const bind = this.bind;
     this.layers = [
       new ParticleDraw({ material: renderer.material(PARTICLE_BLEND_MATERIAL), bind }),
       new ParticleDraw({ material: renderer.material(PARTICLE_ADD_MATERIAL), bind }),
     ];
     this.setSources(sources);
+    renderer.beforeFrame.push(() => this.uploadBursts());
+  }
+
+  /**
+   * Fires a burst: its particles take the places of the oldest ones of its blend mode's ring and fly from its `time`
+   * on (against `burstTime`). Returns how many particles it wrote. Allocates only on the first burst of a mode.
+   */
+  fire(burst: ParticleBurst): number {
+    const mode = burst.blend === 'add' ? 1 : 0;
+    let b = this.bursts[mode];
+    if (!b) {
+      const ring = new ParticleBurstRing(this.burstCapacity);
+      const draw = new ParticleDraw({ material: this.layers[mode]!.material, bind: this.bind });
+      const instances = this.renderer.createInstances({ layout: PARTICLE_LAYOUT, data: ring.data });
+      const mesh = this.renderer.createMesh(QUAD, draw.material, instances);
+      mesh.instances = 0;
+      draw.mesh = mesh;
+      this.owned.set(mesh, instances);
+      ring.clean();
+      b = { ring, draw, instances };
+      this.bursts[mode] = b;
+    }
+    return b.ring.fire(burst);
+  }
+
+  /** Whether a burst particle may still be alive at `now` (default `burstTime`): keep drawing frames while it is. */
+  burstsBusy(now = this.burstTime): boolean {
+    for (const b of this.bursts) if (b && b.ring.busy(now)) return true;
+    return false;
+  }
+
+  /** Bursts and particles fired, and the particles alive at `burstTime`. */
+  burstStats(): ParticleBurstStats {
+    let bursts = 0, fired = 0, alive = 0;
+    for (const b of this.bursts) {
+      if (!b) continue;
+      bursts += b.ring.bursts;
+      fired += b.ring.fired;
+      alive += b.ring.alive(this.burstTime);
+    }
+    return { bursts, fired, alive };
+  }
+
+  /** Forgets every fired burst. */
+  clearBursts(): void {
+    for (const b of this.bursts) b?.ring.clear();
+  }
+
+  /** Uploads the span of each ring changed since the last frame. */
+  private uploadBursts(): void {
+    for (const b of this.bursts) {
+      if (!b) continue;
+      const r = b.ring;
+      if (r.dirtyFrom !== r.dirtyTo) {
+        this.renderer.device.writeBuffer(b.instances.buffer, r.data, (r.dirtyTo - r.dirtyFrom) * PARTICLE_FLOATS, r.dirtyFrom * PARTICLE_FLOATS * 4, r.dirtyFrom * PARTICLE_FLOATS);
+        r.clean();
+      }
+      if (b.draw.mesh) b.draw.mesh.instances = r.count;
+    }
   }
 
   /** Replaces the sources: packs them within the budget and uploads the instance buffers. */
@@ -265,7 +380,9 @@ export class ParticleLayer implements Layer {
   draw(ctx: DrawContext): void {
     if (ctx.pass !== 'color') return;
     this.layers[0].draw(ctx);
+    this.bursts[0]?.draw.draw(ctx);
     this.layers[1].draw(ctx);
+    this.bursts[1]?.draw.draw(ctx);
   }
 }
 

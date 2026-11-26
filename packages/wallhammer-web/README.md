@@ -23,7 +23,7 @@ npm install wallhammer-web
 
 ## Where the engine lives
 
-The engine is developed in this repository, at `packages/wallhammer-web`. The repository is a pnpm workspace: the engine, its checks (`tools/`) and the examples that exercise it (`examples/`: `minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`), which import the package through the workspace, so a change here reaches them at once. Paths such as `examples/endless/...` in these docs are paths from the repository root.
+The engine is developed in this repository, at `packages/wallhammer-web`. The repository is a pnpm workspace: the engine, its checks (`tools/`) and the examples that exercise it (`examples/`: `minimal-3d`, `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `movement`, `outpost`, `rivers`), which import the package through the workspace, so a change here reaches them at once. Paths such as `examples/endless/...` in these docs are paths from the repository root.
 
 Projects outside this repository use the published package or keep a copy of a fixed version.
 
@@ -47,8 +47,10 @@ Guides:
 - [Generators](docs/generators.md): `gen-core`, `gen-mesh`, `gen-tex` and the content modules.
 - [Simulation](docs/simulation.md): `Simulation`, commands, entity tables, navigation, movers and their collision modes, shared areas, agendas and states.
 - [Rigs and actors](docs/rigs.md): instanced animated rigs, `RigLayer`, how an app defines people, vehicles and stop furniture as rigs.
-- [Walking](docs/walking.md): collision world, walker, follow camera.
-- [Motion](docs/motion.md): skeletons, poses, motion graph, reach.
+- [Walking](docs/walking.md): collision world, walker (momentum, slopes and speed), follow camera.
+- [Wheeled body](docs/wheeled.md): a rigid body on wheel rays with tyres, brakes, a handbrake and a hull that hits solids.
+- [Flying body](docs/flying.md): a body that crawls on the ground and glides through the air, with beats, banked turns, a stall, a flare and touch-downs.
+- [Motion](docs/motion.md): skeletons, poses, motion graph, reach, a body carried by another, steps of several legs.
 - [Destruction](docs/destruction.md): destructible structures, events, staged collapse, falling pieces.
 - [World streaming](docs/streaming.md): cells, providers, the streaming manager and `StreamedWorld`.
 - [The planet example](docs/planet.md): the sphere world, the atmosphere, the free camera and the large depth range joined in one flight from the surface to orbit; clouds from the ground to orbit, biomes and woods, a sea to dive into and a movie mode.

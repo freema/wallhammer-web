@@ -51,7 +51,7 @@ world.remove(block); // other ids stay valid
 
 | Member | Meaning |
 | --- | --- |
-| `new CollisionWorld({ heightAt, cellSize?, baseMinY?, baseMaxY?, baseStep?, baseExtent? })` | The base surface as a height function. `baseMinY`/`baseMaxY` bound it (a ray above the highest point skips the search); `baseStep` is the horizontal step of the ray search on it (default 0.5 m); `baseExtent` (`[minX, minZ, maxX, maxZ]`) is where the base exists, so a ray that leaves it stops searching. Without an extent and without a finite `maxT`, a ray that misses everything searches the base for 1e5 lengths, which takes milliseconds. |
+| `new CollisionWorld({ heightAt, cellSize?, baseMinY?, baseMaxY?, baseStep?, baseExtent?, baseTagAt? })` | The base surface as a height function. `baseMinY`/`baseMaxY` bound it (a ray above the highest point skips the search); `baseStep` is the horizontal step of the ray search on it (default 0.5 m); `baseExtent` (`[minX, minZ, maxX, maxZ]`) is where the base exists, so a ray that leaves it stops searching. Without an extent and without a finite `maxT`, a ray that misses everything searches the base for 1e5 lengths, which takes milliseconds. |
 | `baseHeightAt(x, z)`, `baseSlopeAt(x, z, out)` | The base height at a point; its gradient (rise per metre along x and z) into `out` and its length, the tangent of the slope (central differences 0.05 m apart). |
 | `addPrism(outline, minY, maxY, options?)` | Upright prism over a closed outline of x, z pairs (either winding, may be concave, a repeated closing point is dropped). Returns the id. |
 | `addCylinder(x, z, radius, minY, maxY, options?)`, `addBox(x, z, halfX, halfZ, yawRad, minY, maxY, options?)` | A cylinder; a turned box (local +x points to (cos yaw, −sin yaw), as a view's yaw turns). |
@@ -60,7 +60,8 @@ world.remove(block); // other ids stay valid
 | `groundAt(x, z, y, maxStepUp, radius?)` | The highest of the base and of the standable tops at most `y + maxStepUp`. The base counts always. With `radius`, a top counts when the solid reaches within that distance of the point (a body stands on an edge). |
 | `ceilingAt(x, z, y, radius?)` | The lowest underside at or above `y`; Infinity when open. Every solid counts. |
 | `slide(x, z, radius, minY, maxY, dx, dz, out)` | Moves a circle against the sides of the solids whose height span overlaps `minY`..`maxY` (touching does not count; the base is not a side). It slides along a side, stops in a corner, never ends inside a solid: a circle that starts inside is pushed out the shortest way first. The move is split into sub-steps of at most half the radius, so it does not pass a side thinner than that. `out.hit`, `out.nx`, `out.nz`, `out.solid` tell the last contact. |
-| `raycast(ox, oy, oz, dx, dy, dz, maxT, out)` | The first hit with the base and the solids that block sight, for t in 0..`maxT` (t in lengths of the direction). The normal is unit and turned against the ray; `solid` and `tag` are −1 for the base. |
+| `raycast(ox, oy, oz, dx, dy, dz, maxT, out)` | The first hit with the base and the solids that block sight, for t in 0..`maxT` (t in lengths of the direction). The normal is unit and turned against the ray; `solid` is −1 for the base and `tag` its `baseTagAt` (−1 without it). |
+| `groundTagAt(x, z, y, maxStepUp, radius?)`, `baseTagAt(x, z)` | The surface tag of the ground `groundAt` finds, and of the base alone ([Surface tags](#surface-tags)). |
 | `clearance(ox, oy, oz, dx, dy, dz, maxDist, radius)` | How far a sphere gets along the direction, in metres, at most `maxDist`: the centre line is cast as a ray first, then the sphere is tested every `radius` metres and the contact refined by bisection. 0 when the sphere overlaps something at the origin. Pass it to `FollowRig` as the boom clearance. |
 | `query(x, z, radius, visit)` | Every solid whose outline comes within `radius` of the point horizontally, whatever its height span and options: `visit(id, tag, distance)` with the signed horizontal distance (negative inside). Returns the count; allocates nothing; `visit` must not query the same world. |
 | `forEachSolid(fn)`, type `SolidInfo` | Every solid with its shape and options, for debug drawing (allocates). |
@@ -71,6 +72,49 @@ a step lower than the mover's step height is left out of `slide` by passing `min
 
 The ray search of the base steps along the ray `baseStep` metres at a time and refines the intersection by bisection, the
 same search as `raycastHeightField` (both use one function). A ridge narrower than the step can be missed.
+
+### Free places to stand
+
+`standSpot(sx, sz, tx, tz, y, options)` asks whether a body may stand at (tx, tz) when it comes there from (sx, sz) at height `y`: a cylinder of the body's `radius` from `maxStepUp` to `height` over `y` is slid from the start to the place, and the place counts when nothing stops it (an end farther than `tolerance`, default 0.02 m, from the place means a side was in the way) and the ground there, `groundAt(tx, tz, y, maxRise)`, is within `maxRise` (default `maxStepUp`) of `y` (no drop, no wall to climb). It returns that ground height, or NaN. `firstStandSpot(spots, y, options, out?)` takes candidates as four numbers each (start x, z, then place x, z), in the order the caller prefers, and returns the index of the first free one (−1 when none is), with its x, ground y and z in `out`. Typical use: where a carried body gets off, the starts on the carrier's side and the places a little beyond it, left before right; the same for a body put down beside anything.
+
+<!-- check: wrap -->
+```ts
+import { CollisionWorld } from 'wallhammer-web/world';
+import type { StandSpotOptions } from 'wallhammer-web/world';
+declare const world: CollisionWorld;
+declare const x: number, y: number, z: number, yaw: number; // the carrier
+
+const body: StandSpotOptions = { radius: 0.3, height: 1.7, maxStepUp: 0.35 };
+// Local +x of a figure facing `yaw` is (cos yaw, −sin yaw) to the left; 0.6 m out on the side, 1.2 m out to stand.
+const c = Math.cos(yaw), s = Math.sin(yaw);
+const spots = [
+  x + 0.6 * c, z - 0.6 * s, x + 1.2 * c, z - 1.2 * s, // left
+  x - 0.6 * c, z + 0.6 * s, x - 1.2 * c, z + 1.2 * s, // right
+];
+const at = new Float64Array(3);
+const side = world.firstStandSpot(spots, y, body, at); // −1: stay on
+```
+
+### Surface tags
+
+What the ground is made of (grass, sand, stone, a deck) is a number the game chooses. A solid carries its `tag`; the
+base surface gets one from the option `baseTagAt(x, z)`. `groundTagAt(x, z, y, maxStepUp, radius?)` returns the tag of
+the very ground `groundAt` finds with the same arguments: a standable solid's tag when the point stands on its top,
+otherwise the base surface's. `baseTagAt(x, z)` reads the base alone. A ray that hits the base reports its tag in
+`hit.tag`, so a `WheeledBody` keeps the tag under each wheel in `WheelState.surfaceTag` (−1 in the air). Without the
+option every base tag is −1, as before. Game code reads the tag where a foot is put down or a wheel rolls and decides
+what to leave there (a print, a rut, dust; [Contact trail](rendering.md#contact-trail)).
+
+<!-- check: wrap -->
+```ts
+import { CollisionWorld } from 'wallhammer-web/world';
+
+const SAND = 201, GRASS = 200;
+const world = new CollisionWorld({ heightAt: () => 0, baseTagAt: (x) => (x > 10 ? SAND : GRASS) });
+world.addBox(0, 0, 1, 1, 0, 0, 0.5, { tag: 7 });
+world.groundTagAt(0, 0, 0.6, 0.35); // 7: the box's top
+world.groundTagAt(15, 0, 0.1, 0.35); // 201: sand
+```
 
 CPU time in plain Node in the development container, a world of 2,000 solids on a height field, mean of 10,000
 calls (`pnpm check:walk` prints it each run): a 30 m `raycast` about 2 µs on a quiet machine (up to 8 µs measured
@@ -83,7 +127,8 @@ while the machine was busy), a `slide` of one step 1–3 µs, `groundAt` under 1
 
 1. The wanted velocity is the intent's direction (clamped to length 1) times `walkSpeed` or `runSpeed`. The horizontal
    velocity moves toward it by at most `acceleration` per second (by default braking the same way; see
-   [Momentum](#momentum) for a separate braking, a slower run-up and a turn that widens with speed); in the air only
+   [Momentum](#momentum) for a separate braking, a slower run-up and a turn that widens with speed, and
+   [Slopes and speed](#slopes-and-speed) for a wanted speed that changes with the grade of the ground); in the air only
    `airControl` of it. The default `airControl` is 0: once off the ground (a jump or a fall from an edge) the body keeps
    the horizontal velocity it left with until it lands, whatever is asked in the air; only a side it touches takes
    away the velocity into it. A small share (0.05–0.1) allows a slight correction, at most `airControl × acceleration`
@@ -151,10 +196,11 @@ console.log(body.position, body.velocity, body.grounded, body.steep, body.yaw, b
 
 | Member | Meaning |
 | --- | --- |
-| `new Walker(world, setup?)`, `setup` | `WalkerSetup` over `DEFAULT_WALKER`: `radius` 0.3, `height` 1.7, `walkSpeed` 1.6, `runSpeed` 4.5 m/s, `acceleration` 20 m/s², `airControl` 0 (no steering in the air), `airTurnSpeed` 0 rad/s (no turning in the air), `jumpSpeed` 4.2 m/s (0: no jumps; a jump 0.9 m high, 0.86 s in the air), `gravity` 9.81, `maxStepUp` 0.35 m, `maxSlopeDeg` 45, `stepHz` 60, `turnSpeed` 12 rad/s, `stepSmoothing` 0.1 s, `maxStepsPerAdvance` 15; `deceleration`, `runAcceleration`, `turnSpeedAtRun` 0 (off, see [Momentum](#momentum)). |
-| `retune(tuning)`; type `WalkerTuning`, `WALKER_TUNING_KEYS` | Changes the speeds, rates and jump (`walkSpeed`, `runSpeed`, `acceleration`, `deceleration`, `runAcceleration`, `turnSpeed`, `turnSpeedAtRun`, `airControl`, `airTurnSpeed`, `jumpSpeed`) from the next step on, keeping the state; a field left out keeps its value. The size, step rate and ground limits are fixed at construction. `ChartWalker.retune` does the same and keeps it over recharts. |
+| `new Walker(world, setup?)`, `setup` | `WalkerSetup` over `DEFAULT_WALKER`: `radius` 0.3, `height` 1.7, `walkSpeed` 1.6, `runSpeed` 4.5 m/s, `acceleration` 20 m/s², `airControl` 0 (no steering in the air), `airTurnSpeed` 0 rad/s (no turning in the air), `jumpSpeed` 4.2 m/s (0: no jumps; a jump 0.9 m high, 0.86 s in the air), `gravity` 9.81, `maxStepUp` 0.35 m, `maxSlopeDeg` 45, `stepHz` 60, `turnSpeed` 12 rad/s, `stepSmoothing` 0.1 s, `maxStepsPerAdvance` 15; `deceleration`, `runAcceleration`, `turnSpeedAtRun` 0 (off, see [Momentum](#momentum)); `uphillSpeedLoss`, `downhillSpeedGain`, `downhillSpeedLoss` 0 (off) and `slopeSpeedFloor` 0.25, `gradeProbe` 1 m, `gradeSmoothing` 0.3 s (see [Slopes and speed](#slopes-and-speed)). |
+| `retune(tuning)`; type `WalkerTuning`, `WALKER_TUNING_KEYS` | Changes the speeds, rates and jump (`walkSpeed`, `runSpeed`, `acceleration`, `deceleration`, `runAcceleration`, `turnSpeed`, `turnSpeedAtRun`, `airControl`, `airTurnSpeed`, `jumpSpeed`, `uphillSpeedLoss`, `downhillSpeedGain`, `downhillSpeedLoss`, `slopeSpeedFloor`) from the next step on, keeping the state; a field left out keeps its value. The size, step rate and ground limits are fixed at construction. `ChartWalker.retune` does the same and keeps it over recharts. |
 | `position`, `velocity` | Feet and velocity (x, y, z), `Float64Array`s; read them, change them through `teleport`. |
 | `yaw`, `grounded`, `steep` | Heading in radians; standing on ground; standing on a base too steep to climb (sliding). |
+| `grade` | The eased grade of the ground along the wanted direction that scales the speed (read only; see [Slopes and speed](#slopes-and-speed)). |
 | `travelled`, `steps` | Horizontal metres moved (for the stride of an animation); fixed steps since the last `teleport`. |
 | `renderTravelled(alpha?)`, `lastStepDistance` | `travelled` between the last two steps for drawing (a stride in step with `renderPosition`); horizontal metres of the last step (÷ `stepSeconds`: the speed), 0 after a `teleport`. |
 | `advance(dt, intent)` | Runs the fixed steps due in `dt` real seconds; returns how many ran. |
@@ -191,13 +237,54 @@ const body = new Walker(world, { walkSpeed: 1.2, runSpeed: 3.8, acceleration: 6,
 body.retune({ runSpeed: 4.6, acceleration: 12, runAcceleration: 7, deceleration: 12, turnSpeed: 8, turnSpeedAtRun: 2.5 });
 ```
 
+### Slopes and speed
+
+By default a body walks up and down a slope at the same horizontal speed as on the flat. Four options of `WalkerSetup`
+(all in `WalkerTuning`, so `retune` changes them) scale the wanted speed on the ground by the grade g of the ground
+along the wanted direction (rise over run, positive uphill):
+
+| Option | Effect |
+| --- | --- |
+| `uphillSpeedLoss` | Share of the speed lost per unit of uphill grade: the factor is 1 − loss · g. 0.85 walks a 20° slope (g 0.36) 31 % slower. |
+| `downhillSpeedGain`, `downhillSpeedLoss` | Downhill at grade d = −g the factor is 1 + d · (gain − loss · d): a little faster on gentle descents, slower on steep ones. Gain 0.5 and loss 1.8 are fastest at d 0.14 (8°, +3.5 %), as fast as the flat at d 0.28 (15.5°) and 6 % slower at 20°. |
+| `slopeSpeedFloor` | The least factor (default 0.25), so a body never stalls on a slope it may stand on. |
+
+With the three rates at 0 (the default) the grade is never probed and a step is the same, bit for bit, as without the
+options (`walker-slope-defaults-unchanged`). The grade is that of the ground the body stands on, the base or the tops
+of solids: the mean height of four points over `gradeProbe` metres ahead of the feet less that of four points over as
+much behind, divided by the `gradeProbe` between their centres, then eased over `gradeSmoothing` seconds (the share
+kept per step is exp(−step / gradeSmoothing); 0 does not ease). Each point takes the ground the body could
+step to from the point before it, and a rise or drop of more than `maxStepUp` between two points (a side, a ledge)
+counts as one step, so a body neither brakes much before a ledge it may jump from nor reads a wall as a slope. A flight
+of stairs reads as its mean slope: up 30 steps of 0.17 m on 0.3 m treads the speed is that of a base ramp of the same
+mean slope and stays within ±2 % (`walker-slope-stairs-steady`). Only the wanted speed is scaled, so `acceleration`
+and `deceleration` ease the change; in the air nothing is scaled. The probe costs eight `groundAt` calls a step, only
+while the option is on. The eased grade is part of the saved state (the twentieth double), and `grade` reads it
+(read only; 0 while the option is off and after a `teleport`, kept as it was in the air).
+
+The probe's window belongs to the body's size. Two setup fields set it; they are fixed at construction and not in
+`WalkerTuning`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `gradeProbe` | 1 | Metres the probe averages ahead of the feet and again behind them: a window of 2 m, fitting a body of the default size. A longer body (four legs) may take more, so it reads the foot of a ramp sooner and a flight of stairs over more steps. Positive. |
+| `gradeSmoothing` | 0.3 | Seconds over which the probed grade is eased; 0: the probe's grade at once. |
+
+Both are optional in the type, and the defaults step bit for bit as before (`walker-slope-probe-window` checks the
+defaults spelled out, the `grade` getter against the saved state, and a 2.5 m window that reads a ramp sooner and
+gives the same grade up it).
+
+Measured with the examples' default movement profile (walk 1.4, run 4.6 m/s; loss 0.85, gain 0.5, loss 1.8, floor
+0.35) on the movement course: up its 20° ramp 0.97 and 3.18 m/s, down it 1.32 and 4.34 m/s, up its stairs (0.2 m steps
+on 0.4 m treads) 0.8 and about 2.7 m/s.
+
 CPU time of one step in plain Node in the development container, in a world of 2,000 solids, mean of 10,000 steps
 (`pnpm check:walk` prints it each run): 3–4 µs, up to 15 µs measured while the machine was heavily loaded (target 20 µs).
 
 ### Saving and restoring
 
 `saveState(out?, offset?)` writes the walker's whole moving state (position, velocity, yaw, ground and jump flags,
-travelled distance, step count, the previous pose and distance for interpolation and the step remainder) as `WALKER_STATE_BYTES`
+travelled distance, step count, the previous pose and distance for interpolation, the step remainder and the eased grade of [Slopes and speed](#slopes-and-speed)) as `WALKER_STATE_BYTES`
 (160) bytes: 20 doubles, the first a format version. `loadState(bytes, offset?)` restores it into a walker of the same
 setup and world. Without `out` the bytes are the walker's own scratch: copy them to keep them.
 
@@ -271,7 +358,7 @@ console.log(id);
 upright at each corner, a cylinder as two circles with four uprights. `select(info, id)` keeps only some solids (draw
 standable, blocking and invisible ones in different colours), `segments` sets the circle (default 16), `floorY` cuts
 off the bottom of solids that reach far below the ground. Build it once, after the solids are added; it is a debugging
-view, not drawn in normal use. The walking example (`examples/walk`, key `C`) shows it.
+view, not drawn in normal use. The movement example (`examples/movement`, key `C`) shows it.
 
 <!-- check: wrap -->
 ```ts

@@ -23,11 +23,12 @@
 //   off. px and cells set the tolerance in pixels and the budget of cells; gpu the ceiling of GPU memory in MB
 //   (default 560, 0 = none). levels=1 tints the cells by level.
 //   split=shorter cuts every quad of the surface along its diagonal whose ends differ less in height (default: one
-//   fixed diagonal); extra=slope carries the slope in the surface's extra channel and tints steep ground by it,
-//   extra=lift also raises the cliffs by the ground's vertex hook (world.ts, `PlanetCellOptions`; shaders.ts).
+//   fixed diagonal; the view `split-crest` shows the difference best); extra=slope carries the slope in the surface's
+//   extra channel and tints steep ground by it, extra=lift also raises the cliffs by the ground's vertex hook
+//   (world.ts, `PlanetCellOptions`; shaders.ts).
 //   strip=0 switches the strips off (strips.ts): the page is then the one without them, its generator, worker and
 //   materials. With the strips and without lat and lon the page starts 3 m above the main line, 300 m from its start.
-//   view=<name> starts in one of the views of `__wh.presets()`.
+//   view=<name> starts in one of the views of `__wh.presets()` (the strip, cloud and sea views, `walk`, `split-crest`).
 //   clouds=0 builds the page without clouds, rain and their shadows; vol=0 keeps only the cloud shell (no volumetric
 //   clouds); cover=0..1 puts one cloud cover over the whole planet in place of the profile and its patches.
 //   movie=1 plays the movie (movie.ts) once the page has loaded; bars=0 leaves out its letterbox bars.
@@ -66,7 +67,7 @@ import { STRIP_HALF_WIDTHS, planetStripCellGenerator, planetStrips, stripGroundH
 import { moveProfile, nextMoveProfile } from '../../shared/src/figures/profiles.ts';
 import { PlanetWalk } from './walk.ts';
 import { NO_CLOUD_FIELD, PLANET_WIND, planetCloudField, planetWeatherAt } from './weather.ts';
-import { AIR_HEIGHT_M, DEFAULT_SEED, HORIZON_RADIUS_M, MIN_SPLIT_EDGES, OBJECT_LEVEL, OBJECT_SOLIDS, RADIUS_M, SELECTION, SHAPE, directionAt, findSeaPlaces, findStart, findWalkStart, groundHeight, latLonOf, planetCellGenerator, planetCellOptions, planetCellQuery, surfaceHeight } from './world.ts';
+import { AIR_HEIGHT_M, DEFAULT_SEED, HORIZON_RADIUS_M, MIN_SPLIT_EDGES, OBJECT_LEVEL, OBJECT_SOLIDS, RADIUS_M, SELECTION, SHAPE, directionAt, findSeaPlaces, findSplitCrest, findStart, findWalkStart, groundHeight, latLonOf, planetCellGenerator, planetCellOptions, planetCellQuery, surfaceHeight } from './world.ts';
 
 const q = new URLSearchParams(location.hash.slice(1));
 const num = (k: string, d: number): number => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d);
@@ -980,6 +981,41 @@ function walkPreset(): ViewSpec {
   const w = walkStart();
   return { name: 'walk', lat: w.lat, lon: w.lon, height: 2, hour: w.hour, toward: w.toward, pitchDeg: 0, walk: WALK_START_VIEW };
 }
+/**
+ * The view that shows what `split=shorter` changes (world.ts, `findSplitCrest`): 1.6 m above the lower flank of the
+ * crest where the two splits differ most, looking up at it, so the crest is the line against the sky; at the first
+ * hour of the page's day when the sun stands 35–55° high behind or beside the eye, so the flank is lit. Open it once
+ * with and once without `split=shorter`. Found once, on first use (about a second); none on a world without land.
+ */
+let splitCrestOf: ViewSpec | null | undefined;
+function splitCrestPresets(): ViewSpec[] {
+  if (splitCrestOf === undefined) {
+    const c = findSplitCrest(seed);
+    if (!c) splitCrestOf = null;
+    else {
+      const d = c.eye;
+      const k = c.target[0] * d[0] + c.target[1] * d[1] + c.target[2] * d[2];
+      const f = [c.target[0] - d[0] * k, c.target[1] - d[1] * k, c.target[2] - d[2] * k];
+      const fl = Math.hypot(f[0]!, f[1]!, f[2]!) || 1;
+      const [lat, lon] = latLonOf(d);
+      let hour = (((12 - lon / 15) % 24) + 24) % 24;
+      let best = Infinity;
+      for (let i = 0; i < 96; i++) {
+        const h = i / 4;
+        const s = sphereSunDirection(DAY_OF_YEAR, h);
+        const up = s[0] * d[0] + s[1] * d[1] + s[2] * d[2];
+        const elevation = (Math.asin(Math.max(-1, Math.min(1, up))) * 180) / Math.PI;
+        if (elevation < 35 || elevation > 55) continue;
+        // Toward the crest counts against the hour (the flank would be in its own shade), behind the eye for.
+        const ahead = (s[0] * f[0]! + s[1] * f[1]! + s[2] * f[2]!) / fl / Math.max(1e-6, Math.sqrt(1 - up * up));
+        const score = (ahead > 0.35 ? 10 : 0) + ahead + Math.abs(elevation - 45) / 100;
+        if (score < best) (best = score), (hour = h);
+      }
+      splitCrestOf = { name: 'split-crest', lat, lon, height: 1.6, toward: c.target, hour };
+    }
+  }
+  return splitCrestOf ? [splitCrestOf] : [];
+}
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 /** Renders frames until the streaming has settled (every wanted cell drawn, nothing in flight). */
 async function settle(limit = 6000): Promise<boolean> {
@@ -1005,6 +1041,7 @@ async function settle(limit = 6000): Promise<boolean> {
     ...cloudPresets(),
     ...seaPresets(),
     walkPreset(),
+    ...splitCrestPresets(),
   ],
   setView: (v: ViewSpec): void => {
     scripted = true;
@@ -1111,7 +1148,7 @@ async function settle(limit = 6000): Promise<boolean> {
   },
 };
 // `view=<name>`: start in a view of the presets.
-const startView = q.has('view') ? (q.get('view') === 'walk' ? walkPreset() : [...stripPresets(), ...cloudPresets(), ...seaPresets()].find((v) => v.name === q.get('view'))) : undefined;
+const startView = q.has('view') ? (q.get('view') === 'walk' ? walkPreset() : [...stripPresets(), ...cloudPresets(), ...seaPresets(), ...(q.get('view') === 'split-crest' ? splitCrestPresets() : [])].find((v) => v.name === q.get('view'))) : undefined;
 if (startView) applyView(startView);
 // `walk=1`: walking on the ground under the start place.
 // A bare `walk=1` (no lat and lon) starts at `walkStart` with its view unless pitch and dist are given.

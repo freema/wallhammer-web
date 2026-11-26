@@ -116,7 +116,7 @@ Things to notice:
 ## Where to look next
 
 - [Wallhammer Web for agents](agents.md) is the one page for a coding agent (or a hurried reader): the rules for code built on the engine, which entry serves which goal, the module map and how to debug.
-- [Cookbook](cookbook.md) has recipes by goal (a streamed world, terrain, houses from footprints, weather, walking, destruction, schedules, your own data, performance, marks), each with checked code, the example to open and the pitfalls.
+- [Cookbook](cookbook.md) has recipes by goal (a streamed world, terrain, houses from footprints, weather, walking, slopes, a body on wheels, a body carried by another, legs that step, the camera for them, destruction, schedules, your own data, performance, marks), each with checked code, the example to open and the pitfalls.
 - [Recipes](recipes.md) has short, checked samples for the common extensions; [Draw moving copies with instance sets](recipes.md#draw-moving-copies-with-instance-sets) shows `instanceSet`, `writeInstance`, `pushInstance` and `InstanceSetLayer` with their material.
 - [The environment](environment.md) explains the light this scene gets: the hour and the date, the sky, the weather, clouds, fog and seasons, and what a material calls to receive them.
 - `examples/minimal-3d/src/main.ts` is the same pattern with instancing, an environment slot, the sky and the simulation.
@@ -124,5 +124,5 @@ Things to notice:
 - `examples/planet/src/main.ts` joins the sphere world, the atmosphere and the free camera in one flight, with volumetric clouds, rain and a sea to dive into ([The planet example](planet.md)).
 - `examples/system/src/main.ts` adds a system of bodies and hands the camera from the frame of one body to the next ([The system example](system.md)).
 - `examples/destruction/src/main.ts` uses `gen-arch` and `sim/destruction`.
-- `examples/walk/src/main.ts` walks a figure over a collision world with a follow camera ([Walking](walking.md)).
+- `examples/movement/src/main.ts` walks a figure over a collision world with a follow camera ([Walking](walking.md)), rides a steed that steps with `StepCycle` ([Motion](motion.md)), drives cars that are `WheeledBody`s ([Wheeled body](wheeled.md)) and flies a glider that is a `FlyingBody` ([Flying body](flying.md)).
 - `examples/fantasy-village/src/main.ts` is a whole scene with content modules of its own in the example, and a movie mode.

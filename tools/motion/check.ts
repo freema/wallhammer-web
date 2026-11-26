@@ -11,6 +11,9 @@ import {
   MotionGraph,
   Pose,
   SocketBlend,
+  SeatTransition,
+  SocketSeat,
+  StepCycle,
   TwoBoneReach,
   WeightFade,
   aimAngles,
@@ -22,6 +25,7 @@ import {
   boneMask,
   compileMotionGraph,
   fitToGround,
+  headingRoot,
   reachTwoBone,
   setBoneAxisAngle,
   setBoneEuler,
@@ -30,7 +34,7 @@ import {
   speedWeights,
   subtractPose,
 } from '../../packages/wallhammer-web/src/motion/index.ts';
-import type { AimAngles, AimChain, LagChain, MotionGraphDesc, MotionSource, Socket, TwoBoneChain } from '../../packages/wallhammer-web/src/motion/index.ts';
+import type { AimAngles, AimChain, BoneSpec, LagChain, MotionGraphDesc, MotionSource, SeatTransitionOptions, Socket, StepCycleDesc, StepPattern, TwoBoneChain } from '../../packages/wallhammer-web/src/motion/index.ts';
 
 interface Result {
   ok: boolean;
@@ -1442,6 +1446,666 @@ const LAGS: Scenario[] = [
   },
 ];
 
+// --- A body carried by another, reaching at sockets, steps of several legs ------------------------------------------
+
+/** Largest difference of two arrays of numbers. */
+function maxDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  let m = 0;
+  for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i]! - b[i]!));
+  return m;
+}
+
+function det34(m: ArrayLike<number>): number {
+  return m[0]! * (m[4]! * m[8]! - m[5]! * m[7]!) - m[3]! * (m[1]! * m[8]! - m[2]! * m[7]!) + m[6]! * (m[1]! * m[5]! - m[2]! * m[4]!);
+}
+
+/** A made-up carrier: chain3 solved on a tilted root, a socket on its tip turned by `yaw` and then by `tilt` about x. */
+function carrier(yaw: number, tilt: number, mirrored = false): { world: Float64Array; socket: Socket } {
+  const sk = chain3();
+  const p = new Pose(sk);
+  const world = new Float64Array(sk.count * 12);
+  solvePose(sk, p, ID, world);
+  // The tip's matrix is the identity at (0, 0, 0): the socket's local is its transform in the solve frame.
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), ct = Math.cos(tilt), st = Math.sin(tilt);
+  // Ry(yaw) · Rx(tilt), columns.
+  const x = [cy, 0, -sy], y = [sy * st, ct, cy * st], z = [sy * ct, -st, cy * ct];
+  const k = mirrored ? -1 : 1;
+  const local = [k * x[0]!, k * x[1]!, k * x[2]!, ...y, ...z, 0.3, 0.2, -0.1];
+  return { world, socket: { bone: 2, local } };
+}
+
+/** A made-up seat timeline for the scenarios. */
+const SEAT_TIMELINE: SeatTransitionOptions = {
+  attach: { seconds: 1.2, weightFrom: 0.1, weightSeconds: 0.8, rise: 0.6, riseTo: 0.5 },
+  release: { seconds: 1, weightFrom: 0.2, weightSeconds: 0.6, rise: 0.6, riseFrom: 0.3, riseTo: 0.9 },
+};
+
+const SEAT: Scenario[] = [
+  {
+    name: 'seat-weights',
+    run() {
+      const { world, socket } = carrier(0.7, 0.4);
+      const free = yawRoot(-0.3, 4, 0, 2);
+      const at = socketTransform(world, socket, new Float64Array(12));
+      const out = new Float64Array(12);
+      const seat = new SocketSeat();
+      seat.write(free, world, socket, out);
+      const w0 = maxDiff(out, free);
+      seat.fade.set(1);
+      seat.write(free, world, socket, out);
+      const w1 = maxDiff(out, at);
+      seat.fade.set(0.5);
+      seat.write(free, world, socket, out);
+      const mid = maxDiff(out, blendTransform(free, at, 0.5, new Float64Array(12)));
+      // Eased on over 0.5 s: no jump.
+      seat.fade.set(0);
+      seat.on(0.5);
+      let prev = free.slice();
+      let worst = 0;
+      for (let i = 0; i < 40; i++) {
+        seat.update(1 / 60);
+        seat.write(free, world, socket, out);
+        worst = Math.max(worst, Math.hypot(out[9]! - prev[9]!, out[10]! - prev[10]!, out[11]! - prev[11]!));
+        prev = out.slice();
+      }
+      const gap = Math.hypot(at[9]! - free[9]!, at[10]! - free[10]!, at[11]! - free[11]!);
+      const end = maxDiff(out, at);
+      const ok = w0 === 0 && w1 === 0 && mid < 1e-12 && end === 0 && worst < 1.6 * gap / 30;
+      return { ok, detail: `weight 0 off the free root by ${w0}, weight 1 off the socket by ${w1}, 0.5 off the blend by ${mid.toExponential(1)}; on over 0.5 s: ${f(gap, 2)} m, largest step ${f(worst, 3)} m a frame, ends on the socket (${end})` };
+    },
+  },
+  {
+    name: 'seat-tilt-share',
+    run() {
+      // A socket turned 0.7 rad about y and tilted 0.4 rad about its x: tilt 0 keeps the root upright with the
+      // socket's place and heading, 0.5 takes half the tilt, 1 all of it.
+      const { world, socket } = carrier(0.7, 0.4);
+      const at = socketTransform(world, socket, new Float64Array(12));
+      const free = yawRoot(0, 0, 0, 0);
+      const out = new Float64Array(12);
+      const seat = new SocketSeat({ tilt: 0 });
+      seat.fade.set(1);
+      const tiltOf = (m: ArrayLike<number>): number => Math.acos(Math.min(1, m[4]! / Math.hypot(m[3]!, m[4]!, m[5]!)));
+      seat.write(free, world, socket, out);
+      const t0 = tiltOf(out);
+      const heading = Math.atan2(out[6]!, out[8]!);
+      const place = Math.hypot(out[9]! - at[9]!, out[10]! - at[10]!, out[11]! - at[11]!);
+      seat.tilt = 0.5;
+      seat.write(free, world, socket, out);
+      const tHalf = tiltOf(out);
+      const headingHalf = Math.atan2(out[6]!, out[8]!);
+      seat.tilt = 1;
+      seat.write(free, world, socket, out);
+      const tFull = tiltOf(out);
+      const ok = t0 < 1e-12 && Math.abs(heading - 0.7) < 1e-12 && place < 1e-12 && Math.abs(tHalf - 0.2) < 1e-9 && Math.abs(headingHalf - 0.7) < 1e-9 && Math.abs(tFull - 0.4) < 1e-9;
+      return { ok, detail: `tilt 0: ${f(t0 / DEG, 4)}° off up, heading ${f(heading, 4)} rad (0.7), place off ${place.toExponential(1)}; tilt 0.5: ${f(tHalf / DEG, 3)}° (11.459), heading ${f(headingHalf, 4)}; tilt 1: ${f(tFull / DEG, 3)}° (22.918)` };
+    },
+  },
+  {
+    name: 'seat-mirrored',
+    run() {
+      // A mirrored socket: the carried root stays mirrored at every weight and tilt share, upright at tilt 0.
+      const { world, socket } = carrier(-1.1, 0.5, true);
+      const free = new Float64Array([-1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0, 1]);
+      const out = new Float64Array(12);
+      const seat = new SocketSeat({ tilt: 0 });
+      let worstDet = 0;
+      let upright = 0;
+      for (let i = 0; i <= 10; i++) {
+        seat.fade.set(i / 10);
+        for (const tilt of [0, 0.3, 1]) {
+          seat.tilt = tilt;
+          seat.write(free, world, socket, out);
+          worstDet = Math.max(worstDet, Math.abs(det34(out) + 1));
+          if (i === 10 && tilt === 0) upright = Math.hypot(out[3]!, out[4]! - 1, out[5]!);
+        }
+      }
+      seat.tilt = 0;
+      seat.write(free, world, socket, out);
+      const heading = Math.atan2(out[6]!, out[8]!);
+      const ok = worstDet < 1e-9 && upright < 1e-12 && Math.abs(heading + 1.1) < 1e-12;
+      return { ok, detail: `determinant −1 within ${worstDet.toExponential(1)} at all weights and shares; tilt 0: second axis off up by ${upright.toExponential(1)}, heading ${f(heading, 4)} rad (−1.1)` };
+    },
+  },
+  {
+    name: 'reach-socket',
+    run() {
+      // An arm of one body reaches a socket of another and takes its turn; without the end rotation only the point.
+      const { world: cw, socket } = carrier(0.5, 0.3);
+      const sock = { bone: socket.bone, local: [...socket.local.slice(0, 9), 0.25, 0.45, 0.35] };
+      const at = socketTransform(cw, sock, new Float64Array(12));
+      const sk = chain3();
+      const p = new Pose(sk);
+      const w = new Float64Array(sk.count * 12);
+      const root = yawRoot(0, 0, 0, 0);
+      const r = new TwoBoneReach({ upper: 0, lower: 1, end: 2 }, { soft: 1 });
+      r.fade.set(1);
+      solvePose(sk, p, root, w);
+      const before = w.slice(24, 33);
+      r.setTargetSocket(cw, sock);
+      const leftPoint = r.apply(sk, p, root, w);
+      const plain = maxDiff(r.target, [at[9]!, at[10]!, at[11]!]);
+      p.reset();
+      solvePose(sk, p, root, w);
+      r.useEndRotation = true;
+      r.setTargetSocket(cw, sock);
+      const left = r.apply(sk, p, root, w);
+      const turn = maxDiff(w.subarray(24, 33), at.subarray(0, 9));
+      const ok = leftPoint < 1e-6 && plain === 0 && left < 1e-6 && turn < 1e-6 && maxDiff(before, at.subarray(0, 9)) > 0.1;
+      return { ok, detail: `point reached (${leftPoint.toExponential(1)}), target is the socket's point; with the end rotation reached (${left.toExponential(1)}) and the end's axes off the socket's by ${turn.toExponential(1)}` };
+    },
+  },
+  {
+    name: 'seat-transition-phases-and-cues',
+    run() {
+      // Approach 0.5 s, on 1.2 s (weight 0.1–0.9 s, rise 0.6 by 0.5 s), off 1 s (weight 0.2–0.8 s). Stepped at 60 and
+      // at 144 per second: phases change at the same times within a step, every cue fires once, the approach walks
+      // its whole length.
+      const run = (hz: number) => {
+        const tr = new SeatTransition(SEAT_TIMELINE);
+        const dt = 1 / hz;
+        tr.attach(1, 0, 2, 0, 0.5);
+        let fired = 0, walked = 0, heldAt = -1, freeAt = -1, t = 0, rAt05 = -1;
+        const first = tr.phase;
+        for (let i = 0; i < hz * 2; i++) {
+          tr.advance(dt);
+          t += dt;
+          if (tr.crossed(0.5)) fired++;
+          if (tr.crossed(1.0)) fired++;
+          walked += tr.approachMoved(3);
+          if (tr.became('held')) heldAt = t;
+          if (rAt05 < 0 && tr.elapsed >= 1.0) rAt05 = tr.rise();
+        }
+        const held = tr.phase, w1 = tr.weight();
+        const released = tr.release();
+        let offFired = 0;
+        t = 0;
+        for (let i = 0; i < hz * 2; i++) {
+          tr.advance(dt);
+          t += dt;
+          if (tr.gettingOff && tr.crossed(0)) offFired++;
+          if (tr.became('free')) freeAt = t;
+        }
+        return { first, fired, walked, heldAt, held, w1, released, offFired, freeAt, end: tr.phase, w0: tr.weight(), rAt05 };
+      };
+      const a = run(60), b = run(144);
+      const ok = [a, b].every((r) => r.first === 'approach' && r.fired === 2 && Math.abs(r.walked - 3) < 1e-9 && Math.abs(r.heldAt - 1.7) < 1 / 60 + 1e-9 && r.held === 'held' && r.w1 === 1 && r.released && r.offFired === 1 && Math.abs(r.freeAt - 1) < 1 / 60 + 1e-9 && r.end === 'free' && r.w0 === 0 && r.rAt05 > 0.59);
+      return {
+        ok,
+        detail: `60/s: held at ${f(a.heldAt, 3)} s, free after ${f(a.freeAt, 3)} s, walked ${f(a.walked, 6)} m, cues ${a.fired}+${a.offFired}; 144/s: held at ${f(b.heldAt, 3)} s, free after ${f(b.freeAt, 3)} s, cues ${b.fired}+${b.offFired}`,
+      };
+    },
+  },
+  {
+    name: 'seat-transition-place-and-root',
+    run() {
+      // The free place walks from where getting on began to the stand place, then rises toward the seat; on the seat
+      // the root is the socket's; getting off the place starts raised and comes down to the stand place.
+      const tr = new SeatTransition(SEAT_TIMELINE);
+      const stand = [3, 0.2, 2, Math.PI / 2];
+      const out = new Float64Array(4);
+      tr.attach(0, 0, 0, -Math.PI / 2, 0.5);
+      tr.place(stand, 1.5, out);
+      const start = Math.hypot(out[0]!, out[1]!, out[2]!);
+      // A step past the approach: at the stand place, just starting to rise.
+      for (let i = 0; i < 31; i++) tr.advance(1 / 60);
+      tr.place(stand, 1.5, out);
+      const atStand = Math.hypot(out[0]! - 3, out[2]! - 2) < 1e-12 && out[1]! >= 0.2 && out[1]! < 0.21 && Math.abs(Math.cos(out[3]!)) < 1e-12 && Math.abs(Math.sin(out[3]!) - 1) < 1e-12;
+      for (let i = 0; i < 89; i++) tr.advance(1 / 60);
+      tr.place(stand, 1.5, out);
+      const risen = out[1]! - 0.2;
+      // The carrier: one bone 1 m up, turned a quarter about +y; its socket 0.5 m along its x.
+      const carrier = new Float64Array([0, 0, -1, 0, 1, 0, 1, 0, 0, 4, 1, 2]);
+      const socket: Socket = { bone: 0, local: new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 0, 0]) };
+      const free = headingRoot(out[0]!, out[1]!, out[2]!, out[3]!, 1, new Float64Array(12));
+      const root = tr.write(free, carrier, socket, new Float64Array(12));
+      const onSocket = Math.hypot(root[9]! - 4, root[10]! - 1, root[11]! - 1.5) < 1e-12;
+      tr.release();
+      tr.place(stand, 1.5, out);
+      const raisedAtRelease = Math.abs(out[1]! - (0.2 + 1.3 * 0.6)) < 1e-12;
+      for (let i = 0; i < 70; i++) tr.advance(1 / 60);
+      tr.place(stand, 1.5, out);
+      const down = Math.abs(out[1]! - 0.2) < 1e-12;
+      const ok = start < 1e-12 && atStand && Math.abs(risen - 1.3 * 0.6) < 1e-12 && onSocket && raisedAtRelease && down && tr.phase === 'free';
+      return { ok, detail: `start ${f(start, 6)} m from where it began, at the stand place after the approach ${atStand}, risen ${f(risen, 3)} m (0.78), on the socket ${onSocket}, raised at the release ${raisedAtRelease}, down at the end ${down}` };
+    },
+  },
+  {
+    name: 'seat-transition-state',
+    run() {
+      // Saved in the middle of getting on and restored into a new timeline: both go on bit for bit.
+      const a = new SeatTransition(SEAT_TIMELINE);
+      a.attach(1, 2, 3, 0.5, 0.4);
+      for (let i = 0; i < 37; i++) a.advance(1 / 60);
+      const b = new SeatTransition(SEAT_TIMELINE);
+      b.restore(a.save());
+      const out: number[] = [];
+      for (let i = 0; i < 200; i++) {
+        a.advance(1 / 60);
+        b.advance(1 / 60);
+        if (i === 120) (a.release(), b.release());
+        out.push(a.weight(0.3) - b.weight(0.3), a.rise() - b.rise(), a.progress(0.7) - b.progress(0.7), a.elapsed - b.elapsed);
+      }
+      const same = out.every((v) => v === 0) && a.phase === b.phase;
+      let refused = false;
+      try {
+        b.restore(new Uint8Array(88));
+      } catch {
+        refused = true;
+      }
+      return { ok: same && refused, detail: `restored timeline equal for 200 steps ${same}, a state of zeros refused ${refused}` };
+    },
+  },
+];
+
+// Steps of several legs: a made-up body of four two-bone legs, hips 0.9 m up, legs 1.1 m long.
+const STEP_HOMES: [number, number, number][] = [
+  [-0.3, 0, 0.6],
+  [0.3, 0, 0.6],
+  [-0.3, 0, -0.6],
+  [0.3, 0, -0.6],
+];
+const STEP_PATTERNS: StepPattern[] = [
+  { speed: 0.8, stride: 0.9, offsets: [0.25, 0.75, 0, 0.5], duty: 0.75, lift: 0.08 },
+  { speed: 2.5, stride: 1.6, offsets: [0, 0.5, 0.5, 0], duty: 0.5, lift: 0.12 },
+  { speed: 6, stride: 2.8, offsets: [0.5, 0.6, 0, 0.1], duty: 0.35, lift: 0.15 },
+];
+/**
+ * Bounds of the step checks. At 60 Hz a target moves at most a swing's top speed in a frame: the fastest pattern's
+ * end crosses about its stride (2.8 m) in its swing (0.65 of a pass at 2.1 passes a second, 0.3 s), 1.5 times as fast
+ * at the middle of the eased swing: 0.23 m a frame. Its step changes from one frame to the next by at most the swing's
+ * acceleration (about 0.05 m) and, at a lift, the body's speed for a frame (0.1 m at 6 m/s: a lifted end starts out
+ * carried with the body). Between frame rates a step lands within 2 cm when the cycle never has to hasten, within
+ * 0.3 m (a drift of its phase) when it does.
+ */
+const STEP_BOUND = 0.25;
+const STEP_BEND = 0.16;
+const STEP_RATE_FREE = 0.02;
+const STEP_RATE_HELD = 0.3;
+const STEP_DESC: StepCycleDesc = { homes: STEP_HOMES, patterns: STEP_PATTERNS, reach: 0.5 };
+const bumps = (x: number, z: number): number => 0.05 * Math.sin(0.7 * x) * Math.cos(0.5 * z);
+
+function stepBody(): Skeleton {
+  const bones: BoneSpec[] = [{ name: 'body', parent: -1, joint: [0, 0.9, 0] }];
+  STEP_HOMES.forEach((h, i) => {
+    bones.push({ name: `u${i}`, parent: 0, joint: [h[0], 0, h[2]] });
+    bones.push({ name: `l${i}`, parent: 1 + i * 3, joint: [0, -0.55, 0] });
+    bones.push({ name: `e${i}`, parent: 2 + i * 3, joint: [0, -0.55, 0] });
+  });
+  return new Skeleton(bones);
+}
+
+/** A body's path sampled at 1440 Hz: speed and turn rate from `profile(t)`, integrated in small fixed steps. */
+interface StepPath {
+  yaw: Float64Array;
+  x: Float64Array;
+  z: Float64Array;
+  v: Float64Array;
+  turn: Float64Array;
+}
+const PATH_HZ = 1440;
+function stepPath(seconds: number, profile: (t: number) => [number, number]): StepPath {
+  const n = Math.round(seconds * PATH_HZ) + 1;
+  const p: StepPath = { yaw: new Float64Array(n), x: new Float64Array(n), z: new Float64Array(n), v: new Float64Array(n), turn: new Float64Array(n) };
+  const h = 1 / PATH_HZ;
+  for (let i = 0; i < n; i++) {
+    const [v, turn] = profile(i * h);
+    p.v[i] = v;
+    p.turn[i] = turn;
+    if (i > 0) {
+      p.yaw[i] = p.yaw[i - 1]! + turn * h;
+      p.x[i] = p.x[i - 1]! + Math.sin(p.yaw[i]!) * v * h;
+      p.z[i] = p.z[i - 1]! + Math.cos(p.yaw[i]!) * v * h;
+    }
+  }
+  return p;
+}
+
+/** Runs a `StepCycle` along `path` at `hz` frames a second; `each(frame, cycle, root, time)` after every update. */
+function stepRun(path: StepPath, hz: number, each?: (i: number, c: StepCycle, root: Float64Array, t: number) => void, cycle = new StepCycle(STEP_DESC), from = 0): StepCycle {
+  const every = PATH_HZ / hz;
+  const root = new Float64Array(12);
+  const frames = Math.floor((path.x.length - 1) / every);
+  for (let i = from; i <= frames; i++) {
+    const k = i * every;
+    yawRoot(path.yaw[k]!, path.x[k]!, 0, path.z[k]!, root);
+    const v = path.v[k]!, yaw = path.yaw[k]!;
+    if (i === 0) cycle.reset(root, bumps);
+    else cycle.update(1 / hz, root, Math.sin(yaw) * v, Math.cos(yaw) * v, path.turn[k]!, bumps);
+    each?.(i, cycle, root, i / hz);
+  }
+  return cycle;
+}
+
+/** 0 → 6 m/s over 6 s, held 2 s, back to 0 over 6 s, 2 s standing; a slow weave of the heading throughout. */
+const RAMP = stepPath(16, (t) => [t < 6 ? t : t < 8 ? 6 : t < 14 ? 6 - (t - 8) : 0, t < 14 ? 0.3 * Math.sin(t * 0.8) : 0]);
+
+/** Horizontal distance of a leg's end from its home under `root`. */
+function fromHome(c: StepCycle, i: number, root: ArrayLike<number>, p: ArrayLike<number> = c.targets): number {
+  const hx = root[0]! * STEP_HOMES[i]![0] + root[6]! * STEP_HOMES[i]![2] + root[9]!;
+  const hz = root[2]! * STEP_HOMES[i]![0] + root[8]! * STEP_HOMES[i]![2] + root[11]!;
+  return Math.hypot(p[i * 3]! - hx, p[i * 3 + 2]! - hz);
+}
+
+function stepFingerprint(c: StepCycle, h: number): number {
+  const u = new Uint32Array(c.data.buffer, c.data.byteOffset, c.data.length * 2);
+  for (let i = 0; i < u.length; i++) h = Math.imul(h ^ u[i]!, 16777619) >>> 0;
+  return h;
+}
+
+const STEPS: Scenario[] = [
+  {
+    name: 'steps-planted-hold',
+    run() {
+      // While an end is planted its target does not change by a bit, through the speed-up, the weave and the stop.
+      let moved = 0;
+      let frames = 0;
+      const prev = new Float64Array(12);
+      const wasPlanted = new Float64Array(4);
+      stepRun(RAMP, 60, (i, c) => {
+        for (let l = 0; l < 4; l++) {
+          if (i > 0 && wasPlanted[l] === 1 && c.planted[l] === 1 && c.landed[l] === 0) {
+            frames++;
+            for (let k = 0; k < 3; k++) if (c.targets[l * 3 + k] !== prev[l * 3 + k]) moved++;
+          }
+          wasPlanted[l] = c.planted[l]!;
+        }
+        prev.set(c.targets);
+      });
+      return { ok: moved === 0 && frames > 1000, detail: `${frames} leg-frames planted, ${moved} coordinates changed while planted` };
+    },
+  },
+  {
+    name: 'steps-no-slide',
+    run() {
+      // At each pattern's own speed (straight, 5 s): a planted end stays within half the stance's travel (duty · stride
+      // / 2) and the tolerance of its home, so a leg never has to stretch far behind or ahead.
+      const parts: string[] = [];
+      let ok = true;
+      for (const p of STEP_PATTERNS) {
+        const path = stepPath(5, () => [p.speed, 0]);
+        let most = 0;
+        stepRun(path, 60, (i, c, root) => {
+          if (i < 60) return;
+          for (let l = 0; l < 4; l++) if (c.planted[l] === 1) most = Math.max(most, fromHome(c, l, root));
+        });
+        const bound = (p.duty as number) * p.stride / 2 + 0.04 + p.speed / 60;
+        if (!(most <= bound)) ok = false;
+        parts.push(`${p.speed} m/s: ${f(most, 3)} m (bound ${f(bound, 3)})`);
+      }
+      return { ok, detail: `farthest planted end from its home: ${parts.join(', ')}` };
+    },
+  },
+  {
+    name: 'steps-offsets',
+    run() {
+      // At each pattern's speed every end is put down when the phase reaches its offset (within one frame's advance).
+      const parts: string[] = [];
+      let ok = true;
+      for (const p of STEP_PATTERNS) {
+        const path = stepPath(5, () => [p.speed, 0]);
+        let worst = 0;
+        let downs = 0;
+        stepRun(path, 60, (i, c) => {
+          if (i < 60) return;
+          for (let l = 0; l < 4; l++) {
+            if (c.landed[l] !== 1) continue;
+            downs++;
+            const lag = c.phase - p.offsets[l]! - Math.floor(c.phase - p.offsets[l]!);
+            worst = Math.max(worst, lag / (c.rate / 60));
+          }
+        });
+        if (!(worst <= 1 + 1e-9) || downs < 8) ok = false;
+        parts.push(`${p.speed} m/s: ${downs} downs, latest ${f(worst, 3)} of a frame's advance after the offset`);
+      }
+      return { ok, detail: parts.join('; ') };
+    },
+  },
+  {
+    name: 'steps-blend-continuous',
+    run() {
+      // 0 → 6 m/s and back at 60 Hz through all three patterns: no target jumps. A step of a target in a frame is at
+      // most a swing's top speed (1.5 × its travel over its time) and its change from the frame before stays small.
+      let worstStep = 0;
+      let worstBend = 0;
+      const p1 = new Float64Array(12), p2 = new Float64Array(12);
+      stepRun(RAMP, 60, (i, c) => {
+        for (let k = 0; k < 4; k++) {
+          const o = k * 3;
+          if (i >= 1) worstStep = Math.max(worstStep, Math.hypot(c.targets[o]! - p1[o]!, c.targets[o + 1]! - p1[o + 1]!, c.targets[o + 2]! - p1[o + 2]!));
+          if (i >= 2) worstBend = Math.max(worstBend, Math.hypot(c.targets[o]! - 2 * p1[o]! + p2[o]!, c.targets[o + 1]! - 2 * p1[o + 1]! + p2[o + 1]!, c.targets[o + 2]! - 2 * p1[o + 2]! + p2[o + 2]!));
+        }
+        p2.set(p1);
+        p1.set(c.targets);
+      });
+      const ok = worstStep < STEP_BOUND && worstBend < STEP_BEND;
+      return { ok, detail: `largest step of a target ${f(worstStep, 3)} m a frame (bound ${STEP_BOUND}), largest change of a step ${f(worstBend, 3)} m (bound ${STEP_BEND})` };
+    },
+  },
+  {
+    name: 'steps-turn-on-spot',
+    run() {
+      // Turning on the spot at 1.2 rad/s for 4 s, then still for 3 s: never fewer than three ends down, every end
+      // planted within `reach` (0.5 m, and one frame's turn) of its home, and afterwards all down within the tolerance of home and the cycle stopped.
+      const path = stepPath(7, (t) => [0, t < 4 ? 1.2 : 0]);
+      let fewest = 4;
+      let farthest = 0;
+      let downs = 0;
+      const c = stepRun(path, 60, (i, c, root) => {
+        let n = 0;
+        for (let l = 0; l < 4; l++) {
+          n += c.planted[l]!;
+          if (c.planted[l] === 1) farthest = Math.max(farthest, fromHome(c, l, root));
+          downs += c.landed[l]!;
+        }
+        fewest = Math.min(fewest, n);
+      });
+      const root = yawRoot(path.yaw[path.yaw.length - 1]!, 0, 0, 0);
+      let home = 0;
+      for (let l = 0; l < 4; l++) home = Math.max(home, fromHome(c, l, root));
+      const all = c.planted.every((v) => v === 1);
+      const ok = fewest >= 3 && farthest <= 0.5 + 1.2 * 0.7 / 60 && all && home <= 0.04 && c.rate === 0 && downs > 8;
+      return { ok, detail: `${downs} steps, never fewer than ${fewest} ends down, farthest planted end from home ${f(farthest, 3)} m; after: all down ${all}, within ${f(home, 4)} m of home, rate ${c.rate}` };
+    },
+  },
+  {
+    name: 'steps-stop-mid-stride',
+    run() {
+      // 3 m/s for 2.1 s (a gait with a flight), then a dead stop and 3 s standing: the ends in the air land, and the
+      // others shuffle home one at a time: no end is lifted while that would leave fewer than three down.
+      const path = stepPath(5.1, (t) => [t < 2.1 ? 3 : 0, 0]);
+      let fewest = 4;
+      let inAir = 0;
+      let lifts = 0;
+      const was = new Float64Array(4);
+      const c = stepRun(path, 60, (i, c) => {
+        const down = c.planted.reduce((a, b) => a + b, 0);
+        if (i === 126) inAir = 4 - down;
+        if (i >= 126) {
+          for (let l = 0; l < 4; l++) {
+            if (was[l] === 1 && c.planted[l] === 0) {
+              lifts++;
+              fewest = Math.min(fewest, down);
+            }
+          }
+        }
+        was.set(c.planted);
+      });
+      const root = yawRoot(0, path.x[path.x.length - 1]!, 0, path.z[path.z.length - 1]!);
+      let home = 0;
+      for (let l = 0; l < 4; l++) home = Math.max(home, fromHome(c, l, root));
+      const ok = fewest >= 3 && lifts > 0 && c.planted.every((v) => v === 1) && home <= 0.04 && c.rate === 0;
+      return { ok, detail: `${inAir} ends in the air at the stop; ${lifts} lifts after it, each leaving at least ${fewest} down; 3 s later all down within ${f(home, 4)} m of home, rate ${c.rate}` };
+    },
+  },
+  {
+    name: 'steps-frame-rate',
+    run() {
+      // The ramp at 30, 60 and 144 Hz: every step at 30 and 60 Hz is put down near a step of the same leg at 144 Hz
+      // (none missed or added: a missing step would leave one a stride from any other), and the counts agree within
+      // one. Twice: with a `reach` the legs never need (only the pass's advance differs: a few centimetres) and with the
+      // body's 0.5 m (the cycle hastens now and then, and its phase drifts by a little between frame rates).
+      const at = (hz: number, desc: StepCycleDesc): number[][] => {
+        const out: number[][] = [[], [], [], []];
+        stepRun(RAMP, hz, (_, c) => {
+          for (let l = 0; l < 4; l++) if (c.landed[l] === 1) out[l]!.push(c.points[l * 3]!, c.points[l * 3 + 2]!);
+        }, new StepCycle(desc));
+        return out;
+      };
+      const compare = (desc: StepCycleDesc): [number, number, string] => {
+        const ref = at(144, desc);
+        let worst = 0;
+        let apart = 0;
+        let counts = `144 Hz ${ref.map((g) => g.length / 2).join('/')}`;
+        for (const hz of [30, 60]) {
+          const got = at(hz, desc);
+          for (let l = 0; l < 4; l++) {
+            apart = Math.max(apart, Math.abs(got[l]!.length - ref[l]!.length) / 2);
+            for (const [a, b] of [[got[l]!, ref[l]!], [ref[l]!, got[l]!]] as const) {
+              for (let k = 0; k < a.length; k += 2) {
+                let near = Infinity;
+                for (let j = 0; j < b.length; j += 2) near = Math.min(near, Math.hypot(a[k]! - b[j]!, a[k + 1]! - b[j + 1]!));
+                worst = Math.max(worst, near);
+              }
+            }
+          }
+          counts += `, ${hz} Hz ${got.map((g) => g.length / 2).join('/')}`;
+        }
+        return [worst, apart, counts];
+      };
+      const [free, freeApart, freeCounts] = compare({ ...STEP_DESC, reach: 2 });
+      const [held, heldApart, heldCounts] = compare(STEP_DESC);
+      const ok = free < STEP_RATE_FREE && held < STEP_RATE_HELD && freeApart <= 1 && heldApart <= 1;
+      return { ok, detail: `reach 2 m: steps ${freeCounts}, each within ${f(free, 4)} m of one at 144 Hz (bound ${STEP_RATE_FREE}); reach 0.5 m: steps ${heldCounts}, within ${f(held, 4)} m (bound ${STEP_RATE_HELD})` };
+    },
+  },
+  {
+    name: 'steps-determinism',
+    run() {
+      const run = (): number => {
+        let h = 2166136261;
+        stepRun(RAMP, 60, (_, c) => void (h = stepFingerprint(c, h)));
+        return h;
+      };
+      const a = run(), b = run();
+      return { ok: a === b, detail: `${RAMP.x.length / 24 | 0} frames of the ramp twice: ${a.toString(16)} / ${b.toString(16)}` };
+    },
+  },
+  {
+    name: 'steps-save-restore',
+    run() {
+      // Saved part-way through the ramp, restored into a new cycle: the rest of the run is the same to the bit.
+      let saved: Uint8Array | null = null;
+      let tailA = 2166136261;
+      stepRun(RAMP, 60, (i, c) => {
+        if (i === 300) saved = c.save();
+        if (i > 300) tailA = stepFingerprint(c, tailA);
+      });
+      const other = new StepCycle(STEP_DESC);
+      other.restore(saved!);
+      let tailB = 2166136261;
+      stepRun(RAMP, 60, (i, c) => {
+        if (i > 300) tailB = stepFingerprint(c, tailB);
+      }, other, 301);
+      return { ok: tailA === tailB, detail: `${other.byteLength} bytes; the rest after a restore ${tailA.toString(16)} / ${tailB.toString(16)}` };
+    },
+  },
+  {
+    name: 'steps-support-plane',
+    run() {
+      // Standing on a plane rising 0.2 along the world's z and 0.1 along x, turned 0.6 rad: the plane under the ends
+      // gives the ground's height under the root and its rise along the root's forward (+z) and side (+x).
+      const plane = (x: number, z: number): number => 0.3 + 0.1 * x + 0.2 * z;
+      const yaw = 0.6;
+      const root = yawRoot(yaw, 1, 0, 2);
+      const c = new StepCycle(STEP_DESC);
+      c.reset(root, plane);
+      // Along the root's z (sin, 0, cos) the rise is 0.1 sin + 0.2 cos; along its x (cos, 0, −sin) 0.1 cos − 0.2 sin.
+      const pitch = Math.atan(0.1 * Math.sin(yaw) + 0.2 * Math.cos(yaw));
+      const roll = Math.atan(0.1 * Math.cos(yaw) - 0.2 * Math.sin(yaw));
+      const err = Math.max(Math.abs(c.supportHeight - plane(1, 2)), Math.abs(c.pitch - pitch), Math.abs(c.roll - roll));
+      return { ok: err < 1e-12, detail: `height ${f(c.supportHeight, 4)} (${f(plane(1, 2), 4)}), pitch ${f(c.pitch, 4)} (${f(pitch, 4)}), roll ${f(c.roll, 4)} (${f(roll, 4)}) rad` };
+    },
+  },
+  {
+    name: 'steps-rebase',
+    run() {
+      // Half way through the ramp the solve frame is moved and turned (a new chart): carried by `rebase`, the cycle
+      // goes on exactly as in the old frame, its targets the old ones moved by the same transform.
+      const a = 0.7, c0 = Math.cos(a), s0 = Math.sin(a);
+      const m = [c0, 0, -s0, 0, 1, 0, s0, 0, c0, -30, 0.5, 12];
+      const move = (p: ArrayLike<number>, o: number): number[] => [m[0]! * p[o]! + m[6]! * p[o + 2]! + m[9]!, p[o + 1]! + m[10]!, m[2]! * p[o]! + m[8]! * p[o + 2]! + m[11]!];
+      const ref: number[][] = [];
+      stepRun(RAMP, 60, (i, c) => {
+        if (i >= 400) ref.push(Array.from(c.targets));
+      });
+      // The same run, the frame changed at frame 400: roots and ground given in the new frame from then on.
+      const cyc = new StepCycle(STEP_DESC);
+      const root = new Float64Array(12);
+      const moved = new Float64Array(12);
+      const ground = (x: number, z: number): number => {
+        // Back to the old frame for the ground: the inverse of m.
+        const dx = x - m[9]!, dz = z - m[11]!;
+        return bumps(c0 * dx - s0 * dz, s0 * dx + c0 * dz) + m[10]!;
+      };
+      let worst = 0;
+      const every = PATH_HZ / 60;
+      for (let i = 0; i <= 960; i++) {
+        const k = i * every;
+        yawRoot(RAMP.yaw[k]!, RAMP.x[k]!, 0, RAMP.z[k]!, root);
+        let vx = Math.sin(RAMP.yaw[k]!) * RAMP.v[k]!, vz = Math.cos(RAMP.yaw[k]!) * RAMP.v[k]!;
+        let r: Float64Array = root;
+        let h = bumps;
+        if (i >= 400) {
+          if (i === 400) cyc.rebase(m);
+          const p = move(root, 9);
+          yawRoot(RAMP.yaw[k]! + a, p[0]!, p[1]!, p[2]!, moved);
+          [vx, vz] = [c0 * vx + s0 * vz, -s0 * vx + c0 * vz];
+          r = moved;
+          h = ground;
+        }
+        if (i === 0) cyc.reset(r, h);
+        else cyc.update(1 / 60, r, vx, vz, RAMP.turn[k]!, h);
+        if (i >= 400) {
+          const want = ref[i - 400]!;
+          for (let l = 0; l < 4; l++) {
+            const w = move(want, l * 3);
+            worst = Math.max(worst, Math.hypot(cyc.targets[l * 3]! - w[0]!, cyc.targets[l * 3 + 1]! - w[1]!, cyc.targets[l * 3 + 2]! - w[2]!));
+          }
+        }
+      }
+      return { ok: worst < 1e-6, detail: `targets after the change of frame off the moved ones by at most ${worst.toExponential(1)} m over 560 frames` };
+    },
+  },
+  {
+    name: 'steps-four-legs-reach',
+    run() {
+      // A made-up body with four two-bone legs, each reaching its target over the bumpy ground along the ramp.
+      const sk = stepBody();
+      const pose = new Pose(sk);
+      const world = new Float64Array(sk.count * 12);
+      const reaches = STEP_HOMES.map((_, i) => new TwoBoneReach({ upper: 1 + i * 3, lower: 2 + i * 3, end: 3 + i * 3 }, { soft: 1 }));
+      for (const r of reaches) r.fade.set(1);
+      let planted = 0;
+      let swing = 0;
+      stepRun(RAMP, 60, (_, c, root) => {
+        pose.reset();
+        for (let i = 0; i < 4; i++) setBoneAxisAngle(pose, 2 + i * 3, 1, 0, 0, -0.3);
+        solvePose(sk, pose, root, world);
+        for (let i = 0; i < 4; i++) {
+          const r = reaches[i]!;
+          r.setTarget(c.targets[i * 3]!, c.targets[i * 3 + 1]!, c.targets[i * 3 + 2]!);
+          const left = r.apply(sk, pose, root, world);
+          if (c.planted[i] === 1) planted = Math.max(planted, left);
+          else swing = Math.max(swing, left);
+        }
+      });
+      const ok = planted < 1e-4 && swing < 1e-3;
+      return { ok, detail: `distance left: planted ends ${planted.toExponential(1)} m, swinging ends ${swing.toExponential(1)} m` };
+    },
+  },
+];
+
 // --- Run -------------------------------------------------------------------------------------------------------------
 
 const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
@@ -1454,6 +2118,8 @@ const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
   { label: 'state, determinism, many figures', scenarios: STATE },
   { label: 'layer stacks', scenarios: STACKS },
   { label: 'lagging chain', scenarios: LAGS },
+  { label: 'a body carried by another', scenarios: SEAT },
+  { label: 'steps of several legs', scenarios: STEPS },
 ];
 
 const LIMIT_MS = 5000;

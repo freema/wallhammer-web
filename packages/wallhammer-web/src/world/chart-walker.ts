@@ -17,6 +17,7 @@
 import { SurfaceChart } from '../base/chart.ts';
 import type { Mat34 } from '../base/mat34.ts';
 import { detAtan2, detSinCos } from '../base/trig.ts';
+import { FixedSteps } from '../core/fixed-steps.ts';
 import { CollisionWorld } from './collide.ts';
 import type { CollisionWorldOptions } from './collide.ts';
 import { WALKER_STATE_BYTES, WALKER_TUNING_KEYS, Walker, newWalkIntent } from './walker.ts';
@@ -79,7 +80,7 @@ export class ChartWalker {
   private _chart: SurfaceChart;
   private _world: CollisionWorld;
   private _walker: Walker;
-  private acc = 0;
+  private readonly fixed: FixedSteps;
   private pendingJump = false;
   private readonly scratch: WalkIntent = newWalkIntent();
   private readonly f = new Float64Array(WALKER_STATE_BYTES / 8);
@@ -106,6 +107,8 @@ export class ChartWalker {
     this._chart = new SurfaceChart(this.center, this.radiusM, start);
     this._world = this.makeWorld(this._chart);
     this._walker = new Walker(this._world, this.setupIn);
+    // Every walker of later charts has the same setup, so the same step.
+    this.fixed = new FixedSteps(this._walker.stepSeconds, this._walker.setup.maxStepsPerAdvance);
     this.teleportDirection(start);
   }
 
@@ -157,8 +160,7 @@ export class ChartWalker {
 
   /** Share of the way from the last step to the next one, 0–1. */
   get alpha(): number {
-    const a = this.acc / this._walker.stepSeconds;
-    return a < 0 ? 0 : a > 1 ? 1 : a;
+    return this.fixed.alpha;
   }
 
   /** Feet in world metres, written to `out`. */
@@ -216,7 +218,7 @@ export class ChartWalker {
     }
     this.install(chart);
     this._walker.teleport(0, y, 0, yaw);
-    this.acc = 0;
+    this.fixed.reset();
     this.pendingJump = false;
   }
 
@@ -241,28 +243,20 @@ export class ChartWalker {
   advance(dt: number, intent: WalkIntent): number {
     if (intent.jump) this.pendingJump = true;
     if (!(dt > 0)) return 0;
-    this.acc += dt;
-    const h = this._walker.stepSeconds;
-    const max = this._walker.setup.maxStepsPerAdvance;
     const sc = this.scratch;
     sc.moveX = intent.moveX;
     sc.moveZ = intent.moveZ;
     sc.run = intent.run;
-    let n = 0;
-    while (this.acc + 1e-9 * h >= h) {
-      if (n >= max) {
-        this.acc = 0;
-        break;
-      }
-      sc.jump = this.pendingJump;
-      this.pendingJump = false;
-      this.step(sc);
-      this.acc -= h;
-      n++;
-    }
-    if (this.acc < 0) this.acc = 0;
-    return n;
+    return this.fixed.advance(dt, this.stepDue, this._walker.setup.maxStepsPerAdvance);
   }
+
+  /** One step due in `advance`: the intent in the scratch, a pending jump on its first step. */
+  private readonly stepDue = (): void => {
+    const sc = this.scratch;
+    sc.jump = this.pendingJump;
+    this.pendingJump = false;
+    this.step(sc);
+  };
 
   /** One fixed step and, when the walker has gone farther than `rechartM`, a rechart. */
   step(intent: WalkIntent): void {
@@ -428,7 +422,7 @@ export class ChartWalker {
     h[4] = x[0];
     h[5] = x[1];
     h[6] = x[2];
-    h[7] = this.acc;
+    h[7] = this.fixed.leftover;
     h[8] = this.pendingJump ? 1 : 0;
     h[9] = 0;
     o.set(this.headBytes, offset);
@@ -463,7 +457,7 @@ export class ChartWalker {
       walker.loadState(bytes, at);
       this.install(chart, world, walker);
     } else this._walker.loadState(bytes, at);
-    this.acc = acc;
+    this.fixed.leftover = acc;
     this.pendingJump = jump;
   }
 }

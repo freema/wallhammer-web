@@ -1,10 +1,10 @@
 {
-  "name": "wallhammer-example-walk",
+  "name": "wallhammer-example-movement",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "description": "Walking test course on wallhammer-web: a collision world, a walker and a follow camera over stations that each try one ability (walls, pillars, steps, ramps, jumps, low passages, a thin wall, a footbridge).",
+  "description": "Movement test course on wallhammer-web: walking, riding a steed and driving cars over a collision world with a follow camera; stations that each try one ability (walls, pillars, steps, ramps, jumps, low passages, a thin wall, a footbridge).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

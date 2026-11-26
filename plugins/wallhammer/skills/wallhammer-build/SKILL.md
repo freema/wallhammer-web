@@ -1,6 +1,6 @@
 ---
 name: wallhammer-build
-description: Write or change code of a project built on the wallhammer-web npm package (a WebGL2 engine where every mesh and texture is made by code) - a scene, terrain, a streamed world, houses from footprints, weather and time of day, a walking figure and follow camera (also on a planet), a figure that reaches or aims, destruction, vehicles and people on schedules, the project's own place data, performance. Read the engine's agent page first, keep its rules (no images or 3D libraries, randomness from named hash streams, pure generators, cells relative to their origin), take the cookbook recipe for the goal and verify with the project's own checks. Typical requests "add terrain", "make a town from these footprints", "stream the world", "add rain", "let the player walk", "make it breakable", "a bus on a loop", "why is it slow", "which wallhammer module do I use".
+description: Write or change code of a project built on the wallhammer-web npm package (a WebGL2 engine where every mesh and texture is made by code) - a scene, terrain, a streamed world, houses from footprints, weather and time of day, a walking figure and follow camera (also on a planet), a walker that slows uphill, a body on wheels, a figure riding or carried by another, legs that step, a figure that reaches or aims, destruction, vehicles and people on schedules, the project's own place data, performance. Read the engine's agent page first, keep its rules (no images or 3D libraries, randomness from named hash streams, pure generators, cells relative to their origin), take the cookbook recipe for the goal and verify with the project's own checks. Typical requests "add terrain", "make a town from these footprints", "stream the world", "add rain", "let the player walk", "add a car", "let the figure ride", "a four-legged creature", "make it breakable", "a bus on a loop", "why is it slow", "which wallhammer module do I use".
 ---
 
 # Building on Wallhammer Web
@@ -11,7 +11,7 @@ the page or the type declaration (`node_modules/wallhammer-web/dist/<module>/ind
 
 ## First, every time
 
-1. Read `node_modules/wallhammer-web/docs/agents.md` (about 135 lines): what the engine is, the rules, the table
+1. Read `node_modules/wallhammer-web/docs/agents.md` (about 140 lines): what the engine is, the rules, the table
    goal → entry → page → example, the module map and debugging.
 2. Read the recipe for the goal in `node_modules/wallhammer-web/docs/cookbook.md` (table below), then the reference
    page it links. Copy its code as the starting point: it is type-checked against the package.
@@ -55,6 +55,12 @@ Sections of `cookbook.md`:
 | Houses, a village or a town | Houses from footprints |
 | Sun, day, rain, snow, seasons | Time of day, weather and seasons |
 | A player who walks, third-person camera | A walking figure with a follow camera |
+| Slower uphill and on stairs | A walker that slows uphill |
+| A cart, a car, a hauler on wheels; parked bodies that block | A body on wheels, then `wheeled.md` |
+| A glider, a flying animal: crawl, leap, glide, bank, land | A body that crawls and glides, then `flying.md` |
+| Riding a steed, sitting on a moving body, getting on and off | A body carried by another, then `motion.md` (A body carried by another) |
+| Four or six legs that step, walk, trot, gallop | Legs that step, then `motion.md` (Steps of several legs) |
+| One camera for the figure, its mount and its car | A follow camera for a carried or driven body |
 | Walking on a planet, trees of streamed cells that block | A walking figure with a follow camera, then `walking.md` (Walking on a sphere, Solids of streamed cells) |
 | A figure reaching, aiming, holding, feet on a slope | `motion.md` (Reaching and the ground; Reaching, aiming and holding over time) |
 | Breakable houses, kicked props | Things you can kick or break |
@@ -64,7 +70,7 @@ Sections of `cookbook.md`:
 | "This spot looks wrong" | Debugging with marks (and the `wallhammer-marks` skill) |
 
 A goal not in the table: the table "I want …" in `agents.md`, then `reference.md` for the names of each entry.
-Extending the engine's own patterns (a layer, a material, an environment slot): `recipes.md`.
+Extending the engine's own patterns (a layer, a material, an environment slot) or adding data of your own to its mechanisms (a wheeled body of your own, a way of stepping, a seat on a figure): `recipes.md`.
 
 ## Verify
 

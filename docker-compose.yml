@@ -3,7 +3,7 @@
 #
 # One service, `dev`. It installs the dependencies, serves every example on one port and stays up for the checks:
 #   http://localhost:5281/              list of the examples (another host port: EXAMPLES_PORT)
-#   http://localhost:5281/<name>/       the example in examples/<name>, e.g. /planet/, /fantasy-village/, /walk/
+#   http://localhost:5281/<name>/       the example in examples/<name>, e.g. /planet/, /fantasy-village/, /movement/
 #   docker compose exec -T dev sh -c 'cd /app && pnpm typecheck'
 # Every example keeps its own Vite dev server (its vite.config.ts) inside that one process: tools/serve/serve.ts.
 name: wallhammer-web
@@ -32,12 +32,12 @@ services:
       - endless_node_modules:/app/examples/endless/node_modules
       - fantasy-village_node_modules:/app/examples/fantasy-village/node_modules
       - minimal-3d_node_modules:/app/examples/minimal-3d/node_modules
+      - movement_node_modules:/app/examples/movement/node_modules
       - outpost_node_modules:/app/examples/outpost/node_modules
       - planet_node_modules:/app/examples/planet/node_modules
       - rivers_node_modules:/app/examples/rivers/node_modules
       - shared_node_modules:/app/examples/shared/node_modules
       - system_node_modules:/app/examples/system/node_modules
-      - walk_node_modules:/app/examples/walk/node_modules
       - pnpm_store:/pnpm-store
     cap_drop: [ALL]
     security_opt:
@@ -76,7 +76,7 @@ services:
   # Compiles the shaders of the example pages with the same headless Chromium (tools/shot/shader-check.mjs): every
   # program a page makes is checked, used or not. A one-off tool like `shot`:
   #   docker compose run --rm shaders
-  #   docker compose run --rm shaders --pages planet,walk
+  #   docker compose run --rm shaders --pages planet,movement
   shaders:
     profiles: [tools]
     image: wallhammer-web-shot:1
@@ -102,10 +102,10 @@ volumes:
   endless_node_modules:
   fantasy-village_node_modules:
   minimal-3d_node_modules:
+  movement_node_modules:
   outpost_node_modules:
   planet_node_modules:
   rivers_node_modules:
   shared_node_modules:
   system_node_modules:
-  walk_node_modules:
   pnpm_store:

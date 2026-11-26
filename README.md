@@ -105,8 +105,8 @@ The [documentation](packages/wallhammer-web/docs/) goes on from there: concepts,
 - **Generators.** Randomness from named hash streams, meshes, textures, and three optional content modules: buildings with roofs, façades and chimneys (`gen-arch`), ground (`gen-ground`) and vegetation (`gen-vegetation`). [Generators](packages/wallhammer-web/docs/generators.md)
 - **Simulation.** A deterministic fixed-step simulation driven by a log of commands, with entity tables, navigation, movers, collision modes and agendas. It runs in plain Node too. [Simulation](packages/wallhammer-web/docs/simulation.md)
 - **Streaming.** Quadtree cells loaded and unloaded around the viewer, on a plane or a sphere, generated in workers or read from baked files, under a ceiling of GPU memory. [World streaming](packages/wallhammer-web/docs/streaming.md)
-- **Walking.** A collision world, a walker that moves over it in fixed steps and a follow camera behind it. [Walking](packages/wallhammer-web/docs/walking.md)
-- **Motion.** Skeletons posed on the CPU: poses as data, blending, a motion graph of states and layers, a two-bone reach and ends kept on the ground. [Motion](packages/wallhammer-web/docs/motion.md)
+- **Walking.** A collision world, a walker that moves over it in fixed steps (with weight and a speed that follows the slope, when asked) and a follow camera behind it; bodies on wheel rays driven over the same world and a body that crawls and glides through the air over it. [Walking](packages/wallhammer-web/docs/walking.md), [Wheeled body](packages/wallhammer-web/docs/wheeled.md), [Flying body](packages/wallhammer-web/docs/flying.md)
+- **Motion.** Skeletons posed on the CPU: poses as data, blending, a motion graph of states and layers, a two-bone reach and ends kept on the ground, a body carried at a socket of another, and the steps of several legs. [Motion](packages/wallhammer-web/docs/motion.md)
 - **Destruction.** Structures that break part by part: a pure model of what an event breaks and what loses support, then damaged meshes, rubble and falling pieces. [Destruction](packages/wallhammer-web/docs/destruction.md)
 - **Planets and systems.** Bodies on rails, positions in 64-bit frames, and one flight from the view of a whole system down to a surface. [Bodies on rails and nested frames](packages/wallhammer-web/docs/frames.md), [The system example](packages/wallhammer-web/docs/system.md)
 
@@ -126,7 +126,7 @@ Then open <http://localhost:5281/>. It lists the examples, each at `http://local
 - [`planet`](examples/planet/) ([live](https://freema.github.io/wallhammer-web/planet/)): a flight from the surface of a small planet up to orbit and back, with volumetric clouds and rain, biomes and woods, a sea you can dive into and a movie mode (`#movie=1`). Engine only.
 - [`endless`](examples/endless/) ([live](https://freema.github.io/wallhammer-web/endless/)): an endless streamed world in quadtree cells, generated in workers or read from baked files, under volumetric clouds (`#vol=0` turns them off). Engine only. A second page, `sphere.html` ([live](https://freema.github.io/wallhammer-web/endless/sphere.html)), shows the sphere world.
 - [`destruction`](examples/destruction/) ([live](https://freema.github.io/wallhammer-web/destruction/)): generated structures on plain ground that break part by part. Uses the content modules (`gen-arch`, `sim/destruction`).
-- [`walk`](examples/walk/) ([live](https://freema.github.io/wallhammer-web/walk/)): a walking test course: a collision world, a walker and a follow camera.
+- [`movement`](examples/movement/) ([live](https://freema.github.io/wallhammer-web/movement/)): a movement test course: walking, riding a steed, driving cars and flying a glider over a collision world, with a follow camera.
 - [`rivers`](examples/rivers/) ([live](https://freema.github.io/wallhammer-web/rivers/)): rivers and paths: an island whose sea, lakes and rivers follow one rule (the ground is cut down to a planned level of water, and water stands wherever the ground lies under it), with footpaths of seven kinds and walkers on them. Engine only.
 - [`minimal-3d`](examples/minimal-3d/) ([live](https://freema.github.io/wallhammer-web/minimal-3d/)): a perspective orbit view of an island with standing stones. Engine only.
 
@@ -193,7 +193,7 @@ The one service `dev` installs the dependencies, serves every example on one por
 | <http://localhost:5281/planet/> | `examples/planet` |
 | <http://localhost:5281/system/> | `examples/system` |
 | <http://localhost:5281/fantasy-village/> | `examples/fantasy-village` |
-| <http://localhost:5281/walk/> | `examples/walk` |
+| <http://localhost:5281/movement/> | `examples/movement` |
 | <http://localhost:5281/outpost/> | `examples/outpost` |
 | <http://localhost:5281/rivers/> | `examples/rivers` |
 
@@ -232,7 +232,7 @@ docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'  # pla
 - `test:golden` runs two sets of fixed recipes and compares the hash of each output with the stored one. First the engine alone (`tools/golden/engine/golden.ts`, hashes in `tools/golden/engine/hashes.json`), then the recipes that need example code (`tools/golden/golden.ts`, hashes in `tools/golden/hashes.json`); the second set runs only when the first passes. `test:golden:engine` and `test:golden:examples` run one set. To accept a deliberate change, run `node tools/golden/engine/golden.ts --accept` or `node tools/golden/golden.ts --accept` in the container. Each rewrites all hashes of its set at once, so read first what changed. Rules: [`docs/tools.md`](packages/wallhammer-web/docs/tools.md).
 - `check:docs` type-checks the code samples in the documentation and checks the links.
 - `check:mesh` and `check:motion` test, in plain Node, the mesh builder with bare shapes (`gen-mesh`) and the motion module (`motion`).
-- `check:walk` tests, in plain Node, the collision world, the walker (including saving and restoring its state), the follow camera and the course of `examples/walk`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
+- `check:walk` tests, in plain Node, the collision world, the walker (including saving and restoring its state), the follow camera and the course of `examples/movement`. It fails also when the run takes over 5 s. `check:follow` tests the follow camera (`FollowRig`).
 - `test:marks` tests the marks' dev-server store and the command-line tool `wallhammer-marks` on a scratch folder.
 - `check:pack` checks the package in the shape it is published to npm (see below), its `bin` included. It needs the network.
 - `pnpm verify` in `examples/planet` is that example's own headless check (generator, flight, streaming, movie). `examples/endless` has one too (`pnpm verify --seed 7`), for its baked cells; it needs `pnpm bake` first and is not part of CI.
@@ -244,13 +244,13 @@ docker compose exec -T dev sh -c 'cd /app/examples/planet && pnpm verify'  # pla
 The one-off `shaders` service compiles and links the shaders of the example pages in headless Chromium on the software renderer (`tools/shot/shader-check.mjs`, the image of `shot`, profile `tools`; it starts `dev` first when that does not run). It wraps the WebGL2 calls that make programs before a page's scripts run and, after the load, asks for the compile and link status of every program the page made, drawn or not:
 
 ```sh
-docker compose run --rm shaders                                # every example page, about 2 min (system alone about 90 s)
-docker compose run --rm shaders --pages planet,walk            # only these
+docker compose run --rm shaders                                # every example page, about 1 min
+docker compose run --rm shaders --pages planet,movement            # only these
 docker compose run --rm shaders --pages 'planet#extra=lift'    # a page with a hash (another set of programs)
 docker compose run --rm shaders --url http://host:port/page/   # any page, not only an example
 ```
 
-The last line is `shaders: N programs on M pages, K failed, E page errors`; a failed program prints its info log and source lines, and the exit code is 1 when K or E is not 0. Limits: a program a page makes only in a mode (a key, a later view) is seen only with a `#hash` that turns that mode on; contexts made in workers are not seen; and the GLSL is validated by Chromium's translator, so a fault of one graphics driver's own compiler cannot show. Options are in the header of the script. It is not part of CI.
+Each page runs in a browser of its own and prints its time and phases (load, `__wh.ready`, programs read). A page that fails for a reason other than a broken shader (an exception, a console error, no program, over `--timeout`) is tried once more in a fresh browser and counts only when it fails again. The last line is `shaders: N programs on M pages, K failed, E page errors (T s)`; a failed program prints its info log and source lines, and the exit code is 1 when K or E is not 0. Limits: a program a page makes only in a mode (a key, a later view) is seen only with a `#hash` that turns that mode on; contexts made in workers are not seen; and the GLSL is validated by Chromium's translator, so a fault of one graphics driver's own compiler cannot show. Options are in the header of the script. CI runs it with every example page as its own job of [`checks.yml`](.github/workflows/checks.yml) (`docker compose run --rm shaders`, which builds the images and starts `dev` there too).
 
 ### Pictures in Docker
 
@@ -266,7 +266,7 @@ Pictures go to `tools/shot/out/` (ignored by git). The last line is `shot: N pic
 
 ### Marks
 
-In the dev server, key `N` switches a mark mode in the `planet` (free camera), `endless` (free camera), `walk`, `minimal-3d`, `destruction`, `outpost`, `fantasy-village` (orbit view) and `rivers` examples, and key `K` in `system` near a body (N toggles the names there): a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). The panel, the store and the command-line tool `wallhammer-marks` are part of the package (`installMarking` in `platform`, `wallhammer-web/marks-store`). In this repository `tools/marks/list.mjs` lists the marks and `set.mjs` changes their status (the package's tool with this repository's folder and server), `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
+In the dev server, key `N` switches a mark mode in the `planet` (free camera), `endless` (free camera), `movement`, `minimal-3d`, `destruction`, `outpost`, `fantasy-village` (orbit view) and `rivers` examples, and key `K` in `system` near a body (N toggles the names there): a click picks the point under the cursor, a note is typed, and the mark is saved with the point, the view, a picture and facts of the place to `internal/marks/` (ignored by git). The panel, the store and the command-line tool `wallhammer-marks` are part of the package (`installMarking` in `platform`, `wallhammer-web/marks-store`). In this repository `tools/marks/list.mjs` lists the marks and `set.mjs` changes their status (the package's tool with this repository's folder and server), `shoot.mjs` takes a picture of a mark's view after a repair on the host GPU. See [Marks](packages/wallhammer-web/docs/marks.md) and the skill `wallhammer-marks`.
 
 ## npm package
 

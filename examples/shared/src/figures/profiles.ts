@@ -23,17 +23,17 @@ export interface MoveProfile {
 export const MOVE_PROFILES: Readonly<Record<'default' | 'heavy' | 'light', MoveProfile>> = {
   default: {
     name: 'default',
-    walker: { walkSpeed: 1.4, runSpeed: 4.6, acceleration: 12, runAcceleration: 7, deceleration: 12, turnSpeed: 8, turnSpeedAtRun: 2.5, airControl: 0, airTurnSpeed: 0, jumpSpeed: 4.2 },
+    walker: { walkSpeed: 1.4, runSpeed: 4.6, acceleration: 12, runAcceleration: 7, deceleration: 12, turnSpeed: 8, turnSpeedAtRun: 2.5, airControl: 0, airTurnSpeed: 0, jumpSpeed: 4.2, uphillSpeedLoss: 0.85, downhillSpeedGain: 0.5, downhillSpeedLoss: 1.8, slopeSpeedFloor: 0.35 },
     gait: { strideScale: 1, lean: 0.8 },
   },
   heavy: {
     name: 'heavy',
-    walker: { walkSpeed: 1.2, runSpeed: 3.8, acceleration: 6, runAcceleration: 3.5, deceleration: 6, turnSpeed: 5, turnSpeedAtRun: 1.5, airControl: 0, airTurnSpeed: 0, jumpSpeed: 3.6 },
+    walker: { walkSpeed: 1.2, runSpeed: 3.8, acceleration: 6, runAcceleration: 3.5, deceleration: 6, turnSpeed: 5, turnSpeedAtRun: 1.5, airControl: 0, airTurnSpeed: 0, jumpSpeed: 3.6, uphillSpeedLoss: 1, downhillSpeedGain: 0.4, downhillSpeedLoss: 2, slopeSpeedFloor: 0.3 },
     gait: { strideScale: 1.12, lean: 1.2 },
   },
   light: {
     name: 'light',
-    walker: { walkSpeed: 1.6, runSpeed: 5.2, acceleration: 16, runAcceleration: 11, deceleration: 18, turnSpeed: 12, turnSpeedAtRun: 3.4, airControl: 0.05, airTurnSpeed: 1, jumpSpeed: 4.6 },
+    walker: { walkSpeed: 1.6, runSpeed: 5.2, acceleration: 16, runAcceleration: 11, deceleration: 18, turnSpeed: 12, turnSpeedAtRun: 3.4, airControl: 0.05, airTurnSpeed: 1, jumpSpeed: 4.6, uphillSpeedLoss: 0.7, downhillSpeedGain: 0.6, downhillSpeedLoss: 1.6, slopeSpeedFloor: 0.4 },
     gait: { strideScale: 0.9, lean: 0.6 },
   },
 };

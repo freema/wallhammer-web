@@ -21,7 +21,7 @@ Another host port: `EXAMPLES_PORT=5291 docker compose up -d` (5280 is left to th
 
 ## Pages
 
-- http://localhost:5281/ lists the examples; http://localhost:5281/<name>/ serves `examples/<name>`: `minimal-3d`, `destruction`, `endless` (second page `/endless/sphere.html`), `planet`, `system`, `fantasy-village`, `walk`, `outpost`, `rivers`.
+- http://localhost:5281/ lists the examples; http://localhost:5281/<name>/ serves `examples/<name>`: `minimal-3d`, `destruction`, `endless` (second page `/endless/sphere.html`), `planet`, `system`, `fantasy-village`, `movement`, `outpost`, `rivers`.
 - The live demos, built from `main`: https://freema.github.io/wallhammer-web/ and `/wallhammer-web/<name>/`.
 
 Check that a page answers (prints `200`):
@@ -59,7 +59,7 @@ docker compose run --rm shot --url http://dev:5281/planet/ --presets @hash --siz
 
 Pictures go to `tools/shot/out/` (ignored by git). Last line: `shot: N pictures, M page errors`. One picture per page and a `--timeout` are enough. Options: header of `tools/shot/page-shot.mjs`.
 
-The one-off `shaders` service (same image and profile) compiles and links every program the pages make instead of taking pictures: `docker compose run --rm shaders [--pages planet,walk] [--url …]`, last line `shaders: N programs on M pages, K failed, E page errors` (skill `wallhammer-verify`).
+The one-off `shaders` service (same image and profile) compiles and links every program the pages make instead of taking pictures: `docker compose run --rm shaders [--pages planet,movement] [--url …]`, last line `shaders: N programs on M pages, K failed, E page errors (T s)`; CI runs it too (skill `wallhammer-verify`).
 
 ## Real GPU on the host: pictures and frame cost
 
@@ -77,7 +77,7 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 await page.setViewport({ width: 1600, height: 900, deviceScaleFactor: 1 }); // fixed size and pixel ratio
-await page.goto('http://127.0.0.1:5281/walk/', { waitUntil: 'load' });
+await page.goto('http://127.0.0.1:5281/movement/', { waitUntil: 'load' });
 await page.waitForFunction(() => window.__wh !== undefined, { timeout: 120000 });
 await page.evaluate(async () => {
   const wh = window.__wh;
@@ -85,7 +85,7 @@ await page.evaluate(async () => {
   wh.setView(wh.presets().find((v) => v.name === 'steps'));
   await wh.settled?.();
 });
-await page.screenshot({ path: '<scratchpad>/walk-steps.png' });
+await page.screenshot({ path: '<scratchpad>/movement-steps.png' });
 console.log(await page.evaluate(() => window.__wh.stats().renderer)); // must name the GPU, not SwiftShader
 console.log(await page.evaluate(() => window.__wh.profileText(20)));
 await browser.close();
@@ -99,17 +99,17 @@ Every page exposes `window.__wh`. Read the object at the end of the page's `src/
 | --- | --- |
 | `ready`, `presets()`, `setView(v)`, `getView()`, `stats()` | all |
 | `settled()` | all but `destruction` and `minimal-3d` (wait two frames there) |
-| `setTimeOfDay(h)` (hour), `setTime(s)` (freezes animation time) | `setTime` all but `walk`; `setTimeOfDay` all but `walk` and `outpost` |
-| `profile(n)`, `profileText(n)` (frame and per-layer cost) | `walk`, `outpost`, `fantasy-village` |
+| `setTimeOfDay(h)` (hour), `setTime(s)` (freezes animation time) | `setTime` all but `movement`; `setTimeOfDay` all but `movement` and `outpost` |
+| `profile(n)`, `profileText(n)` (frame and per-layer cost) | `movement`, `outpost`, `fantasy-village` |
 | `measureFrame(n)` (ms of a frame, GPU work finished) | `planet`, `system`, `rivers` |
 | `benchmark(n)` | `minimal-3d`, `endless`, `destruction` |
-| `hold(input, s)`, `freeze(on)`, `walkTo`, `teleport`, `state()`, `setWire(on)`, `stations()` | `walk` |
+| `hold(input, s)` (the input also takes `trot` riding and `throttle`, `brake`, `steer`, `handbrake` driving), `freeze(on)`, `walkTo`, `teleport`, `state()`, `setWire(on)`, `stations()`, `moveProfile(name?)`, `figure()`; `ride(on?, instant?)`, `riding()` (the steed); `drive(car?, on?, instant?)`, `driving()` (the cars); `glide(on?, instant?)`, `gliding()` (the glider; `hold` takes `beat`, `flare`, `use`) | `movement` |
 | `kind` (a name of the page's kind, read by `tools/shot/shot.mjs`) | all |
-| `hash()` (the URL hash of the current state) | `planet`, `endless`, `fantasy-village`, `walk`, `outpost` |
+| `hash()` (the URL hash of the current state) | `planet`, `endless`, `fantasy-village`, `movement`, `outpost` |
 | `isSettled()` (the synchronous form of `settled()`) | `endless` (both pages), `planet`, `system` |
-| `setTick(n)` (the simulation's tick) | all but `destruction`, `fantasy-village`, `walk` and `rivers` |
+| `setTick(n)` (the simulation's tick) | all but `destruction`, `fantasy-village`, `movement` and `rivers` |
 | `setWeather(w)` (a preset name, as `w` in the hash) | `minimal-3d`, `destruction`, `endless` |
-| `hud()` (the text of the panel), `overlay()` (the debug overlay) | `hud`: `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `walk`; `overlay`: `endless` (both pages), `planet`, `system` |
+| `hud()` (the text of the panel), `overlay()` (the debug overlay) | `hud`: `destruction`, `endless`, `planet`, `system`, `fantasy-village`, `movement`; `overlay`: `endless` (both pages), `planet`, `system` |
 | `startFlight()`, `stopFlight()`, `setFlight(t)`, `flightSeconds()`, `flightReport()` | `planet`, `system` |
 | `startRiverFlight()`, `setRiverFlight(t)`, `planHash()`, `routes()`, `strike(…)`, `damageHash()` | `system` |
 | `setClouds(on)`, `weather()` (the frame's weather and that under the eye), `setAirReference(on)` | `planet` |
@@ -126,7 +126,9 @@ Movie modes. Two pages have one, with different members; both hold the movie at 
 - `fantasy-village` (a tour of 45 s): `__wh.movie.seek(t)` shows the tour at `t`; then `await __wh.settled()`. `movie.start()` and `movie.stop()` play it (key `M`, `#movie=1`).
 - `system` has no movie members: `#movie=1` (key `V`) is a clean screen over its tour.
 
-Presets of note in `planet` (`presets()` returns only those whose place exists for the seed): `planet-surface`, `planet-low`, `planet-limb`, `planet-whole`; `clouds-8km`, `clouds-below`, `clouds-rain`, `clouds-rain-8km`; `sea-above`, `sea-crossing`, `underwater`, `underwater-up`, `underwater-deep`. `#view=<name>` in the hash opens one.
+Presets of note in `planet` (`presets()` returns only those whose place exists for the seed): `planet-surface`, `planet-low`, `planet-limb`, `planet-whole`; `clouds-8km`, `clouds-below`, `clouds-rain`, `clouds-rain-8km`; `sea-above`, `sea-crossing`, `underwater`, `underwater-up`, `underwater-deep`; `walk`; `split-crest` (a crest close up, where `split=shorter` changes the line against the sky most: shoot it with and without `--hash split=shorter`). `#view=<name>` in the hash opens one.
+
+Presets of `movement`: one per station of the course (`start`, `walls`, `pillars`, `steps`, `ramps`, `platforms`, `passages`, `thin-wall`, `footbridge`), riding scenes (`ride-stand`, `ride-walk`, `ride-trot`, `ride-gallop`, `ride-turn`, `ride-slope`, `ride-steps`) and driving scenes (`car-stand`, `car-accelerate`, `car-brake`, `car-turn`, `car-handbrake`, `car-ramp`, `car-jump`, `car-bump`, `car-get-in`) and gliding scenes (`glide-stand`, `glide-crawl`, `glide-takeoff`, `glide-fly`, `glide-beat`, `glide-turn`, `glide-land`, `glide-mount`, `glide-dismount`); a scene puts the steed, a car or the glider down, freezes the page and holds its inputs. In the hash `ride=1` starts in the saddle, `drive=0` (or `1`) in a car and `glide=1` on the glider. Keys: E gets on or off the steed or the glider and into or out of the nearest car; on the glider W/S crawl (in the air nose down and up), A/D turn or bank, Space leaps and held Space beats, Shift flares; T trot, Space the handbrake while driving, R puts an overturned car back (otherwise back to the start), P the next movement profile; the full list is the header of `examples/movement/src/main.ts`.
 
 Frame cost:
 

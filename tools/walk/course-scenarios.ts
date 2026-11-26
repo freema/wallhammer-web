@@ -1,13 +1,13 @@
-// Scenarios over the real test course of the walking example (examples/walk/src/course.ts): every station walked
-// the way the page's `__wh.walkTo` walks it (examples/walk/src/drive.ts), so a change of the engine that breaks an
-// ability shows up here before anyone opens the page; and the figure's poses through a jump (examples/walk/src/pose.ts).
+// Scenarios over the real test course of the movement example (examples/movement/src/course.ts): every station walked
+// the way the page's `__wh.walkTo` walks it (examples/movement/src/drive.ts), so a change of the engine that breaks an
+// ability shows up here before anyone opens the page; and the figure's poses through a jump (examples/movement/src/pose.ts).
 
 import { Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
-import { PIT, PILLAR_GAPS_M, PILLAR_RADIUS_M, PILLAR_Z, PLATFORMS, RAMP_HEIGHT_M, buildCourse, pillarGapX } from '../../examples/walk/src/course.ts';
-import type { Course } from '../../examples/walk/src/course.ts';
-import { driveTo } from '../../examples/walk/src/drive.ts';
-import type { DriveOptions, WalkState } from '../../examples/walk/src/drive.ts';
-import { FigureMotion, HIP_M, legReach } from '../../examples/walk/src/pose.ts';
+import { PIT, PILLAR_GAPS_M, PILLAR_RADIUS_M, PILLAR_Z, PLATFORMS, RAMP_HEIGHT_M, buildCourse, pillarGapX } from '../../examples/movement/src/course.ts';
+import type { Course } from '../../examples/movement/src/course.ts';
+import { driveTo } from '../../examples/movement/src/drive.ts';
+import type { DriveOptions, WalkState } from '../../examples/movement/src/drive.ts';
+import { FigureMotion, HIP_M, legReach } from '../../examples/movement/src/pose.ts';
 import { f, verdict } from './scenario.ts';
 import type { Scenario } from './scenario.ts';
 
@@ -155,7 +155,7 @@ const footbridge: Scenario = {
 const jumpPose: Scenario = {
   name: 'course-figure-jump-pose',
   run() {
-    // A running jump on the start pad with a turn held in the air, the figure's motion (examples/walk/src/pose.ts) fed
+    // A running jump on the start pad with a turn held in the air, the figure's motion (examples/movement/src/pose.ts) fed
     // every step as the page feeds it. A second motion gets the distance walked shifted in the air: equal channels
     // mean no stride in the air. The phases must read: feet drawn up while rising, legs reaching down before landing,
     // a squat on landing, standing again 0.6 s later.

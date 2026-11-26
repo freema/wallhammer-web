@@ -15,6 +15,10 @@
 // `standUp` lead from standing into `sit` and back. `push` and `brace` are additive: the body leaning into a start and
 // back against a stop, for layers weighted by the figure's acceleration. The ponytail hangs on a chain of three bones
 // (`lag`) that a figure may let lag behind its motion (the engine's `ChainLag`).
+// Astride a mount (`saddle`, `saddleWalk`, `saddleTrot`, `saddleGallop`, on the phase of the mount's step cycle;
+// `mount` and `dismount` on the clock) the figure's place is the seat of the saddle: thighs out round the trunk, the
+// knees bent, the trunk upright at a walk, rising at a trot, low over the withers at a gallop; the hands and feet are
+// for reaches to hold at the grips and the stirrups.
 
 import { hashInts, unit } from 'wallhammer-web/gen-core';
 import type { Pose } from 'wallhammer-web/motion';
@@ -689,11 +693,125 @@ function pathfinder(): FigureKind {
     },
   };
 
+  // --- Astride a mount: the figure's place is the seat of the saddle (a socket of the mount, its left, up and forward
+  // the mount's). The moving motions run on the phase of the mount's step cycle (`unit: 'phase'`, a pass of its
+  // footfalls), so the rider moves with the animal; the hands and the feet are meant to be held by reaches (the grips
+  // and the stirrups), the motions give their bend. They carry no speeds: the mount's gaits differ, so whoever puts
+  // them in a graph gives each its band of the mount's speeds (standing, walk, trot, gallop). ---
+  /**
+   * Seated astride: the pelvis `rise` above the saddle, the trunk leaning `lean` forward, swaying `sway` sideways and
+   * rolling `roll`. `hip` turns the pelvis (pitch forward, yaw, roll) with the animal's back; the trunk takes most of it
+   * back above the waist, so the shoulders and the head ride quieter than the seat.
+   */
+  const astride = (pose: Pose, p: number, w: number, lean: number, rise: number, sway: number, roll: number, hip: readonly [number, number, number] = [0, 0, 0]): void => {
+    shift(pose, id.root, 0, -0.46 + rise, 0);
+    turn(pose, id.root, hip[0], hip[1], hip[2]);
+    turn(pose, id.torso, lean - 0.75 * hip[0], sway - 0.7 * hip[1], roll - 0.75 * hip[2]);
+    turn(pose, id.head, -0.8 * lean + 0.02 * Math.sin(TAU * p + w), -0.6 * sway, -0.5 * roll);
+    for (const s of SIDES) {
+      const L = s > 0;
+      // Thighs forward and out round the trunk, knees bent, the hands forward at the height of the handle.
+      turn(pose, L ? id.legL : id.legR, -1.1 + 0.3 * rise - hip[0], 0, 0.5 * s);
+      turn(pose, L ? id.shinL : id.shinR, 1.4 + 0.8 * rise);
+      turn(pose, L ? id.armL : id.armR, -0.7 + 0.6 * lean, 0, -0.1 * s);
+      turn(pose, L ? id.foreL : id.foreR, -0.85);
+    }
+    // The cloak lies back over the croup (the more the trunk leans, the less it is lifted from it, so at a crouch it
+    // streams back level), fluttering; the lantern on its pole keeps upright.
+    dress(pose, p * 2.1, w, Math.max(0.08, 0.62 - 0.45 * lean), 0.5 + 0.6 * lean, lean);
+  };
+  /** Astride a mount that stands. */
+  const saddle: FigureMotion = {
+    unit: 'phase',
+    sample(pose, p, f) {
+      astride(pose, p, f.seed * TAU, 0.46, 0, 0, 0);
+    },
+  };
+  /**
+   * Astride a mount that walks (hind left down at 0, front left at 0.25): the pelvis rocks forward and back twice a
+   * pass and rolls and turns with the swing of the back, the trunk above it taking most of that back.
+   */
+  const saddleWalk: FigureMotion = {
+    unit: 'phase',
+    sample(pose, p, f) {
+      const rock = Math.sin(2 * TAU * (p - 0.07));
+      const side = Math.cos(TAU * (p - 0.45));
+      astride(pose, p, f.seed * TAU, 0.46, 0.008 * Math.cos(2 * TAU * (p - 0.07)), 0.03 * side, 0, [0.07 * rock, 0.05 * Math.sin(TAU * (p - 0.45)), -0.07 * side]);
+    },
+  };
+  /**
+   * Astride a mount that trots: posting, rising out of the seat on one diagonal's push and sitting softly on the next
+   * (once a pass), the pelvis tipping forward over the knees as it rises.
+   */
+  const saddleTrot: FigureMotion = {
+    unit: 'phase',
+    sample(pose, p, f) {
+      const s = 0.5 + 0.5 * Math.sin(TAU * (p - 0.2));
+      const up = s * s * (3 - 2 * s);
+      const rise = 0.075 * up;
+      astride(pose, p, f.seed * TAU, 0.62 + 0.25 * up, rise, 0.015 * Math.sin(TAU * p), 0, [0.16 * up, 0, -0.03 * Math.cos(TAU * (p - 0.21))]);
+    },
+  };
+  /**
+   * Astride a mount that gallops: the forward seat, a low crouch with the pelvis off the saddle and the back near
+   * level over the withers; the hips and knees take up the rise and fall and the rock of the back, so the trunk rides
+   * steadier than the animal.
+   */
+  const saddleGallop: FigureMotion = {
+    unit: 'phase',
+    sample(pose, p, f) {
+      const bounce = Math.cos(2 * TAU * (p - 0.39));
+      const rock = Math.cos(TAU * (p - 0.17));
+      astride(pose, p, f.seed * TAU, 1.45 - 0.06 * rock, 0.05 - 0.025 * bounce, 0, 0, [0.12 * rock, 0, 0]);
+    },
+  };
+  /**
+   * Getting on from the mount's left side in `MOUNT_S` (the figure's place moves from the ground to the seat beside it,
+   * `SocketSeat`): the left foot up to the stirrup and the hands up to the grips, then the right leg swung high over
+   * the croup, then settled astride. Holds the end.
+   */
+  const climb = (pose: Pose, u: number, w: number): void => {
+    const a = smooth(u / 0.32);
+    const b = smooth((u - 0.28) / 0.47);
+    const c = smooth((u - 0.7) / 0.3);
+    const arc = Math.sin(Math.PI * b);
+    shift(pose, id.root, 0, -0.46 * smooth(u / 0.85), 0);
+    turn(pose, id.torso, 0.3 * a + 0.3 * arc - 0.55 * c, 0.15 * arc, -0.1 * arc);
+    turn(pose, id.head, -0.2 * a - 0.15 * arc + 0.35 * c, 0.2 * arc);
+    // The left leg: up to the stirrup, then into the seat.
+    turn(pose, id.legL, mix(-1.35 * a, -1.1, b), 0, mix(0.25 * a, 0.5, b));
+    turn(pose, id.shinL, mix(1.7 * a, 1.4, b));
+    // The right leg: pushes off, then swings back, high and out over the croup, and comes down astride.
+    turn(pose, id.legR, mix(0.15 * a, -1.1, b) + 0.85 * arc, 0, -0.5 * b - 1.0 * arc);
+    turn(pose, id.shinR, mix(0.3 * a, 1.4, b) + 0.4 * arc);
+    for (const s of SIDES) {
+      const L = s > 0;
+      turn(pose, L ? id.armL : id.armR, mix(0.03, -1.15, a) + 0.45 * c, 0, -0.1 * s * a);
+      turn(pose, L ? id.foreL : id.foreR, mix(0, -0.85, a));
+    }
+    dress(pose, u * 2, w, mix(0.03, 0.62, b), 1, 0.3 * a);
+  };
+  const mount: FigureMotion = {
+    duration: MOUNT_S,
+    loop: false,
+    sample(pose, time, f) {
+      climb(pose, time / MOUNT_S, f.seed * TAU);
+    },
+  };
+  /** Getting off to the left in `DISMOUNT_S`: the way up played backwards. Holds the end (standing). */
+  const dismount: FigureMotion = {
+    duration: DISMOUNT_S,
+    loop: false,
+    sample(pose, time, f) {
+      climb(pose, 1 - time / DISMOUNT_S, f.seed * TAU);
+    },
+  };
+
   return {
     name: 'pathfinder',
     skeleton: B.skeleton,
     parts: B.parts(),
-    motions: { stand, walk, run, bear, hold, ride, swim, sit, leap, wave, offer, take, read, sitDown, standUp, push, brace },
+    motions: { stand, walk, run, bear, hold, ride, swim, sit, leap, wave, offer, take, read, sitDown, standUp, push, brace, saddle, saddleWalk, saddleTrot, saddleGallop, mount, dismount },
     anchors: { lantern: B.local('lampL', [0.56, 1.53, -0.4]), head: B.local('head', [0, 1.7, 0]), torch: B.local('foreR', [-0.42, 0.66, 0.7]) },
     look,
     heightM: 1.72,
@@ -726,6 +844,9 @@ function pathfinder(): FigureKind {
 
 /** Seconds of one wave of the pathfinder's motion `wave`. */
 export const WAVE_S = 0.6;
+/** Seconds of the pathfinder's `mount` (getting on a mount from its left) and `dismount` (getting off to the left). */
+export const MOUNT_S = 1.1;
+export const DISMOUNT_S = 1.0;
 /** Seconds of the pathfinder's `sitDown` and `standUp`. */
 export const SIT_DOWN_S = 1.3;
 export const STAND_UP_S = 1.1;

@@ -728,8 +728,98 @@ many particles did not fit. The layer draws in the colour pass only, at most two
 the depth test and no depth write: add it after the opaque layers. The materials read `u_time`, `u_wind`, `u_warmTint`
 and the `lighting` include of the environment.
 
-`TransientLayer` dust stays separate: its puffs are one-shot events at absolute clock times that come and go with
-batches of falling pieces, while particle sources loop with no start or end.
+Bursts are particles fired once: a puff of dust where a hoof lands, a spray where a wheel slides. `fire(burst)` takes a
+`ParticleBurst` (gen-core): the birth disc and `time`, `count`, `life`, `size`, `rise`, `spread`, an optional
+`velocity` every particle starts with, `gravity`, `wind`, the colours, `shape`, `group`, `blend` and a `seed`. The
+particles' own choices (place in the disc, direction, speed, life between 80 % and 120 %) come from the seed through
+`hashInt`, so the same burst gives the same bytes. They go into a `ParticleBurstRing` per blend mode of
+`burstCapacity` particles (default 1024, made at the first burst); the newest replace the oldest, only the changed
+span is uploaded before the frame and nothing is allocated per burst. A burst particle's age is `burstTime` minus its
+birth time, `burstTime` being a clock the game sets every frame (its simulation's time, so a scripted step of the game
+and a picture taken after it agree); outside its life it is not drawn. `burstsBusy()` tells whether one may still be
+alive (keep frames coming while it is), `burstStats()` counts them, `clearBursts()` forgets them. Bursts and looping
+sources share the layer's two blend passes: the blended draws first, then the added ones.
+
+<!-- check: wrap -->
+```ts
+import { ParticleLayer } from 'wallhammer-web/render';
+import type { Renderer } from 'wallhammer-web/render';
+import { hashInt } from 'wallhammer-web/gen-core';
+declare const renderer: Renderer;
+declare const gameTime: number;
+declare const step: number;
+
+const dust = new ParticleLayer(renderer, [], { name: 'dust', burstCapacity: 1024 });
+renderer.add(dust); // after the opaque layers
+
+// Where something lands:
+dust.fire({
+  position: [3, 0.05, -2], time: gameTime, count: 8, life: 1.4, size: [0.2, 1], rise: 0.7, spread: [0.15, 0.8],
+  velocity: [-1, 0, 0], gravity: 0.5, wind: 0.6, colorStart: [0.5, 0.41, 0.3, 0.55], colorEnd: [0.62, 0.55, 0.46, 0],
+  seed: hashInt(step, 1),
+});
+
+// Every frame, before rendering:
+dust.burstTime = gameTime;
+```
+
+`TransientLayer` dust stays separate: its puffs belong to batches of falling pieces and their ballistic tracks, while
+particle sources loop with no start or end and bursts are fired by the game one at a time.
+
+### Contact trail
+
+Marks left where something touches a surface (prints of feet and hooves, tyre streaks, ruts) are records in a
+`ContactTrail` (core): a ring of fixed capacity, the newest mark replacing the oldest. A mark is a place, the surface's
+unit normal, a heading (0 toward −z, as a walker's yaw), a width and a length, a `kind` (the game's number, read by
+its shader), the time it was laid and a life. It fades with age: full strength to `CONTACT_TRAIL_FADE_FROM` (0.4) of its
+life, then smoothly to nothing (`contactTrailFade`, the same in GLSL). `layRaw` takes plain numbers and allocates
+nothing; the ring keeps the changed span for the upload. `ContactStreaks` turns continuous contacts into chains of
+marks: per source (a slot of the game's numbering, such as one per wheel) each sample while it touches lays a mark from
+the last point to the new one once it is `minLength` away (default 0.35 m); a lift or a jump past `maxLength` (default
+2 m) ends the chain.
+
+`ContactTrailLayer(renderer, trail, { material, lift?, name? })` draws the whole ring in one instanced draw: a quad per
+mark in the plane of its normal, turned to its heading, lifted `lift` metres (default 0.01) and faded by its age at
+`time`, the clock the game sets every frame. The material comes from `contactTrailMaterial({ shade, includes? })`:
+the game writes `vec4 trailShade(vec2 uv, float kind, float seed, vec3 world, vec3 n)` returning the display colour and
+the coverage of the mark at `uv` (0–1 across and along, v forward), `seed` a stable number per slot for variety. It is
+blended over the ground with a depth offset, no depth write, in the colour pass only; add the layer after the ground and
+before what stands on it.
+
+<!-- check: wrap -->
+```ts
+import { ContactStreaks, ContactTrail } from 'wallhammer-web/core';
+import { ContactTrailLayer, contactTrailMaterial } from 'wallhammer-web/render';
+import type { Renderer } from 'wallhammer-web/render';
+declare const renderer: Renderer;
+declare const now: number;
+
+const trail = new ContactTrail(2048);
+const material = renderer.material(contactTrailMaterial({
+  name: 'prints',
+  includes: ['noise', 'lighting', 'sky'],
+  shade: /* glsl */ `
+vec4 trailShade(vec2 uv, float kind, float seed, vec3 world, vec3 n) {
+  float sole = 1.0 - smoothstep(0.8, 1.0, length((uv - 0.5) * 2.0));
+  vec3 c = toDisplay(vec3(0.2, 0.15, 0.1) * lightOn(n, sunVisibility(world, n, 1.0), 1.0));
+  return vec4(c, (kind < 0.5 ? 0.3 : 0.8) * sole);
+}`,
+}));
+const layer = new ContactTrailLayer(renderer, trail, { material, lift: 0.012 });
+renderer.add(layer);
+
+// A foot put down at (2, 0, 5) heading 0.3 rad on loose ground (kind 1), lasting 20 s:
+trail.layRaw(2, 0, 5, 0, 1, 0, 0.3, 0.13, 0.3, 1, now, 20);
+// A wheel's contact every step, one chain per wheel:
+const streaks = new ContactStreaks(trail, 4);
+streaks.touch(0, true, 2.4, 0, 6, 0, 1, 0, 0.2, 0, now, 8);
+// Every frame, before rendering:
+layer.time = now;
+```
+
+What the ground is made of comes from the collision world: see [Surface tags](walking.md#surface-tags). The movement
+example (`examples/movement`, `src/traces.ts`) lays prints of boots and hooves from their landing events, ruts and skid
+marks from its cars' wheels and fires dust on loose ground.
 
 ### Instance sets
 

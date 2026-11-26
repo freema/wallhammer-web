@@ -6,7 +6,11 @@
 // part of a `Simulation` snapshot. Last the momentum options (`deceleration`, `runAcceleration`, `turnSpeedAtRun`):
 // the stop distance from a run, the run-up, the radius of a running turn, the same options through a `ChartWalker`,
 // the default setup stepping exactly as with the options spelled out, the fixed-step stop distance and the rate of
-// change in the air.
+// change in the air. Last the slope effect on the speed (`uphillSpeedLoss`, `downhillSpeedGain`, `downhillSpeedLoss`,
+// `slopeSpeedFloor`): off by default (the same speed on a ramp as on the flat, the same bits as with the options spelled
+// out at 0), slower uphill and on steep descents and a little faster on gentle ones, never below the floor, unscaled
+// in the air, a steady speed on stairs that matches a base ramp of the same mean slope, and the same bits twice and
+// across a saved state.
 
 import { ByteReader, ByteWriter } from '../../packages/wallhammer-web/src/sim/bytes.ts';
 import { Simulation } from '../../packages/wallhammer-web/src/sim/simulation.ts';
@@ -14,6 +18,7 @@ import { CollisionWorld, newRayHit } from '../../packages/wallhammer-web/src/wor
 import { ChartWalker } from '../../packages/wallhammer-web/src/world/chart-walker.ts';
 import { DEFAULT_WALKER, WALKER_STATE_BYTES, Walker, newWalkIntent } from '../../packages/wallhammer-web/src/world/walker.ts';
 import type { WalkIntent, WalkerSetup } from '../../packages/wallhammer-web/src/world/walker.ts';
+import { MOVE_PROFILES } from '../../examples/shared/src/figures/profiles.ts';
 import { scattered } from './collide-scenarios.ts';
 import { f, meanMs, seeded, verdict } from './scenario.ts';
 import type { Scenario } from './scenario.ts';
@@ -451,7 +456,7 @@ const timing: Scenario = {
 
 /** Names of the 20 doubles of a saved state, for reporting which one differs (layout of `Walker.saveState`). */
 const STATE_SLOTS = ['version', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'yaw', 'flags', 'travelled', 'steps', 'prevX', 'prevY', 'prevZ',
-  'prevYaw', 'acc', 'stepOffset', 'prevStepOffset', 'prevTravelled', 'spare'];
+  'prevYaw', 'acc', 'stepOffset', 'prevStepOffset', 'prevTravelled', 'grade'];
 const PENDING_JUMP = 4;
 
 /** Double `slot` of a saved state at `offset`. */
@@ -967,6 +972,247 @@ const airRate: Scenario = {
   },
 };
 
+// --- Slope effect on the speed -------------------------------------------------------------------------------------
+
+/** A straight base ramp rising toward +x at `deg` from x = 0 onto a plateau `height` metres high (flat before it). */
+function longRamp(deg: number, height: number): CollisionWorld {
+  const t = Math.tan((deg * Math.PI) / 180);
+  return new CollisionWorld({ heightAt: (x) => (x <= 0 ? 0 : Math.min(x * t, height)), baseMinY: 0, baseMaxY: height });
+}
+
+/** The slope options of the examples' figure (examples/shared profiles.ts, default). */
+const { uphillSpeedLoss, downhillSpeedGain, downhillSpeedLoss, slopeSpeedFloor } = MOVE_PROFILES.default.walker;
+const SLOPE: Partial<WalkerSetup> = { uphillSpeedLoss, downhillSpeedGain, downhillSpeedLoss, slopeSpeedFloor };
+
+/** Slope factor of `SLOPE` at grade `g` (+ uphill). */
+function slopeFactor(g: number, s: Partial<WalkerSetup> = SLOPE): number {
+  const k = g > 0 ? 1 - s.uphillSpeedLoss! * g : 1 - g * (s.downhillSpeedGain! + s.downhillSpeedLoss! * g);
+  return Math.max(k, s.slopeSpeedFloor!);
+}
+
+/**
+ * Mean horizontal speed of a walker along ±x on `w` between `a` and `b` (in the direction of travel), from `x0` with a
+ * run-up; also the lowest and highest speed there.
+ */
+function speedOver(w: CollisionWorld, setup: Partial<WalkerSetup>, run: boolean, x0: number, a: number, b: number): { mean: number; lo: number; hi: number } {
+  const dir = b > a ? 1 : -1;
+  const k = walker(w, x0, w.groundAt(x0, 0, 1e4, 0), 0, setup);
+  const it = intent(dir, 0, run);
+  let sum = 0, n = 0, lo = Infinity, hi = 0;
+  for (let i = 0; i < 60 * 40; i++) {
+    k.step(it);
+    const x = k.position[0]!;
+    if ((x - a) * dir > 0 && (b - x) * dir > 0 && k.grounded) {
+      const v = k.lastStepDistance / k.stepSeconds;
+      sum += v;
+      n++;
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+    if ((x - b) * dir > 0) break;
+  }
+  return { mean: n > 0 ? sum / n : 0, lo, hi };
+}
+
+const slopeDefaults: Scenario = {
+  name: 'walker-slope-defaults-unchanged',
+  run() {
+    // Default setup: up and down a 20° ramp exactly at the walk and run speeds (horizontal), as on the flat.
+    const w = longRamp(20, 4);
+    const d = DEFAULT_WALKER;
+    let worst = 0;
+    for (const run of [false, true]) {
+      const want = run ? d.runSpeed : d.walkSpeed;
+      for (const r of [speedOver(w, {}, run, -6, 2, 9), speedOver(w, {}, run, 17, 9, 2)]) worst = Math.max(worst, Math.abs(r.lo - want), Math.abs(r.hi - want));
+    }
+    // The options spelled out at 0 (with another floor) step bit for bit like the default setup, the grade slot 0.
+    const trace = (setup: Partial<WalkerSetup>): Uint8Array[] => {
+      const k = walker(course(), 60, 10, 60, setup);
+      const rnd = seeded(23);
+      const it = newWalkIntent();
+      const out: Uint8Array[] = [];
+      for (let i = 0; i < 900; i++) {
+        if (i % 30 === 0) {
+          const a = rnd() * Math.PI * 2;
+          it.moveX = Math.cos(a);
+          it.moveZ = Math.sin(a);
+          it.run = rnd() < 0.5;
+        }
+        it.jump = i % 113 === 0;
+        k.step(it);
+        if (i % 5 === 0) out.push(k.saveState().slice());
+      }
+      return out;
+    };
+    const a = trace({});
+    const b = trace({ uphillSpeedLoss: 0, downhillSpeedGain: 0, downhillSpeedLoss: 0, slopeSpeedFloor: 0.9 });
+    let apart = 0, graded = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (stateDiff(a[i]!, b[i]!)) apart++;
+      if (stateSlot(a[i]!, 19) !== 0) graded++;
+    }
+    const zero = d.uphillSpeedLoss === 0 && d.downhillSpeedGain === 0 && d.downhillSpeedLoss === 0;
+    return verdict(worst < 1e-12 && apart === 0 && graded === 0 && zero,
+      `defaults: largest speed difference from the flat on a 20° ramp ${f(worst, 9)} m/s; 900 steps against the options spelled out at 0: ${apart} of ${a.length} saved states differ, ${graded} with a grade`);
+  },
+};
+
+const slopeUpDown: Scenario = {
+  name: 'walker-slope-up-and-down',
+  run() {
+    const t = (deg: number): number => Math.tan((deg * Math.PI) / 180);
+    const ws = DEFAULT_WALKER.walkSpeed;
+    const parts: string[] = [];
+    let ok = true;
+    // Up and down ramps of 8°, 20° and 35°: the steady speed is the walk speed times the factor at the ramp's grade.
+    for (const [deg, height] of [[8, 2], [20, 4], [35, 6]] as const) {
+      const w = longRamp(deg, height);
+      const top = height / t(deg);
+      const up = speedOver(w, SLOPE, false, -6, top * 0.3, top * 0.7).mean;
+      const down = speedOver(w, SLOPE, false, top + 6, top * 0.7, top * 0.3).mean;
+      const wantUp = ws * slopeFactor(t(deg)), wantDown = ws * slopeFactor(-t(deg));
+      ok &&= Math.abs(up - wantUp) < 0.01 * ws && Math.abs(down - wantDown) < 0.01 * ws;
+      parts.push(`${deg}°: up ${f(up, 2)} (want ${f(wantUp, 2)}), down ${f(down, 2)} (want ${f(wantDown, 2)})`);
+      if (deg === 20) ok &&= up < 0.75 * ws && up > 0.65 * ws;
+      if (deg === 8) ok &&= down > ws;
+      if (deg === 35) ok &&= down < 0.8 * ws;
+    }
+    // A steep loss never stops the body: on a 40° ramp (allowed up to 45°) with a loss of 3 it climbs at the floor.
+    const steep = speedOver(longRamp(40, 8), { ...SLOPE, uphillSpeedLoss: 3 }, false, -6, 3, 7);
+    ok &&= Math.abs(steep.mean - ws * slopeSpeedFloor) < 1e-6;
+    // In the air the speed is not scaled: a jump from the 20° ramp with full air control speeds back up to the walk speed.
+    const k = walker(longRamp(20, 8), 10, 10 * t(20), 0, { ...SLOPE, airControl: 1, jumpSpeed: 5 });
+    walk(k, intent(1, 0), 2);
+    const before = k.velocity[0]!;
+    k.step(intent(1, 0, false, true));
+    walk(k, intent(1, 0), 0.4);
+    const air = k.velocity[0]!;
+    ok &&= !k.grounded && Math.abs(air - ws) < 1e-9 && before < 0.75 * ws;
+    return verdict(ok, `walk ${ws} m/s; ${parts.join('; ')}; 40° with loss 3: ${f(steep.mean, 3)} m/s (floor ${f(ws * slopeSpeedFloor, 3)}); in the air from ${f(before, 2)} back to ${f(air, 3)} m/s`);
+  },
+};
+
+const slopeStairs: Scenario = {
+  name: 'walker-slope-stairs-steady',
+  run() {
+    // 30 solid steps of 0.2 m with 0.4 m treads (mean grade 0.5) and of 0.17 m with 0.3 m treads: well into the flight
+    // the speed stays within a few per cent of its mean and up to 3 % of a base ramp of the same mean slope.
+    const parts: string[] = [];
+    let ok = true;
+    for (const [rise, tread] of [[0.2, 0.4], [0.17, 0.3]] as const) {
+      const w = flat();
+      for (let i = 0; i < 30; i++) w.addPrism([2 + i * tread, -2, 2 + (i + 1) * tread, -2, 2 + (i + 1) * tread, 2, 2 + i * tread, 2], 0, rise * (i + 1));
+      const end = 2 + 30 * tread;
+      w.addPrism([end, -2, end + 20, -2, end + 20, 2, end, 2], 0, rise * 30);
+      const ramp = longRamp((Math.atan(rise / tread) * 180) / Math.PI, 30 * rise);
+      for (const run of [false, true]) {
+        const up = speedOver(w, SLOPE, run, -6, 2 + 12 * tread, 2 + 22 * tread);
+        const down = speedOver(w, SLOPE, run, end + 6, 2 + 14 * tread, 2 + 4 * tread);
+        // The ramp starts at x 0, the stairs at x 2: the same part of the slope.
+        const rUp = speedOver(ramp, SLOPE, run, -8, 12 * tread, 22 * tread).mean;
+        const jitter = Math.max((up.hi - up.lo) / up.mean, (down.hi - down.lo) / down.mean) / 2;
+        const flatSpeed = run ? DEFAULT_WALKER.runSpeed : DEFAULT_WALKER.walkSpeed;
+        ok &&= jitter < 0.05 && Math.abs(up.mean / rUp - 1) < 0.03 && up.mean < 0.7 * flatSpeed && down.mean < flatSpeed;
+        parts.push(`${rise}/${tread} ${run ? 'run' : 'walk'}: up ${f(up.mean, 2)} (ramp ${f(rUp, 2)}), down ${f(down.mean, 2)}, ±${f(jitter * 100, 1)} %`);
+      }
+    }
+    return verdict(ok, parts.join('; '));
+  },
+};
+
+const slopeDeterminism: Scenario = {
+  name: 'walker-slope-same-bits',
+  run() {
+    // With the slope effect on: two runs over the scattered course give the same bits, and a walker loaded from a
+    // saved state in the middle (the grade included) steps on exactly like the original.
+    const trace = (): { states: Uint8Array[]; mid: Uint8Array } => {
+      const k = walker(course(), 60, 10, 60, SLOPE);
+      const rnd = seeded(29);
+      const it = newWalkIntent();
+      const states: Uint8Array[] = [];
+      let mid = new Uint8Array(0);
+      for (let i = 0; i < 600; i++) {
+        if (i % 30 === 0) {
+          const a = rnd() * Math.PI * 2;
+          it.moveX = Math.cos(a);
+          it.moveZ = Math.sin(a);
+          it.run = rnd() < 0.5;
+        }
+        it.jump = i % 97 === 0;
+        k.step(it);
+        if (i === 299) mid = k.saveState().slice();
+        if (i >= 300) states.push(k.saveState().slice());
+      }
+      return { states, mid };
+    };
+    const a = trace();
+    const b = trace();
+    let apart = 0;
+    for (let i = 0; i < a.states.length; i++) if (stateDiff(a.states[i]!, b.states[i]!)) apart++;
+    // Continue from the saved middle with the same script.
+    const c = walker(course(), 0, 0, 0, SLOPE);
+    c.loadState(a.mid);
+    const rnd = seeded(29);
+    const it = newWalkIntent();
+    let resumed = 0;
+    for (let i = 0; i < 600; i++) {
+      if (i % 30 === 0) {
+        const ang = rnd() * Math.PI * 2;
+        it.moveX = Math.cos(ang);
+        it.moveZ = Math.sin(ang);
+        it.run = rnd() < 0.5;
+      }
+      if (i < 300) continue;
+      it.jump = i % 97 === 0;
+      c.step(it);
+      if (stateDiff(c.saveState(), a.states[i - 300]!)) resumed++;
+    }
+    const grade = stateSlot(a.mid, 19);
+    return verdict(apart === 0 && resumed === 0 && grade !== 0, `two runs: ${apart} of ${a.states.length} states differ; resumed from step 300 (grade ${f(grade, 3)}): ${resumed} differ`);
+  },
+};
+
+const slopeProbe: Scenario = {
+  name: 'walker-slope-probe-window',
+  run() {
+    const t20 = Math.tan((20 * Math.PI) / 180);
+    // The defaults spelled out (a 1 m window, 0.3 s of easing) step bit for bit as the defaults.
+    const trace = (setup: Partial<WalkerSetup>): Uint8Array[] => {
+      const k = walker(longRamp(20, 4), -6, 0, 0, setup);
+      const out: Uint8Array[] = [];
+      walk(k, intent(1, 0), 8, (k, i) => {
+        if (i % 10 === 0) out.push(k.saveState().slice());
+      });
+      return out;
+    };
+    const a = trace(SLOPE);
+    const b = trace({ ...SLOPE, gradeProbe: 1, gradeSmoothing: 0.3 });
+    let apart = 0;
+    for (let i = 0; i < a.length; i++) if (stateDiff(a[i]!, b[i]!)) apart++;
+    // `grade` is the eased grade the speed uses (the saved state's slot), the ramp's tangent well up it.
+    const g = walker(longRamp(20, 8), -6, 0, 0, SLOPE);
+    let slotSame = true;
+    walk(g, intent(1, 0), 6, (k) => {
+      slotSame &&= k.grade === stateSlot(k.saveState(), 19);
+    });
+    const onRamp = g.grade;
+    // Without easing the grade is the probe's at once; a window of 2.5 m reads the foot of the ramp sooner (its
+    // farthest point reaches 1.3 m further ahead) and the same tangent up it.
+    const firstGraded = (probe: number): { at: number; up: number } => {
+      const k = walker(longRamp(20, 8), -8, 0, 0, { ...SLOPE, gradeProbe: probe, gradeSmoothing: 0 });
+      let at = NaN;
+      walk(k, intent(1, 0), 8, (k) => {
+        if (Number.isNaN(at) && k.grade > 0.01) at = k.position[0]!;
+      });
+      return { at, up: k.grade };
+    };
+    const one = firstGraded(1), wide = firstGraded(2.5);
+    const sooner = one.at - wide.at;
+    const ok = apart === 0 && slotSame && Math.abs(onRamp - t20) < 1e-3 && Math.abs(one.up - t20) < 1e-9 && Math.abs(wide.up - t20) < 1e-9 && sooner > 0.8 && sooner < 1.6;
+    return verdict(ok, `defaults spelled out: ${apart} of ${a.length} saved states differ; grade on a 20° ramp ${f(onRamp, 4)} (tangent ${f(t20, 4)}), equal to the saved slot ${slotSame}; without easing first graded at x ${f(one.at, 2)} (1 m) and ${f(wide.at, 2)} (2.5 m), ${f(sooner, 2)} m sooner, up the ramp ${f(one.up, 6)} and ${f(wide.up, 6)}`);
+  },
+};
+
 export const WALKER_SCENARIOS: Scenario[] = [wall30, corner, steps, slopes, jump, airMomentum, standingJump, fall, thinWall,
   determinism, appear, timing, stateRoundTrip, stateContinues, stateOffsets, stateSim, stopDistance, runUp, turnArc, momentumDefaults, chartMomentum, retune,
-  stopFixedStep, airRate];
+  stopFixedStep, airRate, slopeDefaults, slopeUpDown, slopeStairs, slopeDeterminism, slopeProbe];

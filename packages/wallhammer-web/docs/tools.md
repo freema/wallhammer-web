@@ -12,7 +12,7 @@ Dev tools live in `tools/`. Run the checks inside the `dev` container from the r
 | `pnpm check:pack` | The package as it would be published: it packs, installs into an empty project, loads in Node and type-checks. | 1 when a step fails |
 | `pnpm check:mesh` | The mesh builder core and the bare shapes in plain Node: vertex and index counts, closed shapes (every edge twice, once each way), outward winding (positive volume near the analytic one), mirroring flips the winding, `append` keeps payloads, two different vertex formats, determinism (`tools/mesh/check.ts`; see [Generators](generators.md#building-meshes-in-your-own-vertex-format)). | 1 when a case fails |
 | `pnpm check:motion` | The motion module in plain Node on made-up bone chains: blends and masks, automatic weights, transitions, marks and events, reach and ground fit, saved state, determinism, layer stacks, processor time for many figures (`tools/motion/check.ts`; see [Motion](motion.md)). | 1 when a scenario fails or the run takes over 5 s |
-| `pnpm check:walk` | The collision world, the walker and the walking example's course in plain Node (comes with the examples, `tools/walk`). | 1 when a scenario fails |
+| `pnpm check:walk` | The collision world, the walker and the movement example's course in plain Node (comes with the examples, `tools/walk`). | 1 when a scenario fails |
 | `pnpm check:follow` | The following view (`FollowRig`) in plain Node: the boom cut to the clearance, its smooth return, the pivot reaching its target, `forward` against the heading, first person, the cached key, processor time per frame (comes with the examples, `tools/follow-check`; `runFollowChecks()` is exported for other check scripts). | 1 when a case fails |
 
 ```sh
@@ -71,7 +71,7 @@ What it does not check: that samples run, that GLSL inside samples compiles (the
 
 ## Walking check
 
-`pnpm check:walk` (`tools/walk/check.ts`) comes with the examples, because it walks the course of the walking example. It checks the collision world, the walker (`tools/walk/walker-scenarios.ts`: wall, corner, steps, slopes, jump and ceiling, fall, thin wall, determinism, a solid that appears, CPU time), the follow camera, and the stations of the walking example's test course (`tools/walk/course-scenarios.ts` over `examples/walk/src/course.ts`, walked by the same `driveTo` as the page's `__wh.walkTo`) in plain Node, prints one line per scenario (`ok`, `FAIL`, or `slow` for a CPU-time measurement that missed its target, which does not fail the run) and exits 1 when a scenario fails or the run takes over 5 seconds. `node tools/walk/check.ts <text>` runs only the scenarios whose name contains the text.
+`pnpm check:walk` (`tools/walk/check.ts`) comes with the examples, because it walks the course of the movement example. It checks the collision world, the walker (`tools/walk/walker-scenarios.ts`: wall, corner, steps, slopes, jump and ceiling, fall, thin wall, determinism, a solid that appears, CPU time), the follow camera, and the stations of the movement example's test course (`tools/walk/course-scenarios.ts` over `examples/movement/src/course.ts`, walked by the same `driveTo` as the page's `__wh.walkTo`) in plain Node, prints one line per scenario (`ok`, `FAIL`, or `slow` for a CPU-time measurement that missed its target, which does not fail the run) and exits 1 when a scenario fails or the run takes over 5 seconds. `node tools/walk/check.ts <text>` runs only the scenarios whose name contains the text.
 
 ```sh
 docker compose exec -T dev sh -c 'cd /app && pnpm check:walk'
@@ -134,13 +134,13 @@ Pictures in Docker, on the software renderer and independent of the host's graph
 `tools/shot/shader-check.mjs` compiles and links the shaders of a page in headless Chromium on the software renderer (SwiftShader), with no graphics card. The engine checks a program only on its first use, so a broken shader of a program that is made but not drawn stays silent in the browser. The tool does not rely on the page: before the page's scripts run it wraps the WebGL2 calls that make programs, and after the load it asks the context for the compile and link status of every program made. It works for any page, also one that throws on the way. In this repository it is the compose service `shaders` (profile `tools`):
 
 ```sh
-docker compose run --rm shaders                                # every example page the dev server lists, about 2 min
-docker compose run --rm shaders --pages planet,walk            # only these
+docker compose run --rm shaders                                # every example page the dev server lists, about 1 min
+docker compose run --rm shaders --pages planet,movement        # only these
 docker compose run --rm shaders --pages 'planet#strip=0'       # a page with a hash
 docker compose run --rm shaders --url http://host:port/page/   # any page by its whole address
 ```
 
-Options: `--base` (the examples' server, default `http://dev:5281`), `--pages`, `--url`, `--timeout` (page load, ms, default 300000), `--wait` (after the page is ready, ms, default 1500). A failed program prints its info log with the lines of the source it names. The last line is `shaders: N programs on M pages, K failed, E page errors`; the exit code is 1 when K or E is not 0. A full run takes about 2 minutes, most of it the `system` page (about 90 s).
+Options: `--base` (the examples' server, default `http://dev:5281`), `--pages`, `--url`, `--timeout` (one attempt at a page, ms, default 180000), `--wait` (after the page is ready, ms, default 1500). Each page runs in a browser of its own: the software renderer's GPU process is shared by the pages of one browser, and a page that draws more than it can render leaves work there that the next page would wait for (70–85 s were measured after `rivers`). Each page prints its time and phases (load, `__wh.ready`, programs read). A page that fails for a reason other than a broken shader (an exception, a console error, no program, over `--timeout`) is tried once more in a fresh browser and counts only when it fails again; a broken shader is not retried. A failed program prints its info log with the lines of the source it names. The last line is `shaders: N programs on M pages, K failed, E page errors (T s)`; the exit code is 1 when K or E is not 0. A full run takes about a minute, the `system` page about 11 s of it. CI runs it on every example page (`checks.yml`, job `shaders`).
 
 Limits: only the programs a page makes with the options it starts with are seen; a program made later, by a key or a mode, needs a `#hash` that turns it on. Contexts made in workers are not seen. The GLSL is validated by Chromium's translator (ANGLE), the same in every Chromium, but a fault of one graphics driver's own compiler cannot show. It does not judge the look.
 

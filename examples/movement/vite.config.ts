@@ -9,7 +9,7 @@ const poll = process.env.WH_POLL === '1';
 
 export default defineConfig({
   // New files are reported by a folder scan; see tools/vite/new-files.ts for why polling alone misses them. The marks'
-  // store (key N in the page) answers at /walk/__marks in the dev server only (wallhammer-web/marks-store); this
+  // store (key N in the page) answers at /movement/__marks in the dev server only (wallhammer-web/marks-store); this
   // repository keeps its marks in internal/marks/ (git ignores it), not in .marks/.
   plugins: [newFiles({ enabled: poll }), marksStore({ dir: fileURLToPath(new URL('../../internal/marks', import.meta.url)) })],
   server: {

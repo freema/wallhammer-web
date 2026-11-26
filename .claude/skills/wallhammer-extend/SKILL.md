@@ -18,14 +18,16 @@ Read the matching page first; every sample there is type-checked:
 | Simulation system, commands, movers | `packages/wallhammer-web/docs/simulation.md` |
 | Cameras, the `View` contract, input binding | `packages/wallhammer-web/docs/cameras.md` |
 | Rigs and actors (instanced, posed in the vertex shader) | `packages/wallhammer-web/docs/rigs.md` |
-| Walking: collision world, walker, follow camera | `packages/wallhammer-web/docs/walking.md` |
-| Motion: skeletons, poses, motion graph, reach | `packages/wallhammer-web/docs/motion.md` |
+| Walking: collision world, walker (momentum, slopes and speed), follow camera | `packages/wallhammer-web/docs/walking.md` |
+| A rigid body on wheel rays (tyres, brakes, hull against solids, bodies meeting) | `packages/wallhammer-web/docs/wheeled.md` |
+| Motion: skeletons, poses, motion graph, reach; a body carried at a socket of another (`SocketSeat`); steps of several legs (`StepCycle`) | `packages/wallhammer-web/docs/motion.md` |
 | Destruction | `packages/wallhammer-web/docs/destruction.md` |
 | Streaming, cell providers | `packages/wallhammer-web/docs/streaming.md` |
 | Bodies on rails, nested frames; the planet and system examples | `packages/wallhammer-web/docs/frames.md`, `planet.md`, `system.md` |
 | What runs in plain Node | `packages/wallhammer-web/docs/headless.md` |
 | Checks, golden recipes, frame profile | `packages/wallhammer-web/docs/tools.md` |
-| Worked samples of all of the above | `packages/wallhammer-web/docs/recipes.md` |
+| Worked samples of all of the above (also a wheeled body, a way of stepping, a seat of your own) | `packages/wallhammer-web/docs/recipes.md` |
+| Building a game on it: recipes by goal (a body on wheels, a body carried by another, legs that step, the follow camera for them, a walker that slows uphill) | `packages/wallhammer-web/docs/cookbook.md` |
 | Every export | `packages/wallhammer-web/docs/reference.md` |
 
 ## Placement in one minute
@@ -34,7 +36,7 @@ Read the matching page first; every sample there is type-checked:
 - WebGL only in `gpu`. DOM, the Worker API and `window` only in `platform`.
 - Engine modules outside the content modules (`gen-arch`, `gen-ground`, `gen-vegetation`) must not name a use case (city, building, roof, facade, tree, car, road, window, …) in file names, exported names or comments. Name the mechanism instead; the project gives it meaning.
 - Content (structures, ground and markings, vegetation) goes to `gen-arch`, `gen-ground` or `gen-vegetation`. They import only `base`, `core`, `gen-core`, `gen-mesh`, `gen-tex`, never each other. A module may group its files in subfolders behind one `index.ts`. In `gen-arch` they depend one way, `structure` <- `interior` <- `damage` <- root files (`build.ts`, `index.ts`): a file imports only its own subfolder and earlier ones (layer rule `subfolder-order`, table `SUBFOLDER_ORDER`).
-- The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `walk`, `outpost`, `rivers`; list `ENGINE_ONLY_EXAMPLES` in `tools/layers/check.ts`) must not import the content modules; `destruction` and `system` use `gen-arch` and `sim/destruction`.
+- The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `movement`, `outpost`, `rivers`; list `ENGINE_ONLY_EXAMPLES` in `tools/layers/check.ts`) must not import the content modules; `destruction` and `system` use `gen-arch` and `sim/destruction`.
 - Project-specific code (the data of one place, texts of a user interface, concrete people and vehicle rigs) belongs in the project that uses the engine, never in the engine. Generic developer tools of the engine (the marks panel) may carry their own English labels. An example keeps its own content in its own folder. Example code that more than one example uses goes to `examples/shared/src/` (a private workspace package without `index.html`, so it is neither listed nor built), imported by relative path with the `.ts` extension; it imports only the engine without its content modules, never an example, and its comments do not name an example (layer rule `example-imports`). Examples are private workspace packages and are never published; only `packages/wallhammer-web` is.
 - No graphics library and no loaded images: plain WebGL2, all graphics from code.
 

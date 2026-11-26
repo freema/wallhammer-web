@@ -108,7 +108,7 @@ Marks ship in the package, split by where each part runs:
 | The store | `marksStore` in `wallhammer-web/marks-store` (Node only) | A Vite dev-server plugin that keeps the marks in a folder. |
 | The command line | the package's `bin` `wallhammer-marks` (`list`, `set`) | List the marks, change a status. |
 | The ready host | `wallhammer-web/runtime` (`installEngineMarking`, `engineMarkHost`, `heightPick`, `gapPick`, `collisionPick`, `rigViewText`, `restoreRigView`) | The marks for an engine that draws through a `FreeRig`, a `FollowRig` or a `PerspectiveOrbitRig`, in one call. |
-| Pages that use it | `examples/endless`, `examples/walk`, `examples/minimal-3d`, `examples/destruction`, `examples/fantasy-village`, `examples/outpost`, `examples/rivers` (the ready host), `examples/planet/src/marks.ts` (a host of its own), `examples/system/src/marks.ts` (the ready host's `engineMarkHost` with a pick, a view and pins of its own) (in the repository, not in the package) | Key `N` in each; `K` in `system`, whose N toggles the names. |
+| Pages that use it | `examples/endless`, `examples/movement`, `examples/minimal-3d`, `examples/destruction`, `examples/fantasy-village`, `examples/outpost`, `examples/rivers` (the ready host), `examples/planet/src/marks.ts` (a host of its own), `examples/system/src/marks.ts` (the ready host's `engineMarkHost` with a pick, a view and pins of its own) (in the repository, not in the package) | Key `N` in each; `K` in `system`, whose N toggles the names. |
 
 The record types are plain data in `base`, so every layer may read them. `MarkHost` holds the page's canvas
 (`HTMLCanvasElement`) and `MarkingOptions` a key of the keyboard, so they sit in `platform` with the panel, the only
@@ -164,7 +164,7 @@ against the body the camera is near in its turning frame (the pins stay on the g
 body's pins are drawn), `clocks: false` with the page's exact time and `rate=0` in its own hash, and a `goto` that puts
 the page on the mark's body and moment before the rig is restored.
 
-The examples with marks (`planet`, `endless`, `walk`, `minimal-3d`, `destruction`, `fantasy-village`, `outpost`,
+The examples with marks (`planet`, `endless`, `movement`, `minimal-3d`, `destruction`, `fantasy-village`, `outpost`,
 `rivers`, `system`) load them only when `import.meta.env.DEV` holds, so the static build of the live demos has none of them, and a page driven by a script (`navigator.webdriver`: the picture and benchmark tools) has none unless
 its hash says `marks=1`. Pictures and golden hashes are therefore unchanged.
 

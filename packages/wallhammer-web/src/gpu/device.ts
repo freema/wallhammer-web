@@ -1192,9 +1192,9 @@ export class Device {
 
   /**
    * Overwrites an array buffer with `count` elements of `data` (floats, or bytes for a byte array), starting at the
-   * start of the buffer or `offsetBytes` into it.
+   * start of the buffer or `offsetBytes` into it. `srcOffset` skips that many elements of `data` first (default 0).
    */
-  writeBuffer(buffer: GpuBuffer, data: Float32Array | Uint8Array, count: number, offsetBytes = 0): void {
+  writeBuffer(buffer: GpuBuffer, data: Float32Array | Uint8Array, count: number, offsetBytes = 0, srcOffset = 0): void {
     // A length of 0 would mean "everything from the offset on" to WebGL.
     if (count <= 0) return;
     const gl = this.gl;
@@ -1207,11 +1207,11 @@ export class Device {
         // which matters where two of them overlap.
         const patches = (recipe.patches ??= new Map());
         patches.delete(offsetBytes);
-        patches.set(offsetBytes, new Uint8Array(data.buffer, data.byteOffset, count * data.BYTES_PER_ELEMENT).slice());
+        patches.set(offsetBytes, new Uint8Array(data.buffer, data.byteOffset + srcOffset * data.BYTES_PER_ELEMENT, count * data.BYTES_PER_ELEMENT).slice());
       }
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferSubData(gl.ARRAY_BUFFER, offsetBytes, data, 0, count);
+    gl.bufferSubData(gl.ARRAY_BUFFER, offsetBytes, data, srcOffset, count);
   }
 
   /** Unbinds the vertex array, so later buffer uploads cannot change a mesh by accident. */

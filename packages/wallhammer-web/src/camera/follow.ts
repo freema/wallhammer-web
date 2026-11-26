@@ -2,6 +2,8 @@
 // boom from the pivot back to the eye, turned by a yaw around the vertical axis and a pitch above the horizon. A
 // clearance callback (typically a collision world's sphere cast) shortens the boom at once where something stands
 // between the pivot and the eye; the boom grows back smoothly. A boom of length 0 is the view from the pivot itself.
+// The game may add framing of its own each frame (`extraBoom`, `extraPivot`) apart from the user's zoom (`distance`),
+// and may give a heading the yaw eases toward (`followHeading`), paused for a while after the user turns the view.
 // Keys, pointer and gamepad are bound by `bindWalkInput` in platform. Implements `View` for the renderer.
 //
 // Flat world only: up is +y. A curved world would take the unit up at the pivot from an up source (as `FreeRig` does)
@@ -39,6 +41,13 @@ export interface FollowSetup {
   turnPerPx: number;
   /** Smallest distance in front of the eye that counts as the centre of the view (`metresPerPixel`, `refDepth`). */
   minFocus: number;
+  /**
+   * Seconds in which the yaw closes most (95 %) of the gap to the heading given to `followHeading`; 0 turns at once.
+   * Default 1. Unused while no heading is given.
+   */
+  headingLag?: number;
+  /** Seconds the heading follow waits after the user last turned the view (`turnPixels`). Default 1. */
+  headingPause?: number;
 }
 
 export const DEFAULT_FOLLOW: FollowSetup = {
@@ -54,6 +63,8 @@ export const DEFAULT_FOLLOW: FollowSetup = {
   boomReturn: 0.3,
   turnPerPx: 0.004,
   minFocus: 2,
+  headingLag: 1,
+  headingPause: 1,
 };
 
 export interface FollowOptions {
@@ -72,7 +83,10 @@ export interface FollowState {
   pivot: Vec3;
   yawDeg: number;
   pitchDeg: number;
-  /** The wanted boom length. */
+  /**
+   * The wanted boom length the user chose (`FollowRig.distance`), without the game's `extraBoom`. The extras are not
+   * part of the state: the game sets them every frame, as it calls `follow`.
+   */
   distance: number;
   /** The boom length drawn (shortened by the clearance, or growing back). */
   boom: number;
@@ -87,8 +101,24 @@ export class FollowRig implements View {
   yawDeg = 0;
   /** Pitch in degrees; positive looks down. Kept within the setup's limits by the methods, not on assignment. */
   pitchDeg = 20;
-  /** Wanted boom length in metres; 0 is the view from the pivot. The drawn length is `boom`. */
+  /**
+   * Wanted boom length in metres, the user's own (zoom); 0 is the view from the pivot. The boom aimed for is
+   * `wantedBoom` (this plus `extraBoom`), the drawn length `boom`.
+   */
   distance = 4;
+  /**
+   * Boom length the game adds to `distance` for its framing (a larger body to see, say), metres; set it every frame
+   * as needed, 0 by default. Kept apart from the user's zoom, so taking it away gives back the user's boom exactly.
+   * The sum is kept within `max(minDistance, 0.5)` … `maxDistance`, the range widened to take in `distance` itself; at
+   * `distance` 0 (first person) it adds nothing. A negative extra shortens the boom. It is eased like any change of the wanted length: shortened at once, grown back
+   * over `boomReturn`.
+   */
+  extraBoom = 0;
+  /**
+   * Height the game adds to `pivotHeight` above the followed point, metres; 0 by default. It applies in first person
+   * too (the eye is the pivot) and moves the pivot with `followLag`, like the followed point.
+   */
+  extraPivot = 0;
   /** Shortens the boom; may be replaced at any time. */
   clearance: BoomClearance | null;
   /** Canvas size in physical pixels and physical pixels per CSS pixel. */
@@ -103,6 +133,10 @@ export class FollowRig implements View {
   private _boom = 4;
   /** False until the first `follow`: the pivot then jumps to the target instead of trailing it from the origin. */
   private placed = false;
+  /** Heading the yaw eases toward in `update`, degrees; null: none. */
+  private headingGoal: number | null = null;
+  /** Seconds since the user last turned the view (`turnPixels`). */
+  private sinceTurn = Infinity;
   private readonly scratch: OrthoFrame = { right: [0, 0, 0], up: [0, 0, 0], forward: [0, 0, 0] };
   private readonly scratchVp: OrthoFrame = { right: [0, 0, 0], up: [0, 0, 0], forward: [0, 0, 0] };
   private readonly scratchEye: Vec3 = [0, 0, 0];
@@ -123,6 +157,28 @@ export class FollowRig implements View {
     return this._boom;
   }
 
+  /**
+   * The boom length aimed for before the clearance: `distance` plus `extraBoom`, within `max(minDistance, 0.5)` …
+   * `maxDistance` (the range widened to take in `distance`); exactly `distance` while `extraBoom` is 0, and 0 in first
+   * person.
+   */
+  get wantedBoom(): number {
+    const d = this.distance;
+    if (d <= 0 || this.extraBoom === 0) return d;
+    const s = this.setup;
+    const lo = Math.min(d, Math.max(s.minDistance, SNAP_TO_PIVOT));
+    return clamp(d + this.extraBoom, lo, Math.max(s.maxDistance, d));
+  }
+
+  /**
+   * Gives the heading the view's yaw eases toward from the next `update`, in degrees as `yawDeg` (a body's heading),
+   * or null to stop. The yaw closes 95 % of the gap in `headingLag` seconds the short way round, and waits
+   * `headingPause` seconds after the user last turned the view (`turnPixels`). Kept until changed: give it every frame
+   * the heading moves. Nothing follows by default.
+   */
+  followHeading(yawDeg: number | null): void {
+    this.headingGoal = yawDeg !== null && Number.isFinite(yawDeg) ? yawDeg : null;
+  }
   /** Sets the followed point (the walker's render position). The first call places the pivot there at once. */
   follow(x: number, y: number, z: number): void {
     const t = this.target;
@@ -138,9 +194,9 @@ export class FollowRig implements View {
     const t = this.target;
     // up: the pivot height would be laid along the local up.
     this.pivot[0] = t[0];
-    this.pivot[1] = t[1] + this.setup.pivotHeight;
+    this.pivot[1] = t[1] + (this.setup.pivotHeight + this.extraPivot);
     this.pivot[2] = t[2];
-    this._boom = this.reach(this.distance);
+    this._boom = this.reach(this.wantedBoom);
   }
 
   /** The view as numbers (copies), for `setState`. */
@@ -153,7 +209,8 @@ export class FollowRig implements View {
   /**
    * Puts the view at a state as it is, without smoothing and without asking the clearance (a recorded view comes back
    * bit for bit). Left-out parts keep their values; without `boom` the boom gets the length the clearance allows for
-   * `distance`. The followed point is the caller's: the next `follow` and `update` move the view on from here.
+   * `wantedBoom`. The followed point and the extras are the caller's: the next `follow` and `update` move the view on
+   * from here.
    */
   setState(s: Partial<FollowState>): void {
     if (s.target) {
@@ -170,22 +227,34 @@ export class FollowRig implements View {
       this.pivot[2] = s.pivot[2];
     }
     if (s.target || s.pivot) this.placed = true;
-    this._boom = s.boom ?? this.reach(this.distance);
+    this._boom = s.boom ?? this.reach(this.wantedBoom);
   }
 
-  /** Smooths the pivot and shortens the boom by `clearance`; call once per frame with the real seconds since the last. */
+  /**
+   * Eases the yaw toward the heading of `followHeading` (if any), smooths the pivot and shortens the boom by
+   * `clearance`; call once per frame with the real seconds since the last.
+   */
   update(dt: number): void {
     const s = this.setup;
     const t = this.target;
     const p = this.pivot;
     const step = Math.max(0, dt);
+    this.sinceTurn += step;
+    if (this.headingGoal !== null && this.sinceTurn >= (s.headingPause ?? 1)) {
+      let d = this.headingGoal - this.yawDeg;
+      d -= Math.round(d / 360) * 360;
+      const lag = s.headingLag ?? 1;
+      this.yawDeg += lag > 0 ? d * (1 - Math.exp((-3 * step) / lag)) : d;
+      if (this.yawDeg > 180) this.yawDeg -= 360;
+      else if (this.yawDeg < -180) this.yawDeg += 360;
+    }
     // 1 − e^(−3 t / lag) closes 95 % of the gap in `lag` seconds, whatever the frame rate.
     const k = s.followLag > 0 ? 1 - Math.exp((-3 * step) / s.followLag) : 1;
     // up: the pivot height would be laid along the local up.
     p[0] += (t[0] - p[0]) * k;
-    p[1] += (t[1] + s.pivotHeight - p[1]) * k;
+    p[1] += (t[1] + (s.pivotHeight + this.extraPivot) - p[1]) * k;
     p[2] += (t[2] - p[2]) * k;
-    const want = this.reach(this.distance);
+    const want = this.reach(this.wantedBoom);
     if (want <= this._boom) this._boom = want;
     else {
       const g = s.boomReturn > 0 ? 1 - Math.exp((-3 * step) / s.boomReturn) : 1;
@@ -206,8 +275,12 @@ export class FollowRig implements View {
     return Number.isFinite(r) ? clamp(r, 0, wanted) : wanted;
   }
 
-  /** Turns by pointer movement in physical pixels: right turns the view right, down turns it down. */
+  /**
+   * Turns by pointer movement in physical pixels: right turns the view right, down turns it down. A turn restarts the
+   * pause of the heading follow (`headingPause`).
+   */
   turnPixels(dx: number, dy: number): void {
+    if (dx !== 0 || dy !== 0) this.sinceTurn = 0;
     const k = this.setup.turnPerPx / this.dpr / DEG;
     this.yawDeg -= dx * k;
     // Keep the heading within ±180° so the key stays short and comparable.
@@ -217,7 +290,8 @@ export class FollowRig implements View {
   }
 
   /**
-   * Multiplies the wanted boom length (below 1 comes closer), within `minDistance` … `maxDistance`. With
+   * Multiplies the user's wanted boom length `distance` (below 1 comes closer; `extraBoom` is not scaled), within
+   * `minDistance` … `maxDistance`. With
    * `minDistance` 0 a boom shorter than half a metre becomes 0, the view from the pivot; zooming out from 0 starts at
    * `max(minDistance, 0.5)`.
    */

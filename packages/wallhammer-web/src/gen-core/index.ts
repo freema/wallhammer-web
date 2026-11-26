@@ -1,6 +1,6 @@
 // Layer 2, gen-core: stateless randomness with named streams, value noise, planar polygon geometry and the spatial
 // structures generators query (height field, distance fields, occupancy grid), and the split of instance streams into
-// thinned cells, and a field of moving waves. Pure, run anywhere.
+// thinned cells, a field of moving waves, and the ring of one-shot particle bursts. Pure, run anywhere.
 
 export { hashInt, hashInts, hashString, mix32, pickWeighted, rand, randRange, streamSeed, unit } from './hash.ts';
 export { valueNoise2 } from './noise.ts';
@@ -28,3 +28,5 @@ export { NearSquareGrid, nearLatticeValue, nearPatch, nearSlopeDeg, newNearPatch
 export type { NearPatchPoint, NearSquare, NearSquareGridOptions } from './near-squares.ts';
 export { WAVES_GLSL, WAVE_GRAVITY, WAVE_TRAINS_MAX, waveDisplace, waveFade, waveHeight, waveNormal, waveTrains, waveUniforms, waveUnresolved } from './waves.ts';
 export type { WaveFieldOptions, WaveTrain } from './waves.ts';
+export { PARTICLE_FLOATS, ParticleBurstRing } from './particle-burst.ts';
+export type { ParticleBurst } from './particle-burst.ts';

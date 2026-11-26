@@ -12,6 +12,8 @@ import { matrixQuat, nlerpFrom } from './quat.ts';
 import { reachTwoBone } from './reach.ts';
 import type { TwoBoneChain } from './reach.ts';
 import type { Pose, Skeleton } from './skeleton.ts';
+import { socketTransform, transformRotation } from './socket.ts';
+import type { Socket } from './socket.ts';
 
 export interface TwoBoneReachOptions {
   /**
@@ -26,6 +28,7 @@ export interface TwoBoneReachOptions {
 const SOFT_TARGET = new Float64Array(3);
 const OLD = new Float64Array(4);
 const PARENT = new Float64Array(4);
+const AT = new Float64Array(12);
 
 /** A two-bone chain reaching for a moving target, its weight eased in and out. */
 export class TwoBoneReach {
@@ -70,6 +73,20 @@ export class TwoBoneReach {
     this.target[0] = x;
     this.target[1] = y;
     this.target[2] = z;
+  }
+
+  /**
+   * Target and end rotation from a socket of a solved body (`world`, 12 numbers per bone, solved in the same frame as
+   * this chain's body; another body or this one): the target is the socket's point, `endRotation` its turn (the
+   * rotation of its proper part when it is mirrored). The end rotation is applied only while `useEndRotation` is true;
+   * set it to make the end bone take the socket's turn. Call it every frame after the socket's body is solved.
+   */
+  setTargetSocket(world: ArrayLike<number>, socket: Socket): void {
+    socketTransform(world, socket, AT);
+    this.target[0] = AT[9]!;
+    this.target[1] = AT[10]!;
+    this.target[2] = AT[11]!;
+    transformRotation(AT, this.endRotation);
   }
 
   /** Advances the weight by `dt` seconds. */

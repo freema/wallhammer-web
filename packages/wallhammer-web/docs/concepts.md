@@ -84,6 +84,8 @@ The loop draws on demand. It runs continuously only while the simulation or an e
 
 The simulation never reads anything the image side owns. The image side reads the simulation only in extraction hooks.
 
+A body of its own rate (a `Walker`, a `WheeledBody`, a `WheeledGroup`) takes its steps from the frame's seconds through `FixedSteps` (`wallhammer-web/core`): the seconds add up, as many whole steps run as are due (at most `maxSteps`; the rest of a longer pause is dropped), the rest carries over, and `alpha` is the share of the way to the next step for drawing. Frames of 1/30 s and of 1/60 s run the same steps. A game's own fixed-rate system uses one too: `fixed.advance(dt, step)`.
+
 ## 3 × 4 matrices
 
 An affine transform (rotation, scale, shear, then translation) on the CPU is a `Mat34` of `wallhammer-web/base`: 12

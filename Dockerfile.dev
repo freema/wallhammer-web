@@ -14,12 +14,12 @@ RUN mkdir -p /app/node_modules \
              /app/examples/endless/node_modules \
              /app/examples/fantasy-village/node_modules \
              /app/examples/minimal-3d/node_modules \
+             /app/examples/movement/node_modules \
              /app/examples/outpost/node_modules \
              /app/examples/planet/node_modules \
              /app/examples/rivers/node_modules \
              /app/examples/shared/node_modules \
              /app/examples/system/node_modules \
-             /app/examples/walk/node_modules \
              /pnpm-store \
     && chown -R node:node /app /pnpm-store
 WORKDIR /app

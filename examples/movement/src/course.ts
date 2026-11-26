@@ -4,15 +4,40 @@
 //
 // Layout: a 120 × 120 m square, nine pads of 28 × 28 m on a 3 × 3 grid (centres at 20, 60 and 100 m), the start in
 // the middle. Ramps and the pit are shapes of the base surface; everything else is a solid. The square is fenced by
-// invisible limits (`blocksSight: false`).
+// invisible limits (`blocksSight: false`). Round it lies open land `OUTER_M` wide (`outerField`: meadows rising to low
+// hills at its rim), drawn and part of the base surface, to fly over: the glider's flight range (`FLIGHT_AREA`), whose
+// fence stops a body on the ground but not the glider in the air.
+//
+// Surfaces: the base surface is grass, except a patch of loose ground across the start pad in front of the start
+// (`LOOSE_PATCHES`), where feet and hooves leave deeper prints and wheels ruts, and hooves at a trot or a gallop and
+// wheels kick up dust. The collision world reports it as a surface tag (`SURFACE`); the solids keep their station's
+// index as their tag.
 
 import { HeightField, streamSeed, valueNoise2 } from 'wallhammer-web/gen-core';
 import { CollisionWorld } from 'wallhammer-web/world';
 
 /** Edge of the square, metres. */
 export const COURSE_SIZE_M = 120;
+/** Height above the highest ground at which the glider's lift has faded out (its `ceilingY`), m. */
+export const FLIGHT_CEILING_M = 30;
 /** Grid step of the base surface, metres. */
 export const GROUND_STEP_M = 0.5;
+/** Width of the open land round the square, m, and the grid step of its height field (a divisor of it and the edge). */
+export const OUTER_M = 402;
+export const OUTER_STEP_M = 6;
+
+/**
+ * The glider's flight range (examples/movement/src/glide.ts `FlightArea`): it lands and is left only on the square;
+ * its fence does not stop it in the air; `soft` m beyond the square the assist starts turning it back, fully `band` m
+ * farther; outside the square it keeps `floor` m over the ground.
+ */
+export const FLIGHT_AREA = {
+  home: [0, 0, COURSE_SIZE_M, COURSE_SIZE_M] as const,
+  fenceTag: 100,
+  soft: 60,
+  band: 70,
+  floor: 6,
+} as const;
 
 export type StationId = 'start' | 'walls' | 'pillars' | 'steps' | 'ramps' | 'platforms' | 'passages' | 'thin-wall' | 'footbridge';
 
@@ -128,10 +153,55 @@ export function courseField(seed: number): HeightField {
   return new HeightField(GROUND_STEP_M, n, n, heights);
 }
 
+/**
+ * The open land round the square: `OUTER_M` wide on every side, at the square's edge as high as its ground and over
+ * 30 m away rolling meadows, rising by up to 10 m to low hills toward the rim. Its grid starts at −`OUTER_M` (x and
+ * z); under the square it lies 3 m below the lowest ground there (hidden, the square's own field is used).
+ */
+export function outerField(seed: number, field: HeightField): HeightField {
+  const s = streamSeed(`walk-${seed}`, 'outer');
+  const e = COURSE_SIZE_M;
+  const n = Math.round((e + 2 * OUTER_M) / OUTER_STEP_M) + 1;
+  const heights = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const x = i * OUTER_STEP_M - OUTER_M;
+      const z = j * OUTER_STEP_M - OUTER_M;
+      const dx = Math.max(-x, 0, x - e), dz = Math.max(-z, 0, z - e);
+      const d = Math.sqrt(dx * dx + dz * dz);
+      let h: number;
+      if (d === 0 && x > 0 && x < e && z > 0 && z < e) h = field.minY - 3;
+      else {
+        const edge = field.heightAt(Math.min(Math.max(x, 0), e), Math.min(Math.max(z, 0), e));
+        const rolling = 4 * (0.65 * valueNoise2(x, z, 70, s) + 0.35 * valueNoise2(x, z, 27, s + 1) - 0.5);
+        const rim = 10 * smooth(120, 380, d) * (0.6 + 0.4 * valueNoise2(x, z, 90, s + 2));
+        const k = smooth(0, 30, d);
+        h = edge * (1 - k) + (rolling + rim) * k;
+      }
+      heights[j * n + i] = h;
+    }
+  }
+  return new HeightField(OUTER_STEP_M, n, n, heights);
+}
+
+// --- Surfaces of the base ---------------------------------------------------------------------------------------------
+
+/** Surface tags of the base surface (the solids' tags are their stations' indices, below 100, and `LIMIT_TAG`). */
+export const SURFACE = { grass: 200, loose: 201 } as const;
+
+/** Patches of loose ground: minX, minZ, maxX, maxZ. One across the start pad in front of the start. */
+export const LOOSE_PATCHES: readonly (readonly [number, number, number, number])[] = [[47, 46.5, 73, 54]];
+
+/** The surface tag of the base surface at (x, z). */
+export function surfaceAt(x: number, z: number): number {
+  for (const r of LOOSE_PATCHES) if (x >= r[0] && x <= r[2] && z >= r[1] && z <= r[3]) return SURFACE.loose;
+  return SURFACE.grass;
+}
+
 // --- Solids ------------------------------------------------------------------------------------------------------------
 
 /** Tag of a solid: the index of its station in STATIONS, or LIMIT_TAG for the invisible fence. */
-export const LIMIT_TAG = 100;
+export const LIMIT_TAG = FLIGHT_AREA.fenceTag;
 
 /** Pillars: centres along x at z = 20, radius 0.3 m, and the gap after each (between surfaces). */
 export const PILLAR_RADIUS_M = 0.3;
@@ -161,6 +231,8 @@ export const PLATFORM_Z: readonly [number, number] = [96, 100];
 export interface Course {
   seed: number;
   field: HeightField;
+  /** The open land round the square (`outerField`), its grid from −`OUTER_M`. */
+  outer: HeightField;
   world: CollisionWorld;
   /** Start: x, z and heading. */
   start: readonly [number, number, number];
@@ -169,11 +241,14 @@ export interface Course {
 /** The whole course from the seed: the base surface and every solid. */
 export function buildCourse(seed: number): Course {
   const field = courseField(seed);
+  const outer = outerField(seed, field);
+  const e = COURSE_SIZE_M;
   const world = new CollisionWorld({
-    heightAt: (x, z) => field.heightAt(x, z),
-    baseMinY: field.minY,
-    baseMaxY: field.maxY,
-    baseExtent: [0, 0, COURSE_SIZE_M, COURSE_SIZE_M],
+    heightAt: (x, z) => (x >= 0 && x <= e && z >= 0 && z <= e ? field.heightAt(x, z) : outer.heightAt(x + OUTER_M, z + OUTER_M)),
+    baseMinY: Math.min(field.minY, outer.minY),
+    baseMaxY: Math.max(field.maxY, outer.maxY),
+    baseExtent: [-OUTER_M, -OUTER_M, e + OUTER_M, e + OUTER_M],
+    baseTagAt: surfaceAt,
   });
   const tag = (id: StationId): number => STATIONS.findIndex((s) => s.id === id);
 
@@ -214,16 +289,16 @@ export function buildCourse(seed: number): Course {
   // The footbridge: a plank 1.2 m wide over the pit, its top level with the ground on both sides.
   world.addBox(20, 60, 7, 0.6, 0, -0.2, 0, { tag: tag('footbridge') });
 
-  // Invisible limits round the square, 1 m inside its edge.
+  // Invisible limits round the square, 1 m inside its edge, high enough for the glider (it cannot climb past
+  // `FLIGHT_CEILING_M` above the highest ground).
   const limit = { standable: false, blocksSight: false, tag: LIMIT_TAG };
   const lo = field.minY - 5;
-  const hi = field.maxY + 10;
-  const e = COURSE_SIZE_M;
+  const hi = field.maxY + FLIGHT_CEILING_M + 30;
   world.addBox(e / 2, 0.75, e / 2, 0.25, 0, lo, hi, limit);
   world.addBox(e / 2, e - 0.75, e / 2, 0.25, 0, lo, hi, limit);
   world.addBox(0.75, e / 2, 0.25, e / 2, 0, lo, hi, limit);
   world.addBox(e - 0.75, e / 2, 0.25, e / 2, 0, lo, hi, limit);
 
   const st = STATIONS[0]!.spot;
-  return { seed, field, world, start: [st[0], st[1], st[2]] };
+  return { seed, field, outer, world, start: [st[0], st[1], st[2]] };
 }

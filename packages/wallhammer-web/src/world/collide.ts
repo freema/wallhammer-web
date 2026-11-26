@@ -31,6 +31,11 @@ export interface CollisionWorldOptions {
    * which takes milliseconds); pass a finite `maxT` or this extent for endless rays.
    */
   baseExtent?: readonly [number, number, number, number];
+  /**
+   * Surface tag of the base surface at a point: a small integer the game gives meaning to (what the ground is made of,
+   * how it marks or dusts), reported by `groundTagAt` and in ray hits on the base. Default: −1 everywhere.
+   */
+  baseTagAt?(x: number, z: number): number;
 }
 
 export interface SolidOptions {
@@ -42,13 +47,30 @@ export interface SolidOptions {
   tag?: number;
 }
 
-/** A ray hit: parameter `t` along the ray, the point, the unit normal (turned against the ray), the solid id and its tag (both −1 for the base surface). */
+/**
+ * A ray hit: parameter `t` along the ray, the point, the unit normal (turned against the ray), the solid id (−1 for the
+ * base surface) and its tag (for the base surface the `baseTagAt` of the world's options there, −1 without it).
+ */
 export interface RayHit { t: number; x: number; y: number; z: number; nx: number; ny: number; nz: number; solid: number; tag: number }
 
 /** Result of `slide`: the reached centre, whether a side was touched, the last contact normal (unit, horizontal) and that solid (−1: none). */
 export interface SlideResult { x: number; z: number; hit: boolean; nx: number; nz: number; solid: number }
 
 /** A read-only description of one solid, for debug drawing (`forEachSolid`). */
+/** The body `CollisionWorld.standSpot` and `firstStandSpot` fit: an upright cylinder and its limits. */
+export interface StandSpotOptions {
+  /** Radius of the body's cylinder, m. */
+  radius: number;
+  /** Height of the cylinder from its feet, m. */
+  height: number;
+  /** The step the body climbs: solids lower than this over the feet do not block the way. */
+  maxStepUp: number;
+  /** Most the ground at the spot may lie above or below the given level, m. Default `maxStepUp`. */
+  maxRise?: number;
+  /** Farthest the cylinder may end from the spot after sliding there, m. Default 0.02. */
+  tolerance?: number;
+}
+
 export interface SolidInfo {
   kind: 'prism' | 'cylinder';
   /** Prism: the outline as x, z pairs (do not change it). Cylinder: null. */
@@ -62,6 +84,26 @@ export interface SolidInfo {
   standable: boolean;
   blocksSight: boolean;
   tag: number;
+}
+
+/**
+ * Result of `sphereContacts`: `count` contacts, each a depth (metres, positive: how far the sphere reaches in), the
+ * unit normal that leads the sphere out (x, y, z) and the solid's id (−1 for the base surface). Arrays of a fixed
+ * capacity, reused from call to call.
+ */
+export interface SphereContacts {
+  count: number;
+  readonly depth: Float64Array;
+  readonly nx: Float64Array;
+  readonly ny: Float64Array;
+  readonly nz: Float64Array;
+  readonly solid: Int32Array;
+}
+
+/** A fresh `SphereContacts` holding at most `capacity` contacts (allocate once, reuse). */
+export function newSphereContacts(capacity = 8): SphereContacts {
+  const n = capacity > 0 ? Math.floor(capacity) : 1;
+  return { count: 0, depth: new Float64Array(n), nx: new Float64Array(n), ny: new Float64Array(n), nz: new Float64Array(n), solid: new Int32Array(n) };
 }
 
 /** A fresh `RayHit` to pass to `raycast` (allocate once, reuse). */
@@ -112,6 +154,7 @@ function cellKeyOf(i: number, j: number): number {
 export class CollisionWorld {
   readonly cellSize: number;
   private readonly heightAt: (x: number, z: number) => number;
+  private readonly baseTag: ((x: number, z: number) => number) | null;
   private readonly baseMinY: number;
   private readonly baseMaxY: number;
   private readonly baseStep: number;
@@ -155,9 +198,13 @@ export class CollisionWorld {
   private pz = 0;
   private readonly normal = new Float64Array(3);
   private readonly rayScratch: RayHit = newRayHit();
+  /** The solid whose top the last `groundAt` returned, −1 the base. */
+  private groundSolid = -1;
+  private readonly standSlide: SlideResult = newSlideResult();
 
   constructor(options: CollisionWorldOptions) {
     this.heightAt = options.heightAt;
+    this.baseTag = options.baseTagAt ? (x, z) => options.baseTagAt!(x, z) : null;
     this.cellSize = options.cellSize ?? 8;
     if (!(this.cellSize > 0)) throw new Error('CollisionWorld: cellSize must be positive');
     this.baseMinY = options.baseMinY ?? -Infinity;
@@ -249,6 +296,158 @@ export class CollisionWorld {
     this.live--;
   }
 
+  /**
+   * Moves and turns a box in place, keeping its id, tag and options: the solid must be a prism of four corners (one
+   * made by `addBox`). The arguments are those of `addBox`. For a solid that moves every step (the hull of a moving
+   * body as an obstacle for walkers); the grid lists are updated as by a removal and an addition, the id stays.
+   */
+  setBox(id: number, x: number, z: number, halfX: number, halfZ: number, yawRad: number, minY: number, maxY: number): void {
+    if (!(id >= 0 && id < this.kind.length) || this.kind[id] !== KIND_PRISM || this.rings[id]![0]!.length !== 8) {
+      throw new Error('CollisionWorld.setBox: not a box (a prism of four corners)');
+    }
+    if (!(maxY > minY)) throw new Error('CollisionWorld: maxY must be above minY');
+    if (!(halfX > 0) || !(halfZ > 0)) throw new Error('CollisionWorld.setBox: half extents must be positive');
+    const keys = this.cellsOf[id]!;
+    for (const key of keys) {
+      const list = this.cells.get(key);
+      if (!list) continue;
+      const at = list.indexOf(id);
+      if (at >= 0) list.splice(at, 1);
+      if (list.length === 0) this.cells.delete(key);
+    }
+    const sc = detSinCos(yawRad);
+    const s = sc[0];
+    const c = sc[1];
+    const ax = halfX * c;
+    const az = -halfX * s;
+    const bx = halfZ * s;
+    const bz = halfZ * c;
+    const ring = this.rings[id]![0]!;
+    ring[0] = x - ax - bx;
+    ring[1] = z - az - bz;
+    ring[2] = x + ax - bx;
+    ring[3] = z + az - bz;
+    ring[4] = x + ax + bx;
+    ring[5] = z + az + bz;
+    ring[6] = x - ax + bx;
+    ring[7] = z - az + bz;
+    let a = Infinity;
+    let b = -Infinity;
+    let cz = Infinity;
+    let d = -Infinity;
+    for (let i = 0; i < 8; i += 2) {
+      a = Math.min(a, ring[i]!);
+      b = Math.max(b, ring[i]!);
+      cz = Math.min(cz, ring[i + 1]!);
+      d = Math.max(d, ring[i + 1]!);
+    }
+    const g = this.cellSize;
+    if (Math.floor(a / g) < -GRID_OFFSET || Math.floor(cz / g) < -GRID_OFFSET || Math.floor(b / g) >= GRID_OFFSET || Math.floor(d / g) >= GRID_OFFSET) {
+      throw new Error('CollisionWorld: solid outside the grid range');
+    }
+    if (a < this.sx0) this.sx0 = a;
+    if (b > this.sx1) this.sx1 = b;
+    if (cz < this.sz0) this.sz0 = cz;
+    if (d > this.sz1) this.sz1 = d;
+    this.x0[id] = a;
+    this.x1[id] = b;
+    this.z0[id] = cz;
+    this.z1[id] = d;
+    this.lowY[id] = minY;
+    this.highY[id] = maxY;
+    this.orient[id] = ringSignedArea(ring) > 0 ? 1 : -1;
+    this.register(id);
+  }
+
+  /**
+   * Where a sphere overlaps the base surface and the solids, into `out` (at most its capacity; returns the count): one
+   * contact for the base surface when the sphere reaches below it (solid −1; the depth measured along the base's
+   * normal) and one per overlapping solid, with the depth and the unit normal that leads the sphere out the shortest
+   * way (a side, a top, an underside or a rounded edge between them). Every solid takes part whatever its options,
+   * except those whose tag equals `skipTag` (default none). Allocates nothing.
+   */
+  sphereContacts(x: number, y: number, z: number, radius: number, out: SphereContacts, skipTag = Number.NaN): number {
+    const cap = out.depth.length;
+    let n = 0;
+    // UP: the base and the vertical span would be measured along the local up.
+    const h = this.heightAt(x, z);
+    if (y - h < radius) {
+      const e = BASE_NORMAL_EPS;
+      const gx = (this.heightAt(x + e, z) - this.heightAt(x - e, z)) / (2 * e);
+      const gz = (this.heightAt(x, z + e) - this.heightAt(x, z - e)) / (2 * e);
+      const len = Math.sqrt(gx * gx + 1 + gz * gz);
+      const dist = (y - h) / len;
+      if (dist < radius) {
+        out.depth[0] = radius - dist;
+        out.nx[0] = -gx / len;
+        out.ny[0] = 1 / len;
+        out.nz[0] = -gz / len;
+        out.solid[0] = -1;
+        n = 1;
+      }
+    }
+    const m = this.gather(x - radius, z - radius, x + radius, z + radius);
+    for (let k = 0; k < m && n < cap; k++) {
+      const id = this.cand[k]!;
+      if (this.tagOf[id] === skipTag) continue;
+      const low = this.lowY[id]!;
+      const high = this.highY[id]!;
+      if (y - radius >= high || y + radius <= low) continue;
+      const dh = this.nearest(id, x, z);
+      if (dh >= radius) continue;
+      let depth: number;
+      let nx = 0;
+      let ny = 0;
+      let nz = 0;
+      if (dh > 0) {
+        const dv = y > high ? y - high : y < low ? y - low : 0;
+        if (dv === 0) {
+          depth = radius - dh;
+          nx = this.dirX;
+          nz = this.dirZ;
+        } else {
+          const dist = Math.sqrt(dh * dh + dv * dv);
+          if (dist >= radius) continue;
+          depth = radius - dist;
+          nx = (this.dirX * dh) / dist;
+          ny = dv / dist;
+          nz = (this.dirZ * dh) / dist;
+        }
+      } else if (y >= high) {
+        depth = radius - (y - high);
+        ny = 1;
+      } else if (y <= low) {
+        depth = radius - (low - y);
+        ny = -1;
+      } else {
+        // The centre is inside: out by the shortest of the side, the top and the underside.
+        const side = -dh;
+        const up = high - y;
+        const down = y - low;
+        if (side <= up && side <= down) {
+          depth = side + radius;
+          nx = this.dirX;
+          nz = this.dirZ;
+        } else if (up <= down) {
+          depth = up + radius;
+          ny = 1;
+        } else {
+          depth = down + radius;
+          ny = -1;
+        }
+      }
+      if (!(depth > CONTACT_EPS)) continue;
+      out.depth[n] = depth;
+      out.nx[n] = nx;
+      out.ny[n] = ny;
+      out.nz[n] = nz;
+      out.solid[n] = id;
+      n++;
+    }
+    out.count = n;
+    return n;
+  }
+
   /** Height of the base surface at a point (the `heightAt` the world was made with). */
   baseHeightAt(x: number, z: number): number {
     // UP: the height would be measured along the local up.
@@ -323,14 +522,35 @@ export class CollisionWorld {
     let best = this.heightAt(x, z);
     const limit = y + maxStepUp;
     const n = this.gather(x - radius, z - radius, x + radius, z + radius);
+    let from = -1;
     for (let k = 0; k < n; k++) {
       const id = this.cand[k]!;
       if ((this.flag[id]! & F_STANDABLE) === 0) continue;
       const top = this.highY[id]!;
       if (top > limit || top <= best) continue;
-      if (this.nearest(id, x, z) <= radius) best = top;
+      if (this.nearest(id, x, z) <= radius) {
+        best = top;
+        from = id;
+      }
     }
+    this.groundSolid = from;
     return best;
+  }
+
+  /**
+   * Surface tag of the ground `groundAt` finds with the same arguments: the tag of the standable solid whose top it is,
+   * or the base surface's (`baseTagAt` of the options, −1 without it). For a ground contact (a foot put down, a wheel
+   * rolling) the game reads what the ground is made of here.
+   */
+  groundTagAt(x: number, z: number, y: number, maxStepUp: number, radius = 0): number {
+    this.groundAt(x, z, y, maxStepUp, radius);
+    const id = this.groundSolid;
+    return id >= 0 ? this.tagOf[id]! : this.baseTag ? this.baseTag(x, z) : -1;
+  }
+
+  /** Surface tag of the base surface at a point (`baseTagAt` of the options, −1 without it), whatever stands on it. */
+  baseTagAt(x: number, z: number): number {
+    return this.baseTag ? this.baseTag(x, z) : -1;
   }
 
   /**
@@ -347,6 +567,45 @@ export class CollisionWorld {
       if (this.nearest(id, x, z) <= radius) best = low;
     }
     return best;
+  }
+
+  /**
+   * Whether a standing body fits at the spot (tx, tz): its cylinder (`radius`, from `y + maxStepUp` to `y + height`)
+   * moved there from (sx, sz) is not stopped by a solid and ends within `tolerance` of the spot, and the ground there
+   * lies within `maxRise` of `y`. Returns that ground's height, or NaN when the body does not fit. A start inside a
+   * solid is pushed out first, so start just outside the body it leaves (a wall beyond then shows). `y` is the level
+   * the body stands at now (or the ground of what it leaves). Nothing allocates.
+   */
+  standSpot(sx: number, sz: number, tx: number, tz: number, y: number, o: StandSpotOptions): number {
+    const out = this.slide(sx, sz, o.radius, y + o.maxStepUp, y + o.height, tx - sx, tz - sz, this.standSlide);
+    const ex = out.x - tx, ez = out.z - tz;
+    const tol = o.tolerance ?? 0.02;
+    if (out.hit || ex * ex + ez * ez > tol * tol) return NaN;
+    const rise = o.maxRise ?? o.maxStepUp;
+    const g = this.groundAt(tx, tz, y, rise);
+    const d = g - y;
+    return d <= rise && d >= -rise ? g : NaN;
+  }
+
+  /**
+   * The first of several candidate spots where a standing body fits (`standSpot`): `spots` holds four numbers per
+   * candidate, the start of the way (x, z) and the spot (x, z), tried in order. Returns the candidate's index, or −1
+   * when none fits; `out`, when given, gets the spot and its ground (x, y, z).
+   */
+  firstStandSpot(spots: ArrayLike<number>, y: number, o: StandSpotOptions, out?: { [i: number]: number }): number {
+    const n = (spots.length / 4) | 0;
+    for (let i = 0; i < n; i++) {
+      const tx = spots[i * 4 + 2]!, tz = spots[i * 4 + 3]!;
+      const g = this.standSpot(spots[i * 4]!, spots[i * 4 + 1]!, tx, tz, y, o);
+      if (g !== g) continue;
+      if (out) {
+        out[0] = tx;
+        out[1] = g;
+        out[2] = tz;
+      }
+      return i;
+    }
+    return -1;
   }
 
   /**
@@ -483,7 +742,7 @@ export class CollisionWorld {
     out.ny = ny;
     out.nz = nz;
     out.solid = hit;
-    out.tag = hit >= 0 ? this.tagOf[hit]! : -1;
+    out.tag = hit >= 0 ? this.tagOf[hit]! : this.baseTag ? this.baseTag(out.x, out.z) : -1;
     return true;
   }
 

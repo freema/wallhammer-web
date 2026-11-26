@@ -356,7 +356,7 @@ Rules:
 
 ## Add an animated rig
 
-Where: the app, for example in one folder of its own (`examples/walk/src/` and `examples/outpost/src/` have theirs). A rig is plain data; the layer animates it.
+Where: the app, for example in one folder of its own (`examples/movement/src/` and `examples/outpost/src/` have theirs). A rig is plain data; the layer animates it.
 
 ```ts
 import type { RigDesc, RigPart } from 'wallhammer-web/base';
@@ -378,6 +378,93 @@ export function handcartRig(): RigDesc {
 2. Give every wheel `spin` with its radius as `amount`, so it rolls without slipping at any speed.
 3. Draw it with `RigLayer.addKind(rig, capacity)` and records from `extractPose` ([Rigs](rigs.md#drawing-instances)).
 4. Pin it with a golden recipe that hashes `rigMesh(desc, false)` and `rigMesh(desc, true)` from `gen-mesh`, as the `gen-actor rigs` entry does.
+
+## Add a wheeled body of your own
+
+Where: the app (the examples keep theirs in `examples/shared/src/vehicles/`). A `WheeledBody` is numbers: a box of mass, a hull and a list of wheels. `fourWheels` makes the usual four; any other count is a list of `WheelSpec`s. Driving it, drawing it and the camera: [Cookbook](cookbook.md#a-body-on-wheels).
+
+<!-- check: wrap -->
+```ts
+import { CollisionWorld, DEFAULT_WHEELED_BODY, WheeledBody } from 'wallhammer-web/world';
+import type { WheelSpec } from 'wallhammer-web/world';
+declare const world: CollisionWorld;
+
+/** A long hauler on six wheels: the front pair steers, the four behind drive and hold the handbrake. */
+function haulerWheels(): WheelSpec[] {
+  const wheel = { radius: 0.45, restLength: 0.4, travel: 0.25, stiffness: 90000, damping: 7000, grip: 1 };
+  const out: WheelSpec[] = [];
+  for (const z of [-2.6, 1.2, 2.6]) {
+    for (const x of [-1.05, 1.05]) out.push({ ...wheel, x, y: 0, z, steers: z < 0, driven: z > 0, handbrake: z > 0 });
+  }
+  return out;
+}
+
+const hauler = new WheeledBody(world, {
+  mass: 6000, halfWidth: 1.2, halfHeight: 1.2, halfLength: 3.6, hullY: 0.5,
+  wheels: haulerWheels(),
+  driveForce: 14000, topSpeed: 28, brakeForce: 50000, maxSteer: 0.5, steerFallSpeed: 10,
+});
+console.log(hauler.stateBytes, DEFAULT_WHEELED_BODY.mass);
+```
+
+- The frame: origin at the centre of mass, +x right, +y up, −z forward; mounts are in it. Draw the hull mesh round the same origin.
+- The mass, the box and the wheels are fixed at construction; the drive, brakes, tyres and steering change with `retune` ([Tuning](wheeled.md#tuning)).
+- A sled or a trolley is the same body with no driven wheels. Each spring carries mass × gravity / wheels at rest: keep that over `stiffness` well below `travel`, or a heavy body sits on its bump stops (`restHeight` gives the height it rests at).
+- Measure what the numbers give (0–100 km/h, stopping distance, turning circle) in a headless script of fixed steps, as `pnpm check:walk` does for the default body ([Wheeled body](wheeled.md)).
+
+## Add a way of stepping
+
+Where: the app, with the figure whose legs step (the examples' steed keeps its patterns in `examples/shared/src/figures/steed.ts`). A `StepCycle` holds no gait of its own: each way of stepping is a `StepPattern`, data, and the cycle blends them by speed. Wiring it to a walker: [Cookbook](cookbook.md#legs-that-step).
+
+<!-- check: wrap -->
+```ts
+import { StepCycle } from 'wallhammer-web/motion';
+import type { StepPattern } from 'wallhammer-web/motion';
+
+// Six legs, front to back, left before right: x across, z forward in the root's frame.
+const homes: [number, number, number][] = [[-0.3, 0, 0.45], [0.3, 0, 0.45], [-0.35, 0, 0], [0.35, 0, 0], [-0.3, 0, -0.45], [0.3, 0, -0.45]];
+const patterns: StepPattern[] = [
+  // Slow: a wave from back to front on each side, four or five legs down at any time.
+  { speed: 0.3, stride: 0.3, offsets: [0.67, 0.17, 0.33, 0.83, 0, 0.5], duty: 0.8, lift: 0.05 },
+  // Fast: two tripods in turn (front and back of one side, the middle of the other).
+  { speed: 1.2, stride: 0.6, offsets: [0, 0.5, 0.5, 0, 0, 0.5], duty: 0.55, lift: 0.07 },
+];
+const cycle = new StepCycle({ homes, patterns, reach: 0.35, endHeight: 0.02 });
+console.log(cycle.legs);
+```
+
+- An offset is the phase at which the leg's end is put down; `duty` the share of the pass it stays down. A pattern whose duty is below 0.5 for every leg has a flight.
+- Neighbouring patterns blend by speed (stride, duty and lift in a line, the offsets the shorter way round the circle), so a change of speed changes the way of stepping without a jump; an end is not lifted while that would leave fewer ends down than the blend keeps.
+- The speeds are over the ground, a turn adding its ends' speed; give the slowest pattern a speed near the body's walk.
+- Set `reach` from the legs' length (how far an end may be left from its home), and check the steps in a headless script: `downs`, `planted` and `supportHeight` are plain numbers ([Steps of several legs](motion.md#steps-of-several-legs)).
+
+## Add a seat to a figure
+
+Where: the app, with the carrier's skeleton (the examples' steed keeps `sockets` beside its skeleton). A seat, a grip or a stirrup is a `Socket`: a bone and a 3 × 4 transform in its frame, the carried root's (or the held end's) place and turn there. Riding it: [Cookbook](cookbook.md#a-body-carried-by-another).
+
+<!-- check: wrap -->
+```ts
+import type { Skeleton, Socket } from 'wallhammer-web/motion';
+declare const carrier: Skeleton; // with bones 'trunk' and 'neck'
+declare const riderScale: number; // the carried figure's root scale
+
+const trunk = carrier.index('trunk');
+const sockets: Record<string, Socket> = {
+  // On the trunk, 0.55 m up and 0.1 m back, facing the trunk's way: where the carried root goes.
+  seat: { bone: trunk, local: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, -0.1] },
+  // Where the hands hold on, either side of the neck, each turned a quarter about z so the palm faces in.
+  gripL: { bone: carrier.index('neck'), local: [0, 1, 0, -1, 0, 0, 0, 0, 1, 0.12, 0.2, 0.1] },
+  gripR: { bone: carrier.index('neck'), local: [0, -1, 0, 1, 0, 0, 0, 0, 1, -0.12, 0.2, 0.1] },
+};
+// A carried figure drawn at another size: scale the seat's axes (not its place) by the figure's scale.
+const seat = sockets.seat!;
+const scaledSeat: Socket = { bone: seat.bone, local: Array.from(seat.local, (v, i) => (i < 9 ? v * riderScale : v)) };
+console.log(scaledSeat.bone);
+```
+
+- The seat's turn is the carried root's turn: its axes must be those of the root the figure stands on (scale and facing included), or the figure sits turned.
+- The held ends' sockets give `TwoBoneReach.setTargetSocket` both the point and the end bone's turn (with `useEndRotation`).
+- Check the sockets with the carrier at rest and moving: `socketTransform(world, socket, out)` gives each one's place to draw a marker at.
 
 ## Drive entities with agendas
 

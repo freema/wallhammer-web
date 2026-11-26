@@ -43,7 +43,7 @@ The root entry `wallhammer-web` re-exports `base`, `platform`, `core`, `gen-core
 - They do not import each other, any app or the root entry.
 - No other engine module imports them, and the root entry does not re-export them.
 
-Apps and the `destruction` and `system` examples may import them (`system` for the structures of its settlements and their damage). The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `walk`, `outpost`, `rivers`) may not; the layer check enforces this.
+Apps and the `destruction` and `system` examples may import them (`system` for the structures of its settlements and their damage). The engine-only examples (`minimal-3d`, `endless`, `planet`, `fantasy-village`, `movement`, `outpost`, `rivers`) may not; the layer check enforces this.
 
 `gen-ground` and `gen-vegetation` do not import each other, but their shaders share Frame members. Both slots they share belong to `gen-ground`: the terrain shader reads `u_season` from its season slot and includes `<snow>` from its snow slot, and the vegetation shader reads the same two (the structure shaders of `gen-arch` include `<snow>` as well). So the ground depends on nothing of the vegetation, and an app that draws vegetation registers the season and snow slots of `gen-ground` together with the sway slot.
 
@@ -102,7 +102,7 @@ examples/endless/            engine-only streaming example
 examples/planet/             engine-only example: a sphere with an atmosphere, from its surface to orbit
 examples/system/             example with content modules: a sun and four bodies, from the whole system to a surface
 examples/fantasy-village/    engine-only example: a living village from code
-examples/walk/               engine-only example: the walking test course
+examples/movement/           engine-only example: the movement test course (walking, riding, driving)
 examples/outpost/            engine-only example: a lunar research outpost in a comic look
 examples/rivers/             engine-only example: rivers, lakes and footpaths on an island
 examples/shared/             code used by more than one example; not a page

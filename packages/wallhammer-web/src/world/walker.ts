@@ -2,7 +2,8 @@
 // brakes (with its own braking rate and a slower run-up as options), turns in an arc at speed (an option), slides along sides and out of corners, climbs steps up to a height, falls off edges, does not climb a base
 // surface steeper than a limit (and slides down one), jumps from the ground and keeps the velocity and the heading of
 // take-off in the air (a share of control and a turn rate in the air are options, both 0 by default), stops its head
-// under undersides and turns smoothly toward where it is asked to go. Between steps it gives a position for
+// under undersides and turns smoothly toward where it is asked to go. As an option it is slower uphill and a little
+// faster on gentle descents (the grade of the ground along the wanted direction scales the wanted speed). Between steps it gives a position for
 // drawing. Plain Node, no DOM; only + − × ÷ and Math.sqrt in a step (detAtan2 and detSinCos for the heading and an arc), so the same inputs
 // give the same path bit for bit.
 //
@@ -12,9 +13,10 @@
 // walker back with everything else. A walker stepped by such a simulation draws with the simulation's `alpha`.
 //
 // Scope: a flat world with +y up. A curved world is not built; the places where a local up would replace y are
-// marked "UP:" below (gravity, the vertical span, the slope of the base and the heading plane).
+// marked "UP:" below (gravity, the vertical span, the slope of the base, the grade probe and the heading plane).
 
 import { detAtan2, detSinCos } from '../base/trig.ts';
+import { FixedSteps } from '../core/fixed-steps.ts';
 import { newSlideResult } from './collide.ts';
 import type { CollisionWorld } from './collide.ts';
 
@@ -80,13 +82,40 @@ export interface WalkerSetup {
   stepSmoothing: number;
   /** Most fixed steps one `advance` takes; the rest of a longer pause is dropped (no catching up after a stall). */
   maxStepsPerAdvance: number;
+  /**
+   * Share of the wanted speed on the ground lost per unit of uphill grade (rise over run along the wanted direction):
+   * 0.8 walks a 20° slope (grade 0.36) about 29 % slower. 0 (default), with `downhillSpeedGain` and `downhillSpeedLoss`
+   * also 0: no slope effect, the speed is the same uphill, downhill and on the flat. The grade is that of the ground
+   * the body stands on, base or solid tops (a flight of stairs counts as its mean slope), averaged over `gradeProbe`
+   * ahead and as much behind along the wanted direction and eased over `gradeSmoothing`; a drop or a rise of more than `maxStepUp` (a ledge,
+   * a side) counts as one step, not as a slope. Only the wanted speed is scaled: `acceleration` and `deceleration` ease the change. Not
+   * used in the air.
+   */
+  uphillSpeedLoss: number;
+  /** Share of the wanted speed gained per unit of downhill grade on gentle descents (with `downhillSpeedLoss`): the speed is scaled by 1 + d·(gain − loss·d) at downhill grade d. 0 (default). */
+  downhillSpeedGain: number;
+  /**
+   * Share lost per unit of downhill grade squared: steep descents are taken slower. With gain 0.5 and loss 1.8 a
+   * descent is fastest at grade 0.14 (+3.5 %), as fast as the flat at 0.28 and 18 % slower at 0.5. 0 (default).
+   */
+  downhillSpeedLoss: number;
+  /** Least share of the wanted speed a slope leaves, 0–1, so a body never stalls on a slope it may stand on. Default 0.25. */
+  slopeSpeedFloor: number;
+  /**
+   * Length of ground the grade probe averages ahead of the feet and again behind them, metres (four points on each
+   * side). Default 1: 2 m of ground in all, fitting a body of the default size; a longer body (four legs) may take more.
+   * Used only while the slope effect is on. Fixed at construction.
+   */
+  gradeProbe?: number;
+  /** Seconds over which the probed grade is eased (the share kept per step is exp(−step / this)); 0: not eased. Default 0.3. Fixed at construction. */
+  gradeSmoothing?: number;
 }
 
 /** The numbers of a setup that may change while a walker lives (`Walker.retune`): speeds, rates and the jump. */
-export type WalkerTuning = Pick<WalkerSetup, 'walkSpeed' | 'runSpeed' | 'acceleration' | 'deceleration' | 'runAcceleration' | 'turnSpeed' | 'turnSpeedAtRun' | 'airControl' | 'airTurnSpeed' | 'jumpSpeed'>;
+export type WalkerTuning = Pick<WalkerSetup, 'walkSpeed' | 'runSpeed' | 'acceleration' | 'deceleration' | 'runAcceleration' | 'turnSpeed' | 'turnSpeedAtRun' | 'airControl' | 'airTurnSpeed' | 'jumpSpeed' | 'uphillSpeedLoss' | 'downhillSpeedGain' | 'downhillSpeedLoss' | 'slopeSpeedFloor'>;
 
 /** The fields of `WalkerTuning`. */
-export const WALKER_TUNING_KEYS: readonly (keyof WalkerTuning)[] = ['walkSpeed', 'runSpeed', 'acceleration', 'deceleration', 'runAcceleration', 'turnSpeed', 'turnSpeedAtRun', 'airControl', 'airTurnSpeed', 'jumpSpeed'];
+export const WALKER_TUNING_KEYS: readonly (keyof WalkerTuning)[] = ['walkSpeed', 'runSpeed', 'acceleration', 'deceleration', 'runAcceleration', 'turnSpeed', 'turnSpeedAtRun', 'airControl', 'airTurnSpeed', 'jumpSpeed', 'uphillSpeedLoss', 'downhillSpeedGain', 'downhillSpeedLoss', 'slopeSpeedFloor'];
 
 export const DEFAULT_WALKER: Readonly<WalkerSetup> = Object.freeze({
   radius: 0.3,
@@ -107,6 +136,12 @@ export const DEFAULT_WALKER: Readonly<WalkerSetup> = Object.freeze({
   turnSpeedAtRun: 0,
   stepSmoothing: 0.1,
   maxStepsPerAdvance: 15,
+  uphillSpeedLoss: 0,
+  downhillSpeedGain: 0,
+  downhillSpeedLoss: 0,
+  slopeSpeedFloor: 0.25,
+  gradeProbe: 1,
+  gradeSmoothing: 0.3,
 });
 
 export interface WalkIntent {
@@ -159,6 +194,10 @@ const STEP_EASE_MIN = 0.02;
  * the lip of a cliff instead of being held there by a gradient that straddles the kink.
  */
 const KINK_REACH = 0.05;
+/** Points of the grade probe on each side (evenly spaced, so a flight of stairs reads as its mean slope). */
+const GRADE_SAMPLES = 4;
+/** Steepest grade the probe measures when `maxSlopeDeg` allows steeper ground. */
+const GRADE_CAP = 2;
 const TWO_PI = 6.283185307179586;
 const PI = 3.141592653589793;
 
@@ -187,11 +226,18 @@ export class Walker {
   private readonly dt: number;
   private readonly tanMax: number;
   private readonly smoothKeep: number;
+  /** Share of the eased grade kept per step, and the steepest grade measured (the tangent of `maxSlopeDeg`, at most GRADE_CAP). */
+  private readonly gradeKeep: number;
+  private readonly gradeMax: number;
+  /** `gradeProbe` of the setup, metres (checked positive). */
+  private readonly gradeProbe: number;
+  /** Eased grade of the ground along the wanted direction (rise over run, + uphill); 0 while the slope effect is off. */
+  private easedGrade = 0;
   private readonly prev = new Float64Array(3);
   private prevYaw = 0;
   /** `travelled` before the last step (drawing interpolates between the two). */
   private prevTravelled = 0;
-  private acc = 0;
+  private readonly fixed: FixedSteps;
   private pendingJump = false;
   private stepOffset = 0;
   private prevStepOffset = 0;
@@ -209,10 +255,17 @@ export class Walker {
     if (!(s.stepHz > 0)) throw new Error('Walker: stepHz must be positive');
     if (!(s.radius > 0) || !(s.height > s.maxStepUp)) throw new Error('Walker: radius must be positive and height above maxStepUp');
     this.dt = 1 / s.stepHz;
+    this.fixed = new FixedSteps(this.dt, s.maxStepsPerAdvance);
     const sc = detSinCos((s.maxSlopeDeg * PI) / 180);
     this.tanMax = sc[1] > 0 ? sc[0] / sc[1] : Infinity;
     // Share of the step offset kept per step: exp(−3 dt / stepSmoothing) (95 % gone after stepSmoothing seconds).
     this.smoothKeep = s.stepSmoothing > 0 ? Math.exp((-3 * this.dt) / s.stepSmoothing) : 0;
+    const gp = s.gradeProbe ?? 1;
+    if (!(gp > 0)) throw new Error('Walker: gradeProbe must be positive');
+    this.gradeProbe = gp;
+    const gs = s.gradeSmoothing ?? 0.3;
+    this.gradeKeep = gs > 0 ? Math.exp(-this.dt / gs) : 0;
+    this.gradeMax = this.tanMax < GRADE_CAP ? this.tanMax : GRADE_CAP;
   }
 
   /**
@@ -246,11 +299,12 @@ export class Walker {
     this.prevTravelled = this.travelled;
     this.grounded = false;
     this.steep = false;
-    this.acc = 0;
+    this.fixed.reset();
     this.pendingJump = false;
     this.stepOffset = 0;
     this.prevStepOffset = 0;
     this.steps = 0;
+    this.easedGrade = 0;
   }
 
   /**
@@ -261,29 +315,20 @@ export class Walker {
   advance(dt: number, intent: WalkIntent): number {
     if (intent.jump) this.pendingJump = true;
     if (!(dt > 0)) return 0;
-    this.acc += dt;
-    const h = this.dt;
-    const max = this.setup.maxStepsPerAdvance;
     const sc = this.scratch;
     sc.moveX = intent.moveX;
     sc.moveZ = intent.moveZ;
     sc.run = intent.run;
-    let n = 0;
-    // The tolerance keeps a sum of equal frame times from falling a rounding short of a whole step.
-    while (this.acc + 1e-9 * h >= h) {
-      if (n >= max) {
-        this.acc = 0;
-        break;
-      }
-      sc.jump = this.pendingJump;
-      this.pendingJump = false;
-      this.step(sc);
-      this.acc -= h;
-      n++;
-    }
-    if (this.acc < 0) this.acc = 0;
-    return n;
+    return this.fixed.advance(dt, this.stepDue, this.setup.maxStepsPerAdvance);
   }
+
+  /** One step due in `advance`: the intent in the scratch, a pending jump on its first step. */
+  private readonly stepDue = (): void => {
+    const sc = this.scratch;
+    sc.jump = this.pendingJump;
+    this.pendingJump = false;
+    this.step(sc);
+  };
 
   /** One fixed step (for scripts and tests). */
   step(intent: WalkIntent): void {
@@ -317,10 +362,26 @@ export class Walker {
       mx *= k;
       mz *= k;
     }
-    const speed = intent.run ? s.runSpeed : s.walkSpeed;
+    let speed = intent.run ? s.runSpeed : s.walkSpeed;
+    const y = p[1]!;
+
+    // Slope (off by default: the grade is then never probed and stays 0). On the ground the grade along the wanted
+    // direction (`probeGrade`) is eased over `gradeSmoothing`, and the wanted speed is scaled by 1 − uphillSpeedLoss·grade
+    // uphill and by 1 + d·(downhillSpeedGain − downhillSpeedLoss·d) at downhill grade d, never below slopeSpeedFloor.
+    if (onGround && (s.uphillSpeedLoss !== 0 || s.downhillSpeedGain !== 0 || s.downhillSpeedLoss !== 0)) {
+      // A direction too short to normalise keeps the last grade.
+      if (m2 > 1e-12) {
+        const k = 1 / Math.sqrt(mx * mx + mz * mz);
+        const raw = this.probeGrade(p[0]!, p[2]!, y, mx * k, mz * k);
+        this.easedGrade = raw + (this.easedGrade - raw) * this.gradeKeep;
+      }
+      const gr = this.easedGrade;
+      let f = gr > 0 ? 1 - s.uphillSpeedLoss * gr : 1 - gr * (s.downhillSpeedGain + s.downhillSpeedLoss * gr);
+      if (f < s.slopeSpeedFloor) f = s.slopeSpeedFloor;
+      speed *= f;
+    }
     let wantX = mx * speed;
     let wantZ = mz * speed;
-    const y = p[1]!;
 
     // Momentum (all off by default, so the default setup steps exactly as without these options). The turn rate at
     // the current speed and, on the ground, the wanted direction turned no farther from the velocity's than that
@@ -519,13 +580,12 @@ export class Walker {
 
   /** Share of the way from the last step to the next one, 0–1. */
   get alpha(): number {
-    const a = this.acc / this.dt;
-    return a < 0 ? 0 : a > 1 ? 1 : a;
+    return this.fixed.alpha;
   }
 
   /**
    * Writes the whole state (position, velocity, heading, ground contact, distance, steps, the previous step for
-   * drawing, leftover time, a pending jump, the step easing) into `out` (at least `WALKER_STATE_BYTES` bytes from
+   * drawing, leftover time, a pending jump, the step easing, the eased grade) into `out` (at least `WALKER_STATE_BYTES` bytes from
    * `offset`; default a new array) and returns it. The setup and the collision world are not state.
    */
   saveState(out?: Uint8Array, offset = 0): Uint8Array {
@@ -547,11 +607,11 @@ export class Walker {
     f[12] = this.prev[1]!;
     f[13] = this.prev[2]!;
     f[14] = this.prevYaw;
-    f[15] = this.acc;
+    f[15] = this.fixed.leftover;
     f[16] = this.stepOffset;
     f[17] = this.prevStepOffset;
     f[18] = this.prevTravelled;
-    f[19] = 0;
+    f[19] = this.easedGrade;
     const o = out ?? new Uint8Array(WALKER_STATE_BYTES);
     if (o.length < offset + WALKER_STATE_BYTES) throw new Error('Walker.saveState: the output is too short');
     o.set(this.stateBytes, offset);
@@ -581,10 +641,11 @@ export class Walker {
     this.prev[1] = f[12]!;
     this.prev[2] = f[13]!;
     this.prevYaw = f[14]!;
-    this.acc = f[15]!;
+    this.fixed.leftover = f[15]!;
     this.stepOffset = f[16]!;
     this.prevStepOffset = f[17]!;
     this.prevTravelled = f[18]!;
+    this.easedGrade = f[19]!;
   }
 
   /**
@@ -636,9 +697,50 @@ export class Walker {
     return this.prevTravelled + (this.travelled - this.prevTravelled) * a;
   }
 
+  /**
+   * The eased grade of the ground along the wanted direction (rise over run, positive uphill) that scales the wanted
+   * speed: probed over `gradeProbe` and eased over `gradeSmoothing`, at most the tangent of `maxSlopeDeg` (and 2).
+   * Read-only. 0 while the slope effect is off and after a `teleport`; kept as it was in the air and while no direction
+   * is wanted. Part of the saved state.
+   */
+  get grade(): number {
+    return this.easedGrade;
+  }
+
   /** Horizontal metres moved in the last step (divide by `stepSeconds` for the speed); 0 after a `teleport`. */
   get lastStepDistance(): number {
     return this.travelled - this.prevTravelled;
+  }
+
+  /**
+   * Grade of the ground along the unit (ux, uz) at the feet (x, y, z): the mean height of GRADE_SAMPLES points over
+   * `gradeProbe` ahead less that of as many points behind, over the distance between the two means' centres, clamped to
+   * the steepest grade measured. Each point takes the ground (base or a standable top) the body could step to from the
+   * point before it, so a flight of stairs reads as its mean slope; a rise or a drop of more than `maxStepUp` between
+   * two points (a side, a ledge) counts as one step, so a body neither slows down nor speeds up much before a ledge it
+   * may jump from or a wall it walks into.
+   */
+  private probeGrade(x: number, z: number, y: number, ux: number, uz: number): number {
+    const raw = (this.probeSide(x, z, y, ux, uz) - this.probeSide(x, z, y, -ux, -uz)) / this.gradeProbe;
+    const m = this.gradeMax;
+    return raw > m ? m : raw < -m ? -m : raw;
+  }
+
+  /** Mean height above `y` of the probe points on one side (see `probeGrade`). */
+  private probeSide(x: number, z: number, y: number, ux: number, uz: number): number {
+    // UP: the points would lie on the local horizon and the heights be measured along the local up.
+    const w = this.world;
+    const step = this.setup.maxStepUp;
+    const d = this.gradeProbe / GRADE_SAMPLES;
+    let h = y;
+    let sum = 0;
+    for (let i = 0; i < GRADE_SAMPLES; i++) {
+      const t = (i + 0.5) * d;
+      const g = w.groundAt(x + ux * t, z + uz * t, h, step);
+      h = g > h + step ? h + step : g < h - step ? h - step : g;
+      sum += h;
+    }
+    return sum / GRADE_SAMPLES - y;
   }
 
   /** Whether the base rises more steeply than the limit on both sides of (x, z) along the uphill unit (ux, uz). */

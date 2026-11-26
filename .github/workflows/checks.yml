@@ -41,3 +41,19 @@ jobs:
       - run: pnpm check:pack
       # The planet example's own headless check (generator, flight, streaming, movie); about 10 s.
       - run: pnpm --filter wallhammer-example-planet verify
+
+  # The shader check (README.md, section "Shader check"): every program the example pages make is compiled and linked
+  # in headless Chromium on the software renderer. It runs as on a developer's machine, through docker-compose.yml:
+  # `shaders` builds its image and the dev image, starts `dev` (which installs the dependencies and serves the
+  # examples) and waits until it is healthy. A job of its own, so the other checks do not wait for it; about a minute
+  # of pages after the images and the install.
+  shaders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose run --rm shaders
+      - if: failure()
+        run: docker compose logs --tail 200 dev
+      - if: always()
+        run: docker compose down

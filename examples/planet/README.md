@@ -60,9 +60,9 @@ URL hash (kept up to date while flying by hand):
 | `gpu` | 560 | Ceiling of GPU memory in MB; `0` for none. |
 | `levels` | 0 | `1` tints the cells by level. |
 | `strip` | 1 | `0` switches the strips off: the page without them (its generator, worker and materials). |
-| `split` | `fixed` | `shorter` cuts every quad of the surface along its diagonal whose ends differ less in height (`SpherePatchOptions.split`); objects and strips stand on the triangles drawn so. |
+| `split` | `fixed` | `shorter` cuts every quad of the surface along its diagonal whose ends differ less in height (`SpherePatchOptions.split`); objects and strips stand on the triangles drawn so. To judge it, compare the view `split-crest` with and without it (see [The split of the quads](#the-split-of-the-quads)). |
 | `extra` | none | `slope`: the cells carry the slope and a cliff category in the surface's extra channel (`extraAt`, `coarseExtra: 'nearest'`), tinted amber and red; `lift` also raises the cliffs 6 m by the ground's vertex hook in both passes (a sample of the hook: the objects on a cliff do not follow it). |
-| `view` | none | Starts in one of the strip, cloud or sea views of `__wh.presets()`, for example `strip-node`, `clouds-rain` or `underwater`. |
+| `view` | none | Starts in one of the strip, cloud or sea views of `__wh.presets()`, for example `strip-node`, `clouds-rain` or `underwater`, or in `walk` or `split-crest`. |
 | `clouds` | 1 | `0` builds the page without clouds, rain and cloud shadows. |
 | `vol` | 1 | `0` keeps only the cloud shell: no volumetric clouds near the ground. |
 | `cover` | none | `0`–`1`: one cloud cover over the whole planet in place of the profile and its patches (rain from 0.6). |
@@ -72,6 +72,28 @@ URL hash (kept up to date while flying by hand):
 | `profile` | default | The walker's movement profile: `default`, `heavy` or `light` (see [Walk mode](#walk-mode)). |
 | `time` | running | Seconds of animation time to start at, frozen (the exact view of a mark carries it). |
 | `marks` | 1 | Dev server only. `0` hides the marks' pins; `1` turns the marks on in a page driven by a script, which has none otherwise. |
+
+## The split of the quads
+
+`split=shorter` changes which diagonal cuts each quad of the surface into two triangles. The cells keep their error
+under the pixel tolerance with either split, so from afar the two pictures hardly differ; the finest level, close to
+the eye, shows the difference most, and most along a crest, where the two triangles of a quad stand up to about a
+metre apart. The view `split-crest` of `__wh.presets()` stands there: 1.6 m above the lower flank of the crest where
+the two splits differ most (`findSplitCrest` in `world.ts`: of the 200 steepest points of a fixed lattice on land, the
+crest with the largest sum of such differences), 10 m from it, looking up at it, with the sun 35–55° high behind or
+beside the eye. The crest is the line against the sky; open the two views one after the other and compare that line:
+
+- <http://127.0.0.1:5281/planet/#view=split-crest>
+- <http://127.0.0.1:5281/planet/#view=split-crest&split=shorter>
+
+With the seed 2611 the crest stands about 3.6 km high. With `split=shorter` the line keeps the high points of the
+crest (the diagonal along it) and drops between them where the crest turns across the quads, so it shows notches and
+steps that the fixed split, which cuts across the crest and lowers it evenly, does not. Pictures in Docker:
+
+```sh
+docker compose run --rm shot --url http://dev:5281/planet/ --presets split-crest --name fixed-
+docker compose run --rm shot --url http://dev:5281/planet/ --hash split=shorter --presets split-crest --name shorter-
+```
 
 ## Strips
 
@@ -206,7 +228,10 @@ The body is the shared pathfinder figure (`examples/shared/src/figures/`), 1.75 
 running at 4.6 m/s, the speeds its strides of 1.0 and 2.3 m a pass belong to. How it carries its weight is a movement
 profile (`examples/shared/src/figures/profiles.ts`, `profile=`, key `P`): the walker's run-up, braking and running
 turn (the engine's `deceleration`, `runAcceleration`, `turnSpeedAtRun`; `default` runs up in 0.67 s, stops from a run
-in 0.84 m and turns at a run with a radius of about 1.8 m, `heavy` and `light` are slower and quicker), the stride
+in 0.84 m and turns at a run with a radius of about 1.8 m, `heavy` and `light` are slower and quicker), its speed on
+slopes (the engine's `uphillSpeedLoss`, `downhillSpeedGain`, `downhillSpeedLoss`, `slopeSpeedFloor`: with `default`
+about 31 % slower up a 20° slope, a little faster down gentle ones and slower down steep ones, never below 35 % of the
+speed; a deliberate part of the planet's walk, read from the ground of its cells in the walker's chart), the stride
 and a lean into the run-up and back against braking (additive `push` and `brace` layers on the smoothed
 acceleration). Its ponytail lags behind the motion (the engine's `ChainLag`, its velocity kept in the world's frame,
 so a rechart does not jerk it). The second figure walks with the `heavy` profile. A `FigureGait` (shared) drives the

@@ -22,7 +22,7 @@
 // base sphere (`waterPatch`), drawn translucent over the floor (shaders.ts).
 
 import type { InstanceData, InstanceSolid, MeshData, VertexLayout } from 'wallhammer-web/base';
-import { cubeDirection, cubeFaceOf, cubeGrid, directionTangents, fractalNoise3, hashInts, shapeHash, spherePatchMesh, spherePatchRadius, unit, valueNoise3 } from 'wallhammer-web/gen-core';
+import { cubeDirection, cubeFaceOf, cubeGrid, directionTangents, fractalNoise3, hashInts, shapeHash, spherePatchMesh, spherePatchRadius, spherePatchSplitsAD, unit, valueNoise3 } from 'wallhammer-web/gen-core';
 import type { CellContent, CellId, CellInstances, LocalBounds, SpherePatchOptions, SpherePatchSplit } from 'wallhammer-web/gen-core';
 import { SphereWorld } from 'wallhammer-web/world';
 
@@ -859,4 +859,97 @@ export function findSeaPlaces(seed: number): { shallow: SeaPlace | null; deep: S
     }
   }
   return { shallow, deep };
+}
+
+export interface SplitCrest {
+  /** The middle of the quad of the finest level where the two splits differ most. */
+  target: [number, number, number];
+  /** Where to stand: on the lower flank, `CREST_VIEW_M` across the crest from the target. */
+  eye: [number, number, number];
+  /** The largest difference there between the two splits of a quad: half the twist of its corners, metres. */
+  foldM: number;
+}
+
+/** Metres from the crest to the eye of `findSplitCrest`. */
+const CREST_VIEW_M = 10;
+
+/**
+ * A place where the split of the surface's quads (`split=shorter`, `SpherePatchOptions.split`) changes the most, a
+ * pure function of the seed: a crest of the finest level whose quads `'shorter'` cuts along the other diagonal than
+ * `'fixed'`, where the two triangles of a quad then miss each other's middle by the most. Of the 200 steepest points
+ * of a fixed lattice on land, the window of 64 × 64 finest quads round each with the largest sum of such differences
+ * over 0.2 m wins, and its largest one is the target. The eye stands on the lower flank across the crest, looking up
+ * at it, so the crest is the line against the sky: notched by one split where the other keeps it whole. Null on a
+ * world without land.
+ */
+export function findSplitCrest(seed: number): SplitCrest | null {
+  const n = 2 ** LEAF_LEVEL * QUADS;
+  const ground = (d: readonly [number, number, number]): number => groundHeight(seed, d[0] * RADIUS_M, d[1] * RADIUS_M, d[2] * RADIUS_M);
+  const vertex = (face: number, gi: number, gj: number): [number, number, number] => cubeDirection(face, cubeGrid(gi, n), cubeGrid(gj, n));
+  const radius = (face: number, gi: number, gj: number): number => RADIUS_M + ground(vertex(face, gi, gj));
+  const step = (d: readonly [number, number, number], a: number, m: number): [number, number, number] => {
+    const [lat, lon] = latLonOf(d);
+    const north = directionAt(lat + 90, lon);
+    const east: [number, number, number] = [d[1] * north[2] - d[2] * north[1], d[2] * north[0] - d[0] * north[2], d[0] * north[1] - d[1] * north[0]];
+    const c = Math.cos(m / RADIUS_M);
+    const s = Math.sin(m / RADIUS_M);
+    return [d[0] * c + (north[0] * Math.cos(a) + east[0] * Math.sin(a)) * s, d[1] * c + (north[1] * Math.cos(a) + east[1] * Math.sin(a)) * s, d[2] * c + (north[2] * Math.cos(a) + east[2] * Math.sin(a)) * s];
+  };
+  // The steepest points of the lattice, by the finest grid round each.
+  const LATTICE = 12000;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const steep: { face: number; gi: number; gj: number; slope: number }[] = [];
+  for (let k = 0; k < LATTICE; k++) {
+    const y = 1 - (2 * (k + 0.5)) / LATTICE;
+    // Away from the poles, where the sun stands low the whole day.
+    if (Math.abs(y) > 0.7) continue;
+    const r = Math.sqrt(1 - y * y);
+    const f = cubeFaceOf([Math.cos(golden * k) * r, y, Math.sin(golden * k) * r]);
+    const gi = Math.round(((f.s + 1) / 2) * n);
+    const gj = Math.round(((f.t + 1) / 2) * n);
+    if (gi < 40 || gj < 40 || gi > n - 40 || gj > n - 40) continue;
+    if (radius(f.face, gi, gj) - RADIUS_M < 50) continue;
+    const du = radius(f.face, gi + 2, gj) - radius(f.face, gi - 2, gj);
+    const dv = radius(f.face, gi, gj + 2) - radius(f.face, gi, gj - 2);
+    steep.push({ face: f.face, gi, gj, slope: Math.hypot(du, dv) });
+  }
+  steep.sort((a, b) => b.slope - a.slope || a.face - b.face || a.gi - b.gi || a.gj - b.gj);
+  const W = 64;
+  let best: { sum: number; face: number; gi: number; gj: number; fold: number } | null = null;
+  const rad = new Float64Array((W + 1) * (W + 1));
+  for (const c of steep.slice(0, 200)) {
+    const i0 = c.gi - W / 2;
+    const j0 = c.gj - W / 2;
+    for (let b = 0; b <= W; b++) for (let a = 0; a <= W; a++) rad[b * (W + 1) + a] = radius(c.face, i0 + a, j0 + b);
+    let sum = 0;
+    let fold = 0;
+    let at = [0, 0];
+    for (let b = 0; b < W; b++) {
+      for (let a = 0; a < W; a++) {
+        const ra = rad[b * (W + 1) + a]!;
+        const rb = rad[b * (W + 1) + a + 1]!;
+        const rc = rad[(b + 1) * (W + 1) + a]!;
+        const rd = rad[(b + 1) * (W + 1) + a + 1]!;
+        if (!spherePatchSplitsAD('shorter', ra, rb, rc, rd)) continue;
+        const e = Math.abs(ra + rd - rb - rc) / 2;
+        if (e > 0.2) sum += e;
+        if (e > fold) (fold = e), (at = [i0 + a, j0 + b]);
+      }
+    }
+    if (!best || sum > best.sum) best = { sum, face: c.face, gi: at[0]!, gj: at[1]!, fold };
+  }
+  if (!best) return null;
+  const target = cubeDirection(best.face, cubeGrid(2 * best.gi + 1, 2 * n), cubeGrid(2 * best.gj + 1, 2 * n));
+  const h = ground(target);
+  // The crest runs along the bearing (of 36 over a half turn) where the ground changes least over 10 m both ways.
+  let along = 0;
+  let change = Infinity;
+  for (let q = 0; q < 36; q++) {
+    const a = (q * Math.PI) / 36;
+    const v = Math.abs(ground(step(target, a, 10)) - h) + Math.abs(ground(step(target, a + Math.PI, 10)) - h);
+    if (v < change) (change = v), (along = a);
+  }
+  const left = step(target, along + Math.PI / 2, CREST_VIEW_M);
+  const right = step(target, along - Math.PI / 2, CREST_VIEW_M);
+  return { target, eye: ground(left) <= ground(right) ? left : right, foldM: best.fold };
 }

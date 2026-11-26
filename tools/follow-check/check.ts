@@ -138,6 +138,100 @@ export function runFollowChecks(): FollowCase[] {
     add('key cached while still', k1 === k2 && k3 !== k1, k3);
   }
 
+  // 7. Defaults unchanged: extras of 0, no heading and a zero turn step exactly as an untouched rig; the pivot is
+  //    the followed point raised by pivotHeight, eased as before.
+  {
+    const a = rig();
+    const b = rig();
+    b.extraBoom = 0;
+    b.extraPivot = 0;
+    b.followHeading(null);
+    b.turnPixels(0, 0);
+    let same = true;
+    let p1 = a.pivot[1];
+    for (let i = 0; i < 40; i++) {
+      const x = 10 + i * 0.07, y = 2 + Math.sin(i) * 0.3;
+      a.follow(x, y, -4);
+      b.follow(x, y, -4);
+      a.update(1 / 60);
+      b.update(1 / 60);
+      p1 += (y + 1.5 - p1) * (1 - Math.exp((-3 * (1 / 60)) / 0.15));
+      same &&= a.key() === b.key() && a.pivot[1] === b.pivot[1] && a.boom === b.boom && a.yawDeg === b.yawDeg && a.pivot[1] === p1;
+    }
+    add('extras and heading off: unchanged', same && a.wantedBoom === a.distance && a.boom === 6 && a.yawDeg === 30, `pivot y ${a.pivot[1].toFixed(6)} (by the old formula ${p1.toFixed(6)}), boom ${a.boom}, yaw ${a.yawDeg}`);
+  }
+
+  // 8. Framing extras add to the user's boom and pivot and come off exactly; zoom and the state keep the user's own
+  //    distance; the sum stays within the limits; first person takes the pivot extra only.
+  {
+    const r = rig();
+    r.extraBoom = 2.5;
+    r.extraPivot = 0.2;
+    r.snap();
+    const added = r.boom === 8.5 && r.wantedBoom === 8.5 && r.distance === 6 && r.pivot[1] === 2 + (1.5 + 0.2);
+    const st = r.state();
+    r.zoomBy(0.5);
+    const zoomed = r.distance === 3 && r.wantedBoom === 5.5;
+    r.setState(st);
+    const restored = r.distance === 6 && r.boom === 8.5 && st.distance === 6;
+    r.extraBoom = 10;
+    const capped = r.wantedBoom === 12;
+    r.extraBoom = -20;
+    const floored = r.wantedBoom === 0.5;
+    r.extraBoom = 0;
+    r.extraPivot = 0;
+    for (let i = 0; i < 300; i++) r.update(1 / 60);
+    const removed = r.boom === 6 && r.wantedBoom === 6 && near(r.pivot[1], 3.5, 1e-9);
+    const offBoom = r.boom;
+    r.distance = 0;
+    r.extraBoom = 3;
+    r.extraPivot = 0.4;
+    r.snap();
+    const e = r.eye();
+    const first = r.boom === 0 && r.wantedBoom === 0 && e[1] === r.pivot[1] && r.pivot[1] === 2 + (1.5 + 0.4);
+    add('framing extras add and come off', added && zoomed && restored && capped && floored && removed && first, `added ${added}, zoom scales the user's own ${zoomed}, state ${restored}, capped at max ${capped}, floor ${floored}, off again ${removed} (boom ${offBoom} m), first person ${first}`);
+  }
+
+  // 9. Heading follow: 95 % of the gap in headingLag, the same at 60 and 120 frames/s, the short way across ±180°,
+  //    paused for headingPause after a user turn, stopped by null.
+  {
+    const make = (yaw: number): FollowRig => {
+      const r = new FollowRig({ headingLag: 0.6, headingPause: 1 });
+      r.yawDeg = yaw;
+      r.follow(0, 0, 0);
+      return r;
+    };
+    const a = make(30);
+    const b = make(30);
+    a.followHeading(90);
+    b.followHeading(90);
+    for (let i = 0; i < 36; i++) a.update(1 / 60);
+    for (let i = 0; i < 72; i++) b.update(1 / 120);
+    const share = (a.yawDeg - 30) / 60;
+    const rateSame = Math.abs(a.yawDeg - b.yawDeg) < 1e-9;
+    const w = make(170);
+    w.followHeading(-170);
+    let shortWay = true;
+    for (let i = 0; i < 240; i++) {
+      w.update(1 / 60);
+      shortWay &&= Math.abs(w.yawDeg) >= 170 - 1e-9 && w.yawDeg <= 180 && w.yawDeg >= -180;
+    }
+    const wrapped = near(w.yawDeg, -170, 1e-3);
+    const p = make(0);
+    p.followHeading(45);
+    p.turnPixels(40, 0);
+    const turned = p.yawDeg;
+    for (let i = 0; i < 54; i++) p.update(1 / 60); // 0.9 s
+    const held = p.yawDeg === turned;
+    for (let i = 0; i < 12; i++) p.update(1 / 60); // 1.1 s
+    const moves = p.yawDeg !== turned;
+    p.followHeading(null);
+    const at = p.yawDeg;
+    for (let i = 0; i < 60; i++) p.update(1 / 60);
+    const stopped = p.yawDeg === at;
+    add('heading follow', near(share, 0.95, 1e-3) && rateSame && shortWay && wrapped && held && moves && stopped, `95 % in headingLag: ${(share * 100).toFixed(3)} %, 60 vs 120 frames/s ${Math.abs(a.yawDeg - b.yawDeg).toExponential(1)}°, 170° to −170° the short way ${shortWay} (at ${w.yawDeg.toFixed(4)}°), paused after a turn ${held}, then eases ${moves}, null stops ${stopped}`);
+  }
+
   // Processor time of one frame of the rig with a clearance (update + matrix + corner rays into the caller's arrays).
   {
     const r = rig((_ox, _oy, _oz, _dx, _dy, _dz, max) => max * 0.8);

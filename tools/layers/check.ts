@@ -75,7 +75,7 @@ const ENGINE = 'wallhammer-web';
 /** Content generators: optional engine modules of layer 3 that nothing else in the engine imports. */
 export const CONTENT_MODULES: ReadonlySet<string> = new Set(['gen-arch', 'gen-ground', 'gen-vegetation']);
 /** Examples that prove the engine alone: they may import only the engine package, without the content modules. */
-const ENGINE_ONLY_EXAMPLES = new Set(['minimal-3d', 'endless', 'planet', 'fantasy-village', 'walk', 'outpost', 'rivers', 'shared']);
+const ENGINE_ONLY_EXAMPLES = new Set(['minimal-3d', 'endless', 'planet', 'fantasy-village', 'movement', 'outpost', 'rivers', 'shared']);
 /** The folder under examples/ with code used by several examples: any example may import it, it imports no example. */
 const SHARED_EXAMPLE = 'shared';
 /** Words of use cases that only the content modules may name (file names, exported identifiers, comments). */

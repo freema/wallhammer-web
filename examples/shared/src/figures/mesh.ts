@@ -60,6 +60,12 @@ export function ringOn(c: P, u: P, v: P, ru: number, rv: number, n: number, turn
 /** A level ring about `c`: radius `rx` along x and `rz` along z. */
 export const ring = (c: P, rx: number, rz: number, n: number, turn = 0): P[] => ringOn(c, [1, 0, 0], [0, 0, 1], rx, rz, n, turn);
 
+/**
+ * A colour and a material number for a face from its centre and its normal (rest pose), or null for the painted ones:
+ * a coat of two colours on one skin (a pale belly under a darker back).
+ */
+export type FaceTone = (centre: P, normal: P) => readonly [RGB, number] | null;
+
 export class FigureMesh {
   private readonly v: number[] = [];
   private color: RGB = [1, 1, 1];
@@ -67,6 +73,7 @@ export class FigureMesh {
   private vary = 0.1;
   private o: P = [0, 0, 0];
   private faces = 0;
+  private toneOf: FaceTone | null = null;
   private readonly seed: number;
 
   constructor(seed: number) {
@@ -78,6 +85,12 @@ export class FigureMesh {
     this.color = color;
     this.mat = mat;
     this.vary = vary;
+    return this;
+  }
+
+  /** A face tone over the paint for the following triangles (null: the paint alone). */
+  tone(fn: FaceTone | null): this {
+    this.toneOf = fn;
     return this;
   }
 
@@ -100,8 +113,13 @@ export class FigureMesh {
       }
     }
     const tone = 1 + this.vary * (unit(hashInts(this.seed, this.faces++)) - 0.5) * 2;
-    const col = this.color, o = this.o;
-    for (const p of [a, b, c]) this.v.push(p[0] - o[0], p[1] - o[1], p[2] - o[2], n[0], n[1], n[2], col[0] * tone, col[1] * tone, col[2] * tone, this.mat);
+    let col = this.color, mat = this.mat;
+    if (this.toneOf) {
+      const t = this.toneOf(centroid([a, b, c]), n);
+      if (t) (col = t[0]), (mat = t[1]);
+    }
+    const o = this.o;
+    for (const p of [a, b, c]) this.v.push(p[0] - o[0], p[1] - o[1], p[2] - o[2], n[0], n[1], n[2], col[0] * tone, col[1] * tone, col[2] * tone, mat);
   }
 
   /** A triangle seen from both sides. */

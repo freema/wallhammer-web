@@ -1,7 +1,8 @@
-// Layer 2, core: clocks, the palette mechanism and small shared arithmetic (with its GLSL twins).
+// Layer 2, core: clocks, fixed steps out of frame times, the palette mechanism, the ring of contact marks and small shared arithmetic (with its GLSL twins).
 
 export { Clock } from './clock.ts';
 export type { ClockOptions } from './clock.ts';
+export { FixedSteps } from './fixed-steps.ts';
 export { PALETTE_CAPACITY, definePalette } from './palette.ts';
 export type { Palette } from './palette.ts';
 export { TRACK_CRUMBLE_S, TRACK_FLOATS, TRACK_GLSL, TRACK_GRAVITY, TRACK_MAX_FLIGHT_S, trackAttribs, trackFlightTime, trackLifetime, trackPose, writeTrack } from './ballistic.ts';
@@ -14,3 +15,5 @@ export { FADE_GLSL, LevelFade, fadeFragment, withFade } from './level-fade.ts';
 export type { LevelFadeOptions } from './level-fade.ts';
 export { COVER_FADE_GLSL, coverFade, coverKeep } from './cover-fade.ts';
 export { MEDIUM_GLSL, mediumClearDistance, mediumFresnel, mediumPath, mediumThrough } from './medium.ts';
+export { CONTACT_TRAIL_FADE_FROM, CONTACT_TRAIL_FLOATS, CONTACT_TRAIL_GLSL, ContactStreaks, ContactTrail, contactTrailFade } from './contact-trail.ts';
+export type { ContactMark, ContactStreakOptions } from './contact-trail.ts';

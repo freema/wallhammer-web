@@ -218,3 +218,14 @@ export class Figure {
     writeInstance(this.set, i, m, c[0], c[1], c[2], 0);
   }
 }
+
+/** `mesh` (positions as 3 floats at the start of each vertex) moved by `dx`, `dz` in place; returns it. */
+export function shiftedXZ(mesh: MeshData, dx: number, dz: number): MeshData {
+  const v = mesh.vertices, stride = mesh.layout.stride;
+  const view = new DataView(v.buffer, v.byteOffset, v.byteLength);
+  for (let o = 0; o + 12 <= v.byteLength; o += stride) {
+    view.setFloat32(o, view.getFloat32(o, true) + dx, true);
+    view.setFloat32(o + 8, view.getFloat32(o + 8, true) + dz, true);
+  }
+  return mesh;
+}

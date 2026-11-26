@@ -4,7 +4,7 @@ A rig is an instanced, animated model made of rigid parts. The vertex shader pos
 
 - The description is plain data in `base` (`RigDesc`, `RigPart`, `RIG_INSTANCE_FLOATS`, `writeRigInstance`).
 - `gen-mesh` builds the part meshes; `render` draws them in `RigLayer`.
-- Concrete rigs (people, vehicles, stop furniture) are content of the app, best kept in one folder of its own; the walking example has its rig in `examples/walk/src/`.
+- Concrete rigs (people, vehicles, stop furniture) are content of the app, best kept in one folder of its own; the movement example has its rig in `examples/movement/src/`.
 
 ## The description
 

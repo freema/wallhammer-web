@@ -30,8 +30,16 @@ const QA = new Float64Array(4);
 const QB = new Float64Array(4);
 const FLIP = new Float64Array(9);
 
-/** Determinant of the 3 × 3 part of a 3 × 4 transform. */
-function det3(m: ArrayLike<number>): number {
+/**
+ * The rotation of a 3 × 4 transform as a quaternion (x, y, z, w) into `q`, its axes' lengths dropped; of a mirrored one
+ * (determinant below 0) the rotation of its proper part, the first axis reversed. Internal to the module.
+ */
+export function transformRotation(m: ArrayLike<number>, q: Float64Array): void {
+  rotationOf(m, det3(m) < 0 ? -1 : 1, q);
+}
+
+/** Determinant of the 3 × 3 part of a 3 × 4 transform. Internal to the module. */
+export function det3(m: ArrayLike<number>): number {
   return m[0]! * (m[4]! * m[8]! - m[5]! * m[7]!) - m[3]! * (m[1]! * m[8]! - m[2]! * m[7]!) + m[6]! * (m[1]! * m[5]! - m[2]! * m[4]!);
 }
 

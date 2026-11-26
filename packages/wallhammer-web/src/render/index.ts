@@ -12,7 +12,9 @@ export type { PointLight, PointLightSetOptions } from './point-lights.ts';
 export { INSTANCE_SET_FLOATS, INSTANCE_SET_GLSL, INSTANCE_SET_LAYOUT, InstanceSetLayer, instanceSet, instanceSetAttribs, pushInstance, writeInstance } from './instance-sets.ts';
 export type { InstanceSet, InstanceSetLayerOptions } from './instance-sets.ts';
 export { ParticleLayer } from './particles.ts';
-export type { ParticleCounts, ParticleLayerOptions, ParticleSource } from './particles.ts';
+export type { ParticleBurstStats, ParticleCounts, ParticleLayerOptions, ParticleSource } from './particles.ts';
+export { CONTACT_TRAIL_ATTRIBS, CONTACT_TRAIL_DEFAULT_SHADE, ContactTrailLayer, contactTrailMaterial } from './contact-trail.ts';
+export type { ContactTrailLayerOptions, ContactTrailMaterialOptions } from './contact-trail.ts';
 export { InstanceCellLayer, cellDetail } from './cells.ts';
 export type { CellDetail, InstanceCellGroup, InstanceCellLayerOptions } from './cells.ts';
 export type {

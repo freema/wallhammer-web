@@ -52,8 +52,13 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
+      # The containers run as uid 1000 and pnpm sets the mode of the package's bin file in the mounted tree, which only
+      # the file's owner may do; the runner checks the tree out under another uid.
+      - run: sudo chown -R 1000:1000 .
       - run: docker compose run --rm shaders
       - if: failure()
         run: docker compose logs --tail 200 dev
       - if: always()
         run: docker compose down
+      - if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" .

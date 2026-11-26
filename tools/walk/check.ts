@@ -38,7 +38,8 @@ const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
   { label: 'contact trail, bursts and surface tags', scenarios: TRACE_SCENARIOS },
 ];
 
-const LIMIT_MS = 5000;
+// Wall time of the whole run. Measured for 151 scenarios: about 3.7 s on a developer machine, 5.2 s on a GitHub runner.
+const LIMIT_MS = 8000;
 const filter = process.argv[2] ?? '';
 const start = performance.now();
 let failed = 0;

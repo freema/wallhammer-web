@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+## 0.8.1
+
 ### Added
 
 - **A body carried by another** (in `motion`): `SocketSeat` (type `SocketSeatOptions`) gives the root of a body carried at a socket of another, eased from the root the game gives it (weight 0) to the socket's transform (weight 1), with a share `tilt` of the socket's tilt (default 1, the whole of it; 0 keeps the carried body upright, `uprightTransform`); handedness is kept. `TwoBoneReach.setTargetSocket(world, socket)` sets a reach's target and end rotation from a socket (existing calls unchanged). See [A body carried by another](packages/wallhammer-web/docs/motion.md#a-body-carried-by-another).

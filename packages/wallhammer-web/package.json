@@ -1,6 +1,6 @@
 {
   "name": "wallhammer-web",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "type": "module",
   "license": "MIT",
   "description": "Small general-purpose WebGL2 engine: plain WebGL2, layered modules, stateless randomness, all graphics from code.",

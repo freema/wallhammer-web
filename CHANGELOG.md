@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
-## 0.8.1
+## 0.8.2
+
+Version 0.8.1 was never published to npm; its changes ship here.
 
 ### Added
 

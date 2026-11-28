@@ -1,6 +1,6 @@
 {
   "name": "wallhammer",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Skills for projects built on the wallhammer-web npm package: where things go, the rules, recipes by goal, and debugging with marks.",
   "author": { "name": "freema" },
   "homepage": "https://github.com/freema/wallhammer-web",

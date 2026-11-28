@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+## 0.8.3
+
 ### Added
 
 - **Loads on a wheeled body** (in `world`): `WheeledBody.setLoad(slot, mass, x?, y?, z?)`, `clearLoads()`, `loadMass`, `totalMass` and `WHEELED_LOAD_SLOTS` (8): point masses fixed at points of the body's frame. A loaded body steps about the common centre of mass, so it rests lower, leans toward a load off its centre, pitches and rolls more under a high one and gathers speed more slowly; `position` and `velocity` stay those of the body's own centre, `restHeight` and `kineticEnergy` count the loads. Setting a load to what it already is does not wake a sleeping body. A body without loads steps bit for bit as before. See [Loads and forces](packages/wallhammer-web/docs/wheeled.md#loads-and-forces).

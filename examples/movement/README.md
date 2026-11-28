@@ -125,6 +125,14 @@ when a solid or a drop blocks it; the figure's walker is put down there, on free
   ±0.78 m and ±1.3 m, radius 0.33 m), a lower hull (`hullY` 0.22) and soft, well damped springs (`mountY` −0.06,
   stiffness 26 000, damping 3 200), so braking dives, accelerating squats and a turn rolls the body visibly
   (about 2° and 6°) without wobbling. The wheels turn, steer and ride their suspension from `wheelMatrix`.
+- Loads (the engine's `WheeledBody.setLoad`, the numbers in `src/car.ts`): the figure at the wheel is 80 kg at the
+  seat, its mass moving onto the car with the seat's weight as it sits down and off again as it gets up, so the car
+  sinks 7.5 mm and leans 0.3° to the driver's side. `L` while driving puts a load on the roof or takes it off: a rack
+  with three strapped crates and a rolled bundle of canvas (the shared `compactRoofLoadMesh`), 180 kg at 1.66 m over
+  the ground with the heavier crate across from the driver. With it the car sits 17 mm lower, covers 1.53 m instead of
+  1.75 m in the first second of full throttle with its nose 1.2° up instead of 1.0°, rolls 7.2° instead of 6.1° in the
+  same turn and lifts its inner wheels in a hard turn at speed, but stays on them; the HUD's line of the car names
+  the load.
 - The tail lamps brighten while braking and white reversing lamps light while going backward. A wheel that slides
   faster than 2.5 m/s lays a dark tyre mark (fading over 8 s), and one rolling on loose ground a rut (14 s), both on
   the page's contact trail (Traces, below).
@@ -134,10 +142,13 @@ when a solid or a drop blocks it; the figure's walker is put down there, on free
   follow eases between the setups on foot, riding and driving.
 
 Hash: `drive=0` (or `1`) starts in that car; `car0` and `car1` put the cars (`x,z,yawDeg`, default
-`car0=66,54.5,90&car1=51,50,0`). Presets `car-stand`, `car-accelerate`, `car-brake`, `car-turn`, `car-handbrake`,
-`car-ramp` (up the ramp), `car-jump` (off the plateau's edge), `car-bump` (into the parked car) and `car-get-in` (half
-way into the seat) each put the car down at a fixed place, freeze the page and hold the inputs for fixed steps, so
-they draw the same picture every time.
+`car0=66,54.5,90&car1=51,50,0`); `roof=0` (or `roof=0,1`) starts with the roof load on those cars. Presets `car-stand`,
+`car-accelerate`, `car-brake`, `car-turn`, `car-handbrake`, `car-ramp` (up the ramp), `car-jump` (off the plateau's
+edge), `car-bump` (into the parked car) and `car-get-in` (half way into the seat), and with the roof load
+`car-load-stand`, `car-load-accelerate` and `car-load-turn` (the same drives as their namesakes without it, seen from
+nearer), each put
+the car down at a fixed place, freeze the page and hold the inputs for fixed steps, so they draw the same picture
+every time.
 
 The course is pure data (`src/course.ts`) and the scripted walk is pure too (`src/drive.ts`): `pnpm check:walk` walks
 every pad headless the same way the page's `__wh.walkTo` does with `profile=engine`, and the figure's poses through a jump
@@ -146,8 +157,10 @@ reach on the flat, the ramp and the stairs, hands and feet stay on their holds a
 and off ends standing on free ground, and two runs are bit-equal; and the driving (`tools/walk/car-scenarios.ts`):
 getting in, driving and getting out ends standing on free ground beside the car, the walker stops at a parked car, a
 car cannot be entered through a wall and beside one the figure gets out on the other side, one car pushed into the
-other does not sink into it, a lap under scripted input is bit-equal twice and a car across the loose patch lays ruts
-there and nothing on grass; and the gliding (`tools/walk/glide-scenarios.ts`): the planted paws of a crawl do not
+other does not sink into it, a lap under scripted input is bit-equal twice, a car across the loose patch lays ruts
+there and nothing on grass, the figure's mass comes onto the car as it sits down and leaves as it gets up, and with
+the roof load the car sits lower, pulls away more slowly, rolls further in the same turn and stays on its wheels; and
+the gliding (`tools/walk/glide-scenarios.ts`): the planted paws of a crawl do not
 slide, getting on and off ends standing on free ground behind the wing, a take-off, a turn back and a landing under
 scripted raw input never take the hull into the ground and are bit-equal twice, and a flight through the assist with
 the page's keys (take-off, faster to the fast flight, slower to the slow one, turns, a descent that lands) reaches and
@@ -201,7 +214,8 @@ Round the 120 m course lies open land, 402 m on every side, drawn without the gr
 The fence stops walkers, riders, cars and the glider on the ground, but not the glider in the air under the assist: it
 flies out over the land, and 60 m beyond the course a soft turn back begins (fully within another 70 m), so held `W`
 never ends at an invisible wall. Outside the course the assist keeps it at least 6 m over the ground (a held descent
-levels out there), so it lands only on the course, and the figure gets off only where its spot is on the course. With
+levels out there), so it lands only on the course, and the figure gets off only where its spot is on the course (near
+the fence the glider's line in the HUD says that the spots behind the wings are too near the course's edge). With
 `assist=0` the fence stops it in the air too, as before. `assist=0` in the hash keeps the raw
 controls: `W` puts the nose down and `S` up, `A` and `D` bank, held space beats and `Shift` flares.
 
@@ -256,7 +270,8 @@ Then open <http://localhost:5281/movement/>. Another port: `EXAMPLES_PORT=5291 d
 - `W A S D` or the arrows walk, `Shift` runs, space jumps; drag to turn the view, the wheel moves the camera in and out.
   A gamepad works too.
 - `E` gets on the steed or into a car when near, and off or out again; riding, `T` switches walk and trot, `Shift`
-  gallops; driving, `W`/`S` throttle, brake and reverse, `A`/`D` steer, space the handbrake, `R` rights the car. `E`
+  gallops; driving, `W`/`S` throttle, brake and reverse, `A`/`D` steer, space the handbrake, `L` puts the roof load
+  on or takes it off, `R` rights the car. `E`
   also gets on the glider and off it (stopped on the ground); on the ground `W`/`S` crawl, `A`/`D` turn, space leaps;
   in the air `W`/`S` faster and slower, `A`/`D` turn, space climbs, `Shift` descends (and lands when low and slow);
   with `assist=0` in the air `W`/`S` nose down and up, `A`/`D` bank, held space beats, `Shift` flares.
@@ -270,7 +285,7 @@ Then open <http://localhost:5281/movement/>. Another port: `EXAMPLES_PORT=5291 d
 - URL hash: `#seed=7&x=60&z=60&yaw=0&fp=0&c=0&lock=0&pr=1.5&profile=default&figure=pathfinder`. `fp=1` first person,
   `c=1` the wireframe, `lock=1` a click locks the pointer, `pr` caps the canvas pixel ratio (default 1.5, `0` the
   device's own), `profile` the movement profile (`default`, `heavy`, `light`, `engine`), `figure=boxes` the box figure (no steed),
-  `ride=1` in the saddle, `hx`, `hz`, `hyaw` the steed's place, `drive=0` in a car, `car0`, `car1` the cars' places, `glide=1` on the glider, `gx`, `gz`, `gyaw` the glider's place, `assist=0` the glider's raw controls in the air.
+  `ride=1` in the saddle, `hx`, `hz`, `hyaw` the steed's place, `drive=0` in a car, `car0`, `car1` the cars' places, `roof=0` the roof load on a car, `glide=1` on the glider, `gx`, `gz`, `gyaw` the glider's place, `assist=0` the glider's raw controls in the air.
 
 ## Script interface
 
@@ -286,9 +301,10 @@ Then open <http://localhost:5281/movement/>. Another port: `EXAMPLES_PORT=5291 d
 | `ride(on?, instant?)` | Gets on (`true`; within 3.2 m of the steed unless `instant`), off (`false`) or toggles (no argument), as the key `E`; `instant` skips the climb. Returns `riding()`. `null` with `figure=boxes`. |
 | `riding()` | The ride: `mode` (`off`, `mounting`, `on`, `dismounting`), the `seat` weight, the `holds` of the hands and feet, `trot`, the steed's place, heading and `speed`, its step cycle (`phase`, `rate`, the `patterns` weights of walk, trot and gallop), `downs` (footfalls) and `planted` per leg (front left, front right, hind left, hind right), the trunk's `dip`, the steed's own clock `time` and its `effort` (0–1, which opens its mouth and quickens its breath), and `reachM`. |
 | `drive(car?, on?, instant?)` | Gets into car `car` (default the nearest in reach, else 0; `true`, within 2 m of its door unless `instant`), out (`false`, when nearly stopped) or toggles, as the key `E`; `instant` skips the walk and the doors. Returns `driving()`. `null` with `figure=boxes`. |
-| `driving()` | The drive: `mode` (`off`, `entering`, `on`, `exiting`), the `car` the figure is in, the `side` it gets in or out at, the camera's `weight`, per car its place, heading, `speed`, `up`, `asleep`, `steerDeg`, per wheel `compression`, `slip` and `grounded`, the `doors`, `brake` and `reversing` lamps; the tyre `marks` laid, and `reachM`. |
+| `driving()` | The drive: `mode` (`off`, `entering`, `on`, `exiting`), the `car` the figure is in, the `side` it gets in or out at, the camera's `weight`, per car its place, heading, `speed`, `up`, `asleep`, `steerDeg`, per wheel `compression`, `slip` and `grounded`, the `doors`, `brake` and `reversing` lamps, `roofLoad` (whether it carries the roof load) and `loadKg` (the mass of its loads: the figure in the seat, the roof load); the tyre `marks` laid, and `reachM`. |
+| `roofLoad(on?, car?)` | Puts the roof load on car `car` (default the car driven, else 0), takes it off (`false`) or toggles it, as the key `L` does for the car driven. Returns `driving()`. `null` with `figure=boxes`. |
 | `glide(on?, instant?)` | Gets on the glider (`true`; within 4.8 m unless `instant`), off (`false`; stopped on the ground unless `instant`) or toggles, as the key `E`. Returns `gliding()`. `null` with `figure=boxes`. |
-| `gliding()` | The glider: `mode`, the `seat` weight, the `holds`, its place, heading, `pitchDeg`, `bankDeg`, `speed`, `climb`, `altitude`, the `beat`'s effort, the `flare`, the `load`, `stalled`, `takeOffs`, `touchDowns`, `assisted`, the assist's `wantedSpeed` and `askedClimb`, its step cycle on the ground (`phase`, `downs`, `planted`: left wing, right wing, hind left, hind right), its `face` (how far the mouth is open, the tongue out and the lids shut, each 0–1) and `reachM`. |
+| `gliding()` | The glider: `mode`, `offRefused` (while the figure is on it, why it cannot get off now: `air`, `moving` or `edge`, the spots behind the wings too near the course's edge; `null` when it can), the `seat` weight, the `holds`, its place, heading, `pitchDeg`, `bankDeg`, `speed`, `climb`, `altitude`, the `beat`'s effort, the `flare`, the `load`, `stalled`, `takeOffs`, `touchDowns`, `assisted`, the assist's `wantedSpeed` and `askedClimb`, its step cycle on the ground (`phase`, `downs`, `planted`: left wing, right wing, hind left, hind right), its `face` (how far the mouth is open, the tongue out and the lids shut, each 0–1) and `reachM`. |
 | `traces(clear?)` | The traces: marks laid in all and still `visible`, `prints` of feet and hooves, the `dust` bursts and particles fired and alive, the `time` they are drawn at; `clear` forgets them first. |
 | `freeze(on)` | Stops the page's own stepping and the keyboard, so `hold` alone moves the figure (for pictures of a pose). |
 | `teleport(x, y?, z, yawDeg?)` | Puts the feet there (`y` omitted or `NaN`: on the ground). |

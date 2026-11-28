@@ -492,7 +492,9 @@ engine.animateWhile(() => bodies.some((b) => !b.asleep));
 
 The numbers of the body (drive, brakes, tyres, steering, springs) and what each wheel reports (slip for tyre marks
 and sound, load, contact): [Wheeled body](wheeled.md). The camera: [A follow camera for a carried or driven
-body](#a-follow-camera-for-a-carried-or-driven-body).
+body](#a-follow-camera-for-a-carried-or-driven-body). What a body carries (someone on a seat, something on top) is a
+load at a point of its frame (`setLoad`), and a pull or a thrust is a force for a step (`applyForce`): [Loads and
+forces](wheeled.md#loads-and-forces).
 
 **Example.** `movement` (two compact cars in a `WheeledGroup`: `src/car.ts` the stepping, getting in and out and the
 tyre marks, `src/car-view.ts` the drawing; E at the driver's door, `#drive=0` starts in a car).

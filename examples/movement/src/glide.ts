@@ -139,9 +139,17 @@ export interface FlightArea {
 
 export type GlideMode = 'off' | 'mounting' | 'on' | 'dismounting';
 
+/**
+ * Why the figure cannot get off the glider now: it is in the air, it still moves, or the spots behind both wings are
+ * too near the edge of the flight range's home area (`DISMOUNT_MARGIN_M`).
+ */
+export type GlideOffRefusal = 'air' | 'moving' | 'edge';
+
 /** What `Glide.status` reports. */
 export interface GlideStatus {
   mode: GlideMode;
+  /** While the figure is on it: why it cannot get off now (null when it can, or when it is not on it). */
+  offRefused: GlideOffRefusal | null;
   seat: number;
   holds: [number, number, number, number];
   grounded: boolean;
@@ -386,8 +394,15 @@ export class Glide {
 
   /** On the ground and crawling slower than 0.8 m/s (and with a flight range, a spot to get off at in its home area). */
   canDismount(): boolean {
+    return this.offRefusal() === null;
+  }
+
+  /** Why getting off is refused now (`GlideOffRefusal`), or null when the figure can get off. */
+  offRefusal(): GlideOffRefusal | null {
+    if (!this.body.grounded) return 'air';
     const v = this.body.velocity;
-    return this.body.grounded && Math.hypot(v[0]!, v[2]!) < 0.8 && (this.spotHome(1) || this.spotHome(-1));
+    if (Math.hypot(v[0]!, v[2]!) >= 0.8) return 'moving';
+    return this.spotHome(1) || this.spotHome(-1) ? null : 'edge';
   }
 
   /** Whether the spot to get off at on side `s` is in the flight range's home area (always without a range). */
@@ -727,6 +742,7 @@ export class Glide {
     const four = (a: ArrayLike<number>): [number, number, number, number] => [a[0]!, a[1]!, a[2]!, a[3]!];
     return {
       mode: this.mode,
+      offRefused: this.mode === 'on' ? this.offRefusal() : null,
       seat: this.seat.weight,
       holds: [this.acts.left!.weight, this.acts.right!.weight, this.feet[0].weight, this.feet[1].weight],
       grounded: b.grounded,

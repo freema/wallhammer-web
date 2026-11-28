@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+### Added
+
+- **Loads on a wheeled body** (in `world`): `WheeledBody.setLoad(slot, mass, x?, y?, z?)`, `clearLoads()`, `loadMass`, `totalMass` and `WHEELED_LOAD_SLOTS` (8): point masses fixed at points of the body's frame. A loaded body steps about the common centre of mass, so it rests lower, leans toward a load off its centre, pitches and rolls more under a high one and gathers speed more slowly; `position` and `velocity` stay those of the body's own centre, `restHeight` and `kineticEnergy` count the loads. Setting a load to what it already is does not wake a sleeping body. A body without loads steps bit for bit as before. See [Loads and forces](packages/wallhammer-web/docs/wheeled.md#loads-and-forces).
+- **A force on a wheeled body** (in `world`): `WheeledBody.applyForce(px, py, pz, fx, fy, fz)` applies a force (N, world) at a world point for the next step only; several calls add up and it wakes the body. `WheeledBody.advance(dt, intent, afterStep?)` calls `afterStep` after every fixed step, the place to ask for the force again.
+- **Saved state of a group of wheeled bodies** (in `world`): `WheeledGroup.stateBytes`, `saveState(out?, offset?)`, `loadState(bytes, offset?)` and `simState(name)`: the group's leftover time and every body's state in the order of `bodies`.
+- **Loads in the examples**: in the movement course the seated figure is a load of 80 kg at the car's seat, rising as the figure sits down (the car sinks 7.5 mm and leans 0.3° to the driver's side), and `L` puts a roof load on the driven car: a rack with three crates and a strapped bundle (`compactRoofLoadMesh`, `COMPACT_ROOF_LOAD` in `examples/shared/src/vehicles/compact.ts`), 180 kg at 1.66 m, with which the car rests 17 mm lower, covers 1.53 m instead of 1.75 m in its first second and rolls 7.2° instead of 6.1° in the same turn. Hash `roof=0`, presets `car-load-stand`, `car-load-accelerate` and `car-load-turn`, `__wh.roofLoad(on?, car?)`. The glider's status line says why getting off is refused: in the air, moving, or the spots behind the wings too near the course's edge (`gliding().offRefused`).
+
+### Changed
+
+- **The saved state of a `WheeledBody` is version 2** (in `world`): it carries the loads and is 1,136 bytes with four wheels (was 880); `loadState` still reads a state of the old format, also as a part of a `Simulation` snapshot written before. Size a buffer from `stateBytes`.
+- **The marks panel asks in the panel** (in `platform`): `installMarking` no longer opens a dialog of the browser (`window.confirm`, `window.prompt`), which blocked a page driven by a script. `reopen` and `wontfix` put a text field for the reason into the mark's row, or into the bar of the comparison when asked there (Enter saves, also with no text; Escape drops it; the typed text survives the panel's poll of the store); `×` turns into `delete` and `keep` in the row before a mark is removed. The records, the store and `MarkingApi` are unchanged.
+
+### Fixed
+
+- **`marks=` stays in the address of the examples**: `endless`, `outpost`, `fantasy-village`, `planet` and `system` rewrite their hash as the view moves and dropped `marks=` from it, so a reload of a page opened with `#marks=1` (or `marks=0`) lost the choice. They keep it now; the exact hash a mark records is unchanged (it never carried `marks=`).
+- **The compact car's roof in the examples**: its right half was drawn as glass; both halves are paint.
+- **The movement example's HUD while driving**: its position line showed the place of the parked figure and "in the air"; it shows the driven car's place and speed.
+
 ## 0.8.2
 
 Version 0.8.1 was never published to npm; its changes ship here.

@@ -3,14 +3,16 @@
 // driving and getting out ends with the figure standing on free ground beside the car; the figure's walker cannot walk
 // through a parked car; a car cannot be entered through a wall, and next to a wall the figure gets out on the other
 // side; one car pushed into the other never sinks into it; a lap under scripted input is bit-equal twice; a car rolling
-// across the loose patch lays ruts there and nothing on grass.
+// across the loose patch lays ruts there and nothing on grass. The loads: the figure's mass moves onto the car as it
+// sits down and off again as it gets up (the car sinks on the driver's side and comes back); with the roof load the car
+// sits lower, pulls away more slowly with its nose higher, rolls further in the same turn and stays on its wheels.
 
 import { newSlideResult } from '../../packages/wallhammer-web/src/world/collide.ts';
 import { Walker } from '../../packages/wallhammer-web/src/world/walker.ts';
 import type { WheeledBody } from '../../packages/wallhammer-web/src/world/wheeled.ts';
 import { MOVE_PROFILES } from '../../examples/shared/src/figures/profiles.ts';
 import { PathfinderBody } from '../../examples/movement/src/body.ts';
-import { Cars } from '../../examples/movement/src/car.ts';
+import { Cars, DRIVER_KG, ROOF_LOAD_KG } from '../../examples/movement/src/car.ts';
 import type { CarPlace } from '../../examples/movement/src/car.ts';
 import { buildCourse } from '../../examples/movement/src/course.ts';
 import type { Course } from '../../examples/movement/src/course.ts';
@@ -90,6 +92,15 @@ function hullOverlap(a: WheeledBody, b: WheeledBody): number {
     }
   }
   return deepest;
+}
+
+/** Roll to the right and nose-up pitch of a body, degrees. */
+function rollRightDeg(b: WheeledBody): number {
+  const R = b.rotation;
+  return Math.asin((R[3]! * R[0]! + R[5]! * R[2]!) / Math.hypot(R[0]!, R[2]!)) / DEG;
+}
+function noseUpDeg(b: WheeledBody): number {
+  return Math.asin(-b.rotation[7]!) / DEG;
 }
 
 export const CAR_SCENARIOS: Scenario[] = [
@@ -229,6 +240,87 @@ export const CAR_SCENARIOS: Scenario[] = [
       let same = a.length === b.length;
       for (let i = 0; same && i < a.length; i++) same = a[i] === b[i];
       return verdict(same, `two laps of 12 s: states of both cars and the tyre marks bit-equal ${same} (${a.length} bytes)`);
+    },
+  },
+  {
+    name: 'car-driver-is-a-load',
+    run() {
+      // The figure 1.5 m out from car 0's driver's door; it gets in, sits for 2 s and gets out again.
+      return withCars(66, 57.5, 0, PLACES, (cars) => {
+        const b = cars.bodies[0]!, other = cars.bodies[1]!;
+        stepUntil(cars, 1, () => b.asleep && other.asleep);
+        const y0 = b.position[1]!, roll0 = rollRightDeg(b);
+        cars.enter(0);
+        // The mass comes with the seat's weight: never down while getting in, part of it on the way.
+        let rising = true, part = false, last = 0;
+        stepUntil(cars, 4, () => {
+          const m = b.loadMass;
+          if (m < last - 1e-9) rising = false;
+          if (m > 1 && m < DRIVER_KG - 1) part = true;
+          last = m;
+          return cars.mode === 'on';
+        });
+        const seated = b.loadMass;
+        stepUntil(cars, 2, () => b.asleep);
+        const sink = y0 - b.position[1]!, lean = rollRightDeg(b) - roll0;
+        const status = cars.status().cars[0]!.loadKg;
+        cars.exit();
+        stepUntil(cars, 3, () => cars.mode === 'off');
+        const left = b.loadMass;
+        stepUntil(cars, 3, () => b.asleep);
+        const back = Math.abs(b.position[1]! - y0), level = Math.abs(rollRightDeg(b) - roll0);
+        // 80 kg on four springs of 26,000 N/m: 7.5 mm; the seat is on the left, so the car leans left.
+        const ok = rising && part && seated === DRIVER_KG && status === DRIVER_KG && sink > 0.005 && sink < 0.011 && lean < -0.15 && lean > -0.8 && left === 0 && back < 0.002 && level < 0.1 && other.loadMass === 0 && other.asleep;
+        return verdict(ok, `getting in the car's load rises to ${f(seated, 0)} kg (never down ${rising}, in part on the way ${part}); seated it sits ${f(sink * 1000, 1)} mm lower and leans ${f(-lean, 2)}° to the driver's side; out again ${f(left, 0)} kg, ${f(back * 1000, 2)} mm and ${f(level, 3)}° from where it stood; the parked car ${f(other.loadMass, 0)} kg, asleep ${other.asleep}`);
+      });
+    },
+  },
+  {
+    name: 'car-roof-load-lower-slower-rolls-more',
+    run() {
+      // Car 0 on the open ground by the start pad, the figure in it: at rest, 1 s of full throttle from a standstill,
+      // on to 2.4 s, then 0.9 s of a full left turn (the page's presets car-accelerate and car-turn), then 4 s more of it.
+      const drive = (roof: boolean) => withCars(60, 50, 0, [[56, 47, 180], [20, 20, 0]], (cars) => {
+        const b = cars.bodies[0]!;
+        cars.setRoofLoad(0, roof);
+        cars.put(0, 56, 47, 180 * DEG);
+        cars.enter(0, true);
+        stepUntil(cars, 3, () => b.asleep);
+        const y = b.position[1]!, kg = b.loadMass;
+        const x0 = b.position[0]!, z0 = b.position[2]!, p0 = noseUpDeg(b);
+        const d = cars.drive;
+        let nose = 0;
+        d.throttle = 1;
+        stepUntil(cars, 1, () => ((nose = Math.max(nose, noseUpDeg(b) - p0)), false));
+        const run = Math.hypot(b.position[0]! - x0, b.position[2]! - z0);
+        stepUntil(cars, 1.4, () => false);
+        d.throttle = 0.6;
+        d.steer = -1;
+        stepUntil(cars, 0.9, () => false);
+        const roll = rollRightDeg(b);
+        let up = 1;
+        stepUntil(cars, 4, () => ((up = Math.min(up, b.rotation[4]!)), false));
+        return { y, kg, run, nose, roll, up };
+      });
+      const bare = drive(false), load = drive(true);
+      // Taking the load off again: the car comes back up.
+      const back = withCars(60, 50, 0, [[56, 47, 180], [20, 20, 0]], (cars) => {
+        const b = cars.bodies[0]!;
+        stepUntil(cars, 1, () => b.asleep);
+        const y0 = b.position[1]!;
+        cars.setRoofLoad(0, true);
+        const woke = !b.asleep;
+        stepUntil(cars, 3, () => b.asleep);
+        const down = y0 - b.position[1]!;
+        cars.setRoofLoad(0, false);
+        stepUntil(cars, 3, () => b.asleep);
+        return { woke, down, off: Math.abs(b.position[1]! - y0), kg: b.loadMass, shown: cars.status().cars[0]!.roofLoad };
+      });
+      const sink = bare.y - load.y;
+      const ok =
+        bare.kg === DRIVER_KG && load.kg === DRIVER_KG + ROOF_LOAD_KG && sink > 0.012 && sink < 0.03 && load.run < bare.run * 0.93 && load.nose > bare.nose + 0.1 &&
+        load.roll > bare.roll + 0.6 && bare.up > 0.95 && load.up > 0.95 && back.woke && back.down > 0.012 && back.off < 0.002 && back.kg === 0 && !back.shown;
+      return verdict(ok, `with ${ROOF_LOAD_KG} kg on the roof (loads ${f(load.kg, 0)} kg against ${f(bare.kg, 0)}): ${f(sink * 1000, 1)} mm lower at rest; 1 s of full throttle ${f(load.run, 2)} m against ${f(bare.run, 2)} m, nose up ${f(load.nose, 2)}° against ${f(bare.nose, 2)}°; in the same left turn rolled ${f(load.roll, 2)}° against ${f(bare.roll, 2)}°, least up ${f(load.up, 3)} against ${f(bare.up, 3)} over 4 s more of it; put on a standing car it wakes ${back.woke} and sinks ${f(back.down * 1000, 1)} mm, taken off it is ${f(back.off * 1000, 2)} mm from where it stood`);
     },
   },
   {

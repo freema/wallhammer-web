@@ -5,10 +5,17 @@
 //   docker compose run --rm shaders                               every example page
 //   docker compose run --rm shaders --pages planet,movement           only these
 //   docker compose run --rm shaders --pages 'planet#strip=1'      a page with a hash (another set of programs)
+//   docker compose run --rm shaders --pages endless/sphere.html   another page of an example
+//   docker compose run --rm shaders --variants                    every example page, then the listed variants
+//   docker compose run --rm shaders --more 'endless#cam=free'     every example page, then these
 //   docker compose run --rm shaders --url http://host:port/page/  any page, not only an example
 //
 // --base      the server of the examples (default http://dev:5281)
-// --pages     example names, comma separated, each optionally with `#hash`; default: every example the server lists
+// --pages     pages, comma separated: an example's name (`planet`) or a page file of one (`endless/sphere.html`),
+//             each optionally with `#hash`; default: every example the server lists
+// --variants  also the variants of shader-variants.mjs (pages and hashes that make programs the default pages do
+//             not), after the pages of --pages or of the default list; this is what the CI job runs
+// --more      pages in the same form as --pages, checked after them (and after --variants): for trying a variant
 // --url       one page by its whole address instead of --pages
 // --timeout   how long one attempt at a page may take, from the start of its browser to the check of its programs,
 //             in ms (default 180000); a page that fails or takes longer is tried once more in a fresh browser
@@ -23,8 +30,9 @@
 // Limits: only the programs a page makes with the options it starts with are seen (a program made later, by a key or
 // a mode, needs a `#hash` that turns it on); contexts made in workers are not seen; the translator that validates GLSL
 // is the one of every Chromium, but a fault of one graphics driver's own compiler cannot show here.
-// Every page runs in a browser of its own (see `attempt`) and prints its time and phases (`load`: the page's load
-// event, `ready`: `__wh.ready` resolved, `checked`: programs read). A page that fails for any reason other than a
+// Every page runs in a browser of its own (see `attempt`) and prints its programs, how many of them are new (their
+// sources made by no earlier page of the run: a variant with 0 new adds nothing), its time and phases (`load`: the
+// page's load event, `ready`: `__wh.ready` resolved, `checked`: programs read). A page that fails for any reason other than a
 // broken shader (an exception, a console error, no program, over the time limit) is tried once more in a fresh
 // browser and counts as a page error only when that fails too.
 // Last line: `shaders: N programs on M pages, K failed, E page errors (T s[, R page(s) retried])`; exit code 1 when K
@@ -33,6 +41,7 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { chromium } from 'playwright-core';
+import { SHADER_VARIANTS } from './shader-variants.mjs';
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
@@ -41,6 +50,8 @@ function arg(name, fallback) {
 
 const BASE = arg('base', 'http://dev:5281');
 const PAGES = arg('pages', '');
+const MORE = arg('more', '');
+const VARIANTS = process.argv.includes('--variants');
 const URL_ARG = arg('url', '');
 const PAGE_TIMEOUT = Number(arg('timeout', '180000'));
 const WAIT = Number(arg('wait', '1500'));
@@ -80,11 +91,21 @@ function installAudit() {
     if (!linked.some((l) => l.program === program)) linked.push({ gl: this, program });
     return linkProgram.call(this, program);
   };
+  // A program's name for telling programs of different pages apart: a hash (FNV-1a) of its shaders' sources.
+  const nameOf = (program) => {
+    let h = 0x811c9dc5;
+    for (const shader of attached.get(program) ?? []) {
+      const text = sources.get(shader) ?? '';
+      for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+      h = Math.imul(h ^ 0xff, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  };
   window.__whShaderAudit = () => {
     const out = [];
     for (const { gl, program } of linked) {
       if (gl.isContextLost() || !gl.isProgram(program)) continue;
-      const entry = { ok: true, stages: [], link: '' };
+      const entry = { ok: true, stages: [], link: '', id: nameOf(program) };
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         entry.ok = false;
         entry.link = gl.getProgramInfoLog(program) ?? '';
@@ -128,10 +149,14 @@ try {
       names = [...new Set([...(await r.text()).matchAll(/href="\/?([a-z0-9-]+)\/"/g)].map((m) => m[1]))];
       if (names.length === 0) throw new Error('the index lists no example');
     }
+    if (VARIANTS) names.push(...SHADER_VARIANTS);
+    names.push(...MORE.split(',').filter(Boolean));
     targets = names.map((n) => {
-      const [page, hash] = n.split('#');
-      const url = new URL(`/${page}/`, base);
-      if (hash) url.hash = hash;
+      const cut = n.indexOf('#');
+      const page = cut < 0 ? n : n.slice(0, cut);
+      // A name is an example's folder (its index page); a name ending in `.html` is a page file inside one.
+      const url = new URL(page.endsWith('.html') ? `/${page}` : `/${page}/`, base);
+      if (cut >= 0) url.hash = n.slice(cut + 1);
       return { name: n, url };
     });
   }
@@ -259,6 +284,8 @@ let failed = 0;
 let pageErrors = 0;
 let retried = 0;
 const tAll = Date.now();
+/** The programs seen so far in the run, by the hash of their sources. */
+const seen = new Set();
 for (const target of targets) {
   const t0 = Date.now();
   let result = await attempt(target);
@@ -279,10 +306,16 @@ for (const target of targets) {
   }
   const { audit, errors, phases } = result;
   const bad = audit.filter((p) => !p.ok);
+  // Programs whose sources no earlier page of this run made: what the page adds to the run.
+  let fresh = 0;
+  for (const p of audit) {
+    if (!seen.has(p.id)) fresh++;
+    seen.add(p.id);
+  }
   programs += audit.length;
   failed += bad.length;
   pageErrors += other.length;
-  console.log(`${target.name}: ${audit.length} programs, ${bad.length} failed, ${seconds(Date.now() - t0)} (${phases.join(', ')})`);
+  console.log(`${target.name}: ${audit.length} programs (${fresh} new), ${bad.length} failed, ${seconds(Date.now() - t0)} (${phases.join(', ')})`);
   for (const p of bad) {
     if (p.stages.length === 0) console.log(`  FAILED to link: ${p.link.trim()}`);
     for (const s of p.stages) {

@@ -659,7 +659,7 @@ const scenarios: Scenario[] = [
       for (let i = 0; i < 400; i++) c.step(it);
       const end2 = c.saveState();
       const same = end1.every((x, i) => x === end2[i]);
-      return verdict(same && b.stateBytes === 30 * 8 + 4 * 20 * 8, `400 steps after a restore into another body bit-equal: ${same}; ${b.stateBytes} bytes for four wheels`);
+      return verdict(same && b.stateBytes === 30 * 8 + 4 * 20 * 8 + 8 * 4 * 8, `400 steps after a restore into another body bit-equal: ${same}; ${b.stateBytes} bytes for four wheels`);
     },
   },
   {

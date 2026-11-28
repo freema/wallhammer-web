@@ -49,6 +49,8 @@ frame(1 / 60, { up: true, down: false, left: false, right: false, space: false }
 `advance(dt, intent)` runs the steps due (at most `maxStepsPerAdvance`, the rest of a long pause dropped) and returns
 their number; `step(intent)` runs exactly one, for scripts and checks. Cut the same seconds into frames of 1/30, 1/60
 or 1/144 s and the body takes the same steps with the same bits, as long as the intent changes only between steps.
+`advance(dt, intent, afterStep)` calls `afterStep()` once after every step, before the next one runs: the place for
+what follows each step (a force for the next one, the obstacle box, a timeline). It may change `intent`.
 
 **Throttle and brake.** `throttle` forward drives forward; while the body rolls backward faster than 1 m/s it brakes
 instead. `throttle` backward brakes while the body rolls forward faster than 1 m/s and drives backward below that, so
@@ -58,8 +60,8 @@ marked `handbrake` (the rear ones of `fourWheels`): they hold along their rollin
 (`handbrakeGrip`), so the rear slides out.
 
 A body that stood still for `sleepSeconds` without throttle sleeps (`asleep`): it does not move by a bit until the
-throttle, a released brake, `wake()`, `applyImpulse` or a change of the ground under a wheel. Parked with the brake or
-the handbrake on a slope of 15° it settles within a centimetre and stays.
+throttle, a released brake, `wake()`, `applyImpulse`, `applyForce`, a changed load or a change of the ground under a
+wheel. Parked with the brake or the handbrake on a slope of 15° it settles within a centimetre and stays.
 
 ## Drawing the wheels
 
@@ -172,6 +174,63 @@ its own `advance` throws, so a body cannot be stepped twice or drawn at a stale 
 `collideWheeledBodies(a, b)` (or `a.collide(b)`) is the pair step alone, for a game that steps its bodies itself; call
 it after both took the same step.
 
+## Loads and forces
+
+A body carries up to `WHEELED_LOAD_SLOTS` (8) **loads**: `setLoad(slot, mass, x, y, z)` puts `mass` kg at a point of
+the body's frame, `setLoad(slot, 0)` empties the slot and `clearLoads()` all of them. A load is a point mass fixed to
+the body. With loads the steps run about the centre of mass of the body and its loads together, with their mass and
+their inertia, so everything follows from where the mass is:
+
+- the springs sink under the weight, and the body leans toward a load off its centre until the springs carry the
+  common centre of mass (300 kg at the centre of the reference body: 25 mm lower; 0.6 m to the right: 1.6° of roll);
+- a load high up rolls the body further out of a turn and lifts its nose further under drive (300 kg 1.1 m above the
+  centre: 5.6° of roll against 3.2° in the same turn at 10 m/s, the nose 1.25° up against 0.90° at full throttle);
+- the same drive, brakes and blows move the heavier body less (3.3 m against 4.2 m in the first 1.5 s), and a body
+  with a load off its centre turns when it is hit through its own centre.
+
+`position`, `velocity` and the frame stay those of the body alone: the origin is the centre of mass of the body
+without loads, and the wheels, the hull and what is drawn do not move in it. `loadMass` and `totalMass` read the
+masses; `kineticEnergy` and `restHeight` count the loads. Setting a slot to the values it has does nothing; a change
+wakes the body. Whose slot is whose is the game's to keep.
+
+`applyForce(px, py, pz, fx, fy, fz)` adds a force (N, in the world's axes) at a world point to **the next step only**:
+a pull, a wind, a thrust. Forces of several calls add up, and each call wakes the body. For a force that lasts, ask it
+again after every step, from `afterStep`. `applyImpulse` is the same for a single blow (N·s, at once).
+
+<!-- check: wrap -->
+```ts
+import { CollisionWorld, WheeledBody, newWheeledIntent } from 'wallhammer-web/world';
+
+const world = new CollisionWorld({ heightAt: () => 0 });
+const body = new WheeledBody(world);
+body.setUpright();
+const intent = newWheeledIntent();
+
+body.setLoad(0, 80, -0.4, 0.1, 0.2); // slot 0: 80 kg to the left of the centre, a little behind it
+body.setLoad(1, 250, 0, 1.1, 0.3); // slot 1: 250 kg high above it
+// body.loadMass is 330, body.totalMass 1530; body.setLoad(1, 0) takes the second one away again.
+
+// A pull of 2 kN toward +x at the body's rear end, for as long as `pulling` holds.
+let pulling = true;
+const pull = (): void => {
+  if (!pulling) return;
+  const R = body.rotation; // the body's right, up and back axes in the world, three numbers each
+  const p = body.position;
+  const back = body.setup.halfLength;
+  body.applyForce(p[0]! + R[6]! * back, p[1]! + R[7]! * back, p[2]! + R[8]! * back, 2000, 0, 0);
+};
+
+pull(); // for the first step
+function frame(dt: number): void {
+  body.advance(dt, intent, pull); // and after every step, for the next one
+}
+frame(1 / 60);
+pulling = false;
+```
+
+A force that waits for its step is dropped by `teleport` and `loadState` and is not part of the saved state. In a
+`WheeledGroup` the hook is the group's (`group.advance(dt, intents, afterStep)`); ask the forces of its bodies there.
+
 ## Tuning
 
 `DEFAULT_WHEELED_BODY` (and the options of `fourWheels`) are a reference set, not a vehicle of the engine: a body of
@@ -212,9 +271,15 @@ below `rearGrip`) understeers more; a lower `handbrakeGrip` or `slideGrip` slide
 ## Saving and restoring
 
 `saveState(out?, offset?)` writes the whole moving state (pose, velocities, the pose before for drawing, the leftover
-time, steering, sleep and every wheel), `stateBytes` long (880 bytes with four wheels); `loadState(bytes, offset?)`
-puts it back, into this body or another of the same setup, and the steps after it are the same bits.
-`simState(name)` makes it a part of a `Simulation`'s state, as for the walker.
+time, steering, sleep, every wheel and the loads), `stateBytes` long (1,136 bytes with four wheels);
+`loadState(bytes, offset?)` puts it back, into this body or another of the same setup, and the steps after it are the
+same bits. `simState(name)` makes it a part of a `Simulation`'s state, as for the walker. A state written before loads
+existed (version 1, 880 bytes with four wheels) is still read: the body then carries no loads.
+
+A `WheeledGroup` has the same four members: its state is the group's leftover time followed by every body's state in
+the order of `bodies` (`stateBytes`: 24 bytes plus the bodies'), and a group of bodies with the same setups in the
+same order restored from it goes on to the same bits. Save the group, not its bodies one by one: a body in a group
+does not own the leftover time its steps come from.
 
 ## Limits
 
@@ -239,5 +304,11 @@ puts it back, into this body or another of the same setup, and the steps after i
 - **A constant of the step.** A wheel in the air loses 1 % of its spin per step, so the decay per second depends on
   `stepHz` (at 60 Hz about 45 % a second). It only changes how a wheel in the air turns down, which is drawn, not the
   motion; it stays a constant so that existing bodies keep their bits.
-- **Sleeping** wakes on the intent, on `applyImpulse` and on a change of the ground under a wheel; a solid moved into a
-  sleeping body's hull (not under its wheels) does not wake it: call `wake()`.
+- **Sleeping** wakes on the intent, on `applyImpulse`, `applyForce`, a changed load and on a change of the ground under
+  a wheel; a solid moved into a sleeping body's hull (not under its wheels) does not wake it: call `wake()`.
+- **Loads are point masses on a fixed frame.** The inertia of the body with its loads is taken about the body's own
+  axes through the common centre of mass (the products of inertia of a load off those axes are left out), a load has
+  no size and does not move or fall off, and the hull does not grow round it: a load that sticks out needs its own
+  solid or the game's own test. The tyres' load sensitivity (`loadSensitivity`) still measures a wheel's load against
+  the weight of the body alone, so a loaded body has a little less grip for its weight, as an overloaded one does.
+  `restHeight` shares the loads' weight evenly among the wheels, whatever their places.

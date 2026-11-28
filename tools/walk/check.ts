@@ -1,5 +1,5 @@
 // Headless check of walking in the engine: the collision world, the walker, the follow camera, the wheeled body and ground contacts' traces, in plain Node,
-// without a browser or graphics. One line per scenario; exit code 1 when a check fails or the run takes over 5 s.
+// without a browser or graphics. One line per scenario; exit code 1 when a check fails or the run takes over 8 s.
 //
 //   node tools/walk/check.ts            all scenarios      (pnpm check:walk)
 //   node tools/walk/check.ts slide      only scenarios whose name contains "slide"
@@ -20,6 +20,7 @@ import { SPHERE_SCENARIOS } from './sphere-scenarios.ts';
 import { STREAMING_SCENARIOS } from './streaming-scenarios.ts';
 import { TRACE_SCENARIOS } from './trace-scenarios.ts';
 import { WALKER_SCENARIOS } from './walker-scenarios.ts';
+import { WHEELED_LOAD_SCENARIOS } from './wheeled-load-scenarios.ts';
 import { WHEELED_SCENARIOS } from './wheeled-scenarios.ts';
 
 const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
@@ -32,13 +33,13 @@ const PACKAGES: { label: string; scenarios: Scenario[] }[] = [
   { label: 'stand spots, seats and fixed steps', scenarios: SEAT_SCENARIOS },
   { label: 'riding (examples/movement)', scenarios: RIDE_SCENARIOS },
   { label: 'driving (examples/movement)', scenarios: CAR_SCENARIOS },
-  { label: 'wheeled body', scenarios: WHEELED_SCENARIOS },
+  { label: 'wheeled body', scenarios: [...WHEELED_SCENARIOS, ...WHEELED_LOAD_SCENARIOS] },
   { label: 'flying body', scenarios: FLYING_SCENARIOS },
   { label: 'gliding (examples/movement)', scenarios: GLIDE_SCENARIOS },
   { label: 'contact trail, bursts and surface tags', scenarios: TRACE_SCENARIOS },
 ];
 
-// Wall time of the whole run. Measured for 151 scenarios: about 3.7 s on a developer machine, 5.2 s on a GitHub runner.
+// Wall time of the whole run. Measured: 162 scenarios in about 3.7 s on a developer machine; 151 scenarios took 5.2 s on a GitHub runner.
 const LIMIT_MS = 8000;
 const filter = process.argv[2] ?? '';
 const start = performance.now();

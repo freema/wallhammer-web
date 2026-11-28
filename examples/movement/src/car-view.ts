@@ -1,11 +1,12 @@
 // The cars drawn: one instance set each for the bodies, the front doors (the left door's mesh, mirrored for the right
-// one) and the wheels (mirrored on the left, so the spokes face out). Written every frame from the cars' drawn places
+// one), the wheels (mirrored on the left, so the spokes face out) and the roof loads of the cars that carry one (the
+// rack with its crates and bundle, on the body's transform). Written every frame from the cars' drawn places
 // (src/car.ts); nothing is allocated per frame. The tyre marks are in the page's contact trail (src/traces.ts).
 
 import type { Material, Renderer } from 'wallhammer-web/render';
 import { InstanceSetLayer, instanceSet, writeInstance } from 'wallhammer-web/render';
 import type { InstanceSet } from 'wallhammer-web/render';
-import { compactCarMeshes, doorHinge } from '../../shared/src/vehicles/compact.ts';
+import { compactCarMeshes, compactRoofLoadMesh, doorHinge } from '../../shared/src/vehicles/compact.ts';
 import type { Cars } from './car.ts';
 
 /** Paint of the cars, in order (a warm red, a slate blue). */
@@ -27,6 +28,7 @@ export class CarView {
   readonly bodies: InstanceSet;
   readonly doors: InstanceSet;
   readonly wheels: InstanceSet;
+  readonly roofLoads: InstanceSet;
   readonly layer: InstanceSetLayer;
   private readonly cars: Cars;
   private readonly m = new Float64Array(12);
@@ -39,24 +41,28 @@ export class CarView {
   constructor(renderer: Renderer, carMaterial: Material, cars: Cars) {
     this.cars = cars;
     const n = cars.bodies.length;
-    const meshes = compactCarMeshes(cars.bodies[0]!.restHeight);
+    const meshes = compactCarMeshes(cars.restHeight);
     this.bodies = instanceSet(meshes.body, n, { name: 'car bodies' });
     this.doors = instanceSet(meshes.door, n * 2, { name: 'car doors' });
     this.wheels = instanceSet(meshes.wheel, n * 4, { name: 'car wheels' });
+    this.roofLoads = instanceSet(compactRoofLoadMesh(cars.restHeight), n, { name: 'car roof loads' });
     this.layer = new InstanceSetLayer(renderer, { name: 'cars', material: carMaterial });
     this.layer.add(this.bodies);
     this.layer.add(this.doors);
     this.layer.add(this.wheels);
+    this.layer.add(this.roofLoads);
   }
 
   /** Writes every car at `a` of the way between the cars' last two steps. */
   write(a: number): void {
     const cars = this.cars, m = this.m;
+    let loads = 0;
     for (let i = 0; i < cars.bodies.length; i++) {
       const b = cars.bodies[i]!;
       const paint = CAR_PAINTS[i % CAR_PAINTS.length]!;
       b.renderMatrix(m, a);
       writeInstance(this.bodies, i, m, paint[0], paint[1], paint[2], cars.lamps(i));
+      if (cars.roofLoad(i)) writeInstance(this.roofLoads, loads++, m, 1, 1, 1, 0);
       // The left door about its hinge; the right one is the same turn of the mirrored door.
       mul34(m, doorHinge(cars.door(i * 2, a), this.h), this.d);
       writeInstance(this.doors, i * 2, this.d, paint[0], paint[1], paint[2], 0);
@@ -73,6 +79,7 @@ export class CarView {
     this.bodies.count = cars.bodies.length;
     this.doors.count = cars.bodies.length * 2;
     this.wheels.count = cars.bodies.length * 4;
-    this.bodies.dirty = this.doors.dirty = this.wheels.dirty = true;
+    this.roofLoads.count = loads;
+    this.bodies.dirty = this.doors.dirty = this.wheels.dirty = this.roofLoads.dirty = true;
   }
 }

@@ -836,7 +836,7 @@ function viewHash(exact = false): string {
   const [lat, lon] = latLonOf(SHAPE.directionOf(feet ?? rig.position));
   const v = walk.active ? { yawDeg: walk.view.heading / DEG, pitchDeg: walk.rig.pitchDeg } : rig.state();
   const walking = walk.active ? `&walk=1&dist=${walk.rig.distance.toFixed(exact ? 3 : 1)}${walk.profile.name !== 'default' ? `&profile=${walk.profile.name}` : ''}` : '';
-  const keep = ['flyS', 'top', 'air', 'px', 'cells', 'gpu', 'clouds', 'vol', 'cover', 'split', 'extra'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+  const keep = ['flyS', 'top', 'air', 'px', 'cells', 'gpu', 'clouds', 'vol', 'cover', 'split', 'extra', ...(exact ? [] : ['marks'])].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
   const [dp, da, dv, dh] = exact ? [6, 2, 3, 4] : [4, 1, 1, 2];
   return `seed=${seed}&lat=${lat.toFixed(dp)}&lon=${lon.toFixed(dp)}&alt=${aboveSurface(feet ?? rig.position).toFixed(da)}&yaw=${v.yawDeg.toFixed(dv)}&pitch=${v.pitchDeg.toFixed(dv)}&hour=${env.day.time.toFixed(dh)}${exact ? `&time=${env.time.time.toFixed(2)}` : ''}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${q.has('depth') ? `&depth=${depth}` : ''}${horizonOn ? '' : '&horizon=0'}${atmOn ? (air?.reference ? '&atm=ref' : '') : '&atm=0'}${stripOn ? '' : '&strip=0'}${walking}${keep}`;
 }

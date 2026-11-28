@@ -119,7 +119,7 @@ function applyPause(): void {
 function hash(): string {
   const v = view.state();
   const r = (x: number): string => String(Math.round(x * 10) / 10);
-  return `seed=${seed}&yaw=${r(v.yawDeg)}&pitch=${r(v.pitchDeg)}&dist=${r(v.distance)}&tx=${r(v.target[0])}&ty=${r(v.target[1])}&tz=${r(v.target[2])}&p=${paused ? 1 : 0}`;
+  return `seed=${seed}&yaw=${r(v.yawDeg)}&pitch=${r(v.pitchDeg)}&dist=${r(v.distance)}&tx=${r(v.target[0])}&ty=${r(v.target[1])}&tz=${r(v.target[2])}&p=${paused ? 1 : 0}${q.has('marks') ? `&marks=${q.get('marks')}` : ''}`;
 }
 let hashTimer = 0;
 function writeHash(): void {

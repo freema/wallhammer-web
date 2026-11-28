@@ -53,7 +53,7 @@ const walkAtStart = q.get('walk') === '1';
 /** The cloud shadows from the engine's texture (on unless cs=0, which computes them per fragment as before). */
 const cloudShadowTexture = q.get('cs') !== '0';
 /** The measuring parameters as given in the address, written back unchanged by `hash()`. */
-const extraHash = ['pr', 'sh', 'sky', 'aa', 'cs'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+const extraHash = ['pr', 'sh', 'sky', 'aa', 'cs', 'marks'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
 
 interface ViewPreset {
   name: string;

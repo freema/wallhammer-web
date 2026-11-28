@@ -59,7 +59,7 @@ docker compose run --rm shot --url http://dev:5281/planet/ --presets @hash --siz
 
 Pictures go to `tools/shot/out/` (ignored by git). Last line: `shot: N pictures, M page errors`. One picture per page and a `--timeout` are enough. Options: header of `tools/shot/page-shot.mjs`.
 
-The one-off `shaders` service (same image and profile) compiles and links every program the pages make instead of taking pictures: `docker compose run --rm shaders [--pages planet,movement] [--url …]`, last line `shaders: N programs on M pages, K failed, E page errors (T s)`; CI runs it too (skill `wallhammer-verify`).
+The one-off `shaders` service (same image and profile) compiles and links every program the pages make instead of taking pictures: `docker compose run --rm shaders [--pages planet,movement] [--variants] [--url …]`, last line `shaders: N programs on M pages, K failed, E page errors (T s)`; CI runs it too (skill `wallhammer-verify`).
 
 ## Real GPU on the host: pictures and frame cost
 

@@ -18,6 +18,8 @@
 // Pages: campus http://127.0.0.1:5280/ (the app of the city model project, an external app that uses the engine), and
 // the examples of this repository served by `docker compose up -d`: destruction http://127.0.0.1:5281/destruction/,
 // endless http://127.0.0.1:5281/endless/, village http://127.0.0.1:5281/fantasy-village/.
+// `frames` and `counts` run the scenarios of a page (the table SCENARIOS: campus, destruction, endless, village); for
+// another page they end with that list.
 // The --pohyb flag and the values the campus scenarios pass to `window.__wh` (modes atelier and den, weathers leto and
 // dest) are identifiers defined by that external app; they stay exactly as it spells them.
 // Every result is also written as JSON into --out (default ./out). Headless Chrome caps presentation at 30 fps, so all
@@ -179,7 +181,23 @@ const SCENARIOS = {
     { name: 'origin', setup: (wh) => wh.setView({ x: 0, z: 0, yawDeg: 160, pitchDeg: 12, distance: 900 }), settle: true },
     { name: 'far', setup: (wh) => wh.setView({ x: 10_000_000, z: 0, yawDeg: 30, pitchDeg: 14, distance: 260 }), settle: true },
   ],
+  // The page's own presets, still and with the clock running (the figures walk, the banners and the smoke move).
+  village: [
+    { name: 'overview', setup: (wh) => wh.setView(wh.presets().find((p) => p.name === 'overview')), settle: true },
+    { name: 'street', setup: (wh) => wh.setView(wh.presets().find((p) => p.name === 'street')), settle: true },
+    { name: 'overview-running', step: 1 / 60, setup: (wh) => wh.setView(wh.presets().find((p) => p.name === 'overview')), settle: true },
+  ],
 };
+
+/** The scenarios of the page asked for; a page without any ends the run with the list of those that have them. */
+function scenariosOf(pageName) {
+  const list = SCENARIOS[pageName];
+  if (!list) {
+    console.error(`${CMD}: no scenarios for the page "${pageName}". Pages with scenarios: ${Object.keys(SCENARIOS).join(', ')}.`);
+    process.exit(2);
+  }
+  return list;
+}
 
 async function prepareScenario(page, pageName, sc) {
   if (sc.hash) {
@@ -191,6 +209,7 @@ async function prepareScenario(page, pageName, sc) {
 }
 
 async function cmdFrames() {
+  const scenarios = scenariosOf(PAGE);
   const all = [];
   for (let rep = 0; rep < REPS; rep++) {
     const { browser, page } = await launch();
@@ -200,7 +219,7 @@ async function cmdFrames() {
         const v = window.__wh.getView();
         window.__home = { x: v.center.x, z: v.center.z, zoom: v.zoom, rot: v.rotation };
       });
-      for (const sc of SCENARIOS[PAGE]) {
+      for (const sc of scenarios) {
         if (ONLY && !ONLY.split(',').includes(sc.name)) continue;
         await prepareScenario(page, PAGE, sc);
         const step = sc.step ?? 0;
@@ -226,13 +245,14 @@ async function cmdFrames() {
           }
         }
         const gpuPassStill = await frames(page, { n: N, step, query: 'pass' });
-        // The page's own measurement (renderer.benchmark: n renders, one finish) for comparison with earlier notes.
-        const own = await page.evaluate((n) => window.__wh.benchmark(n), N);
+        // The page's own measurement (renderer.benchmark: n renders, one finish) for comparison with earlier notes;
+        // null for a page that has none.
+        const own = await page.evaluate((n) => window.__wh.benchmark?.(n) ?? null, N);
         all.push({ rep, scenario: sc.name, still, shadow, pipelined, gpuPass, gpuLayer, gpuPassStill, own, off });
         console.log(
           `rep ${rep} ${sc.name}: canvas ${still.canvas.join('×')}  still wall ${median(still.wall).toFixed(2)} cpu ${median(still.cpu).toFixed(2)} | ` +
             `+shadow wall ${median(shadow.wall).toFixed(2)} cpu ${median(shadow.cpu).toFixed(2)} | pipelined ${still.totalMsPerFrame.toFixed(2)}/${pipelined.totalMsPerFrame.toFixed(2)} | ` +
-            `gpu pass ${gpuPass.gpu ? Object.entries(gpuPass.gpu.by).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ') : 'n/a'} (shadow frames ${still.shadowFrames}/${N}) own benchmark ${own?.toFixed?.(2)}`,
+            `gpu pass ${gpuPass.gpu ? Object.entries(gpuPass.gpu.by).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ') : 'n/a'} (shadow frames ${still.shadowFrames}/${N}) own benchmark ${own?.toFixed?.(2) ?? 'n/a'}`,
         );
       }
     } finally {
@@ -260,7 +280,8 @@ function report(all) {
     for (const k of keys) console.log(`  GPU ${k.padEnd(28)} ${fmt(s((r) => r.gpuPass.gpu?.by[k] ?? NaN))} ms (timer query, shadow forced)`);
     const keysS = new Set(runs.flatMap((r) => Object.keys(r.gpuPassStill.gpu?.by ?? {})));
     for (const k of keysS) console.log(`  GPU still ${k.padEnd(22)} ${fmt(s((r) => r.gpuPassStill.gpu?.by[k] ?? NaN))} ms`);
-    console.log(`  own __wh.benchmark               ${fmt(s((r) => r.own ?? NaN))} ms   sync read ${fmt(s((r) => r.still.syncMs))} ms   cpu render mean ${fmt(s((r) => r.still.renderCpuMs), 3)} / shadow ${fmt(s((r) => r.shadow.renderCpuMs), 3)}`);
+    const own = s((r) => r.own ?? NaN);
+    console.log(`  own __wh.benchmark               ${own.n ? `${fmt(own)} ms` : 'n/a (the page has none)'}   sync read ${fmt(s((r) => r.still.syncMs))} ms   cpu render mean ${fmt(s((r) => r.still.renderCpuMs), 3)} / shadow ${fmt(s((r) => r.shadow.renderCpuMs), 3)}`);
     const ok = new Set(runs.flatMap((r) => Object.keys(r.off ?? {})));
     for (const k of [...ok].sort()) {
       const base = (r) => (k.startsWith('shadow') ? median(r.shadow.wall) : median(r.still.wall));
@@ -277,6 +298,7 @@ function report(all) {
 
 // --- Counts (hooks on) -------------------------------------------------------------------------------------------------
 async function cmdCounts() {
+  const scenarios = scenariosOf(PAGE);
   const { browser, page } = await launch({ hooks: true });
   const out = [];
   try {
@@ -285,7 +307,7 @@ async function cmdCounts() {
       const v = window.__wh.getView();
       window.__home = { x: v.center.x, z: v.center.z, zoom: v.zoom, rot: v.rotation };
     });
-    for (const sc of SCENARIOS[PAGE]) {
+    for (const sc of scenarios) {
       await prepareScenario(page, PAGE, sc);
       const r = await frames(page, { n: 5, step: sc.step ?? 0, forceShadow: true });
       const st = await frames(page, { n: 5, step: sc.step ?? 0 });

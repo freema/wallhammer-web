@@ -18,6 +18,11 @@
 // engine's `ContactStreaks` lays marks from contact to contact into a `ContactTrail` (the page's, shared with the
 // prints of feet and hooves), stamped with the cars' clock (`time`); the page's trail layer fades them by their age.
 //
+// Loads (the engine's `WheeledBody.setLoad`): the figure at the wheel is `DRIVER_KG` at the seat, its mass moving onto
+// the car with the seat's weight as it sits down and off again as it gets up; a car may carry `ROOF_LOAD_KG` on a
+// roof rack (`setRoofLoad`), high over the wheels, so it sits lower, leans more in a turn and is slower off the line.
+// The numbers are this example's.
+//
 // Time is the group's fixed steps (`WheeledGroup.advance` with a hook after each step): the same inputs give the same
 // states, bit for bit.
 
@@ -27,7 +32,7 @@ import type { SeatTransitionOptions, Socket } from 'wallhammer-web/motion';
 import { WheeledBody, WheeledGroup, attachFromWalker, fourWheels, newSlideResult, newWheeledIntent, releaseToWalker } from 'wallhammer-web/world';
 import type { CollisionWorld, StandSpotOptions, Walker, WheeledBodySetup, WheeledIntent } from 'wallhammer-web/world';
 import { shift, turn } from '../../shared/src/figures/kind.ts';
-import { COMPACT_CAR } from '../../shared/src/vehicles/compact.ts';
+import { COMPACT_CAR, COMPACT_ROOF_LOAD } from '../../shared/src/vehicles/compact.ts';
 import type { PathfinderBody } from './body.ts';
 import { SURFACE } from './course.ts';
 import { TRACE_KIND, TRACE_LIFE_S } from './trace-kinds.ts';
@@ -51,6 +56,20 @@ export const CAR_SETUP: Partial<WheeledBodySetup> = {
  * wheels gripping a little more than the front ones, driven at the rear.
  */
 export const CAR_WHEELS = { mountY: -0.06, restLength: 0.35, travel: 0.22, stiffness: 26000, damping: 3200, frontGrip: 1, rearGrip: 1.05, drive: 'rear' } as const;
+
+/** The figure at the wheel, kg: a load on the car at the seat, `DRIVER_RISE_M` over the cushion. */
+export const DRIVER_KG = 80;
+/** Height of the seated figure's centre of mass over the seat's cushion, m. */
+export const DRIVER_RISE_M = 0.2;
+/**
+ * The load on the roof rack, kg, at the centre of the compact car's roof load (`COMPACT_ROOF_LOAD`, 1.66 m over the
+ * ground). Chosen so the car leans further and lifts its inner wheels in a hard turn at speed but stays on them: from
+ * about 220 kg at that height it rolls over under full steer. Thrown from one side to the other with the handbrake at
+ * 80 km/h it goes over as it is.
+ */
+export const ROOF_LOAD_KG = 180;
+/** The load slots of a car's body. */
+const SLOT_DRIVER = 0, SLOT_ROOF = 1;
 
 /** Farthest the figure's feet may be from the place beside the driver's door to get in, m. */
 export const CAR_REACH_M = 2;
@@ -106,6 +125,10 @@ export interface CarStatus {
   /** The lamps: braking, reversing. */
   brake: boolean;
   reversing: boolean;
+  /** Whether it carries the roof load. */
+  roofLoad: boolean;
+  /** Mass of all its loads now (the figure in the seat, the roof load), kg. */
+  loadKg: number;
 }
 
 export interface DriveStatus {
@@ -145,6 +168,13 @@ export class Cars {
   side = 1;
   /** Group steps since construction. */
   steps = 0;
+  /**
+   * Height of an empty car's centre of mass over the ground at rest: the height the cars' meshes are built for (a
+   * loaded body's own `restHeight` is lower).
+   */
+  readonly restHeight: number;
+  /** Which cars carry the roof load. */
+  private readonly roof: boolean[];
   private readonly world: CollisionWorld;
   private readonly parked: WheeledIntent;
   private readonly intents: WheeledIntent[];
@@ -173,6 +203,8 @@ export class Cars {
     this.stand = { radius: rs.radius, height: rs.height, maxStepUp: rs.maxStepUp, maxRise: rs.maxStepUp + 0.05 };
     const bodies = places.map(() => new WheeledBody(world, { ...CAR_SETUP, wheels: carWheels() }));
     this.bodies = bodies;
+    this.restHeight = bodies[0]!.restHeight;
+    this.roof = bodies.map(() => false);
     this.group = new WheeledGroup(bodies);
     this.doors = new Float64Array(bodies.length * 2);
     this.prevDoors = new Float64Array(bodies.length * 2);
@@ -256,6 +288,33 @@ export class Cars {
     this.drive.throttle = this.drive.brake = this.drive.steer = 0;
     this.drive.handbrake = false;
     this.streaks.reset();
+    this.seatLoad();
+  }
+
+  /** Whether car `i` carries the roof load. */
+  roofLoad(i: number): boolean {
+    return this.roof[i] === true;
+  }
+
+  /** Puts the roof load on car `i` or takes it off (the car wakes and settles under the change). */
+  setRoofLoad(i: number, on: boolean): void {
+    if (i < 0 || i >= this.bodies.length || this.roof[i] === on) return;
+    this.roof[i] = on;
+    const c = COMPACT_ROOF_LOAD.centre;
+    this.bodies[i]!.setLoad(SLOT_ROOF, on ? ROOF_LOAD_KG : 0, c[0], c[1] - this.restHeight, c[2]);
+  }
+
+  /**
+   * The figure's mass on the cars: on the one it is in or getting into, `DRIVER_KG` times the seat's weight at the
+   * seat (so the car takes it as the figure sits down and loses it as the figure gets up); none on the others.
+   */
+  private seatLoad(): void {
+    const kg = this.car >= 0 ? DRIVER_KG * this.transition.weight(1) : 0;
+    const s = COMPACT_CAR.seat;
+    for (let i = 0; i < this.bodies.length; i++) {
+      if (i === this.car && kg > 0) this.bodies[i]!.setLoad(SLOT_DRIVER, kg, s[0], s[1] + DRIVER_RISE_M - this.restHeight, s[2]);
+      else this.bodies[i]!.setLoad(SLOT_DRIVER, 0);
+    }
   }
 
   /** A point of car `i`'s body frame in the world after its last step (`ly` from the centre of mass). */
@@ -355,6 +414,7 @@ export class Cars {
     this.drive.brake = 0;
     this.drive.steer = 0;
     this.drive.handbrake = false;
+    this.seatLoad();
     return true;
   }
 
@@ -371,7 +431,10 @@ export class Cars {
     // car toward that place, never toward the place it got in at.
     const d = this.besideDoor(this.p);
     releaseToWalker(this.transition, this.riderWalker, d[0]!, d[1]!, d[2]!, d[3]!);
-    if (instant) this.finishExit();
+    if (instant) {
+      this.finishExit();
+      this.seatLoad();
+    }
     return true;
   }
 
@@ -443,6 +506,7 @@ export class Cars {
     }
     this.prevDoors.set(this.doors);
     this.timeline(dt);
+    this.seatLoad();
     const rate = dt / DOOR_S;
     for (let k = 0; k < this.doors.length; k++) {
       const d = this.doors[k]!, t = this.doorTarget[k]!;
@@ -531,7 +595,7 @@ export class Cars {
     st[1] = this.world.groundAt(st[0], st[2], m[10]! + 0.3, 0.6);
     st[3] = heading;
     const seatX = COMPACT_CAR.seat[0], seatZ = COMPACT_CAR.seat[2];
-    const seatLy = COMPACT_CAR.seat[1] - b.restHeight;
+    const seatLy = COMPACT_CAR.seat[1] - this.restHeight;
     const cx = m[0]! * seatX + m[3]! * seatLy + m[6]! * seatZ + m[9]!;
     const cy = m[1]! * seatX + m[4]! * seatLy + m[7]! * seatZ + m[10]!;
     const cz = m[2]! * seatX + m[5]! * seatLy + m[8]! * seatZ + m[11]!;
@@ -615,6 +679,8 @@ export class Cars {
           doors: [this.doors[i * 2]!, this.doors[i * 2 + 1]!],
           brake: (l & 1) === 1,
           reversing: l >= 2,
+          roofLoad: this.roof[i]!,
+          loadKg: b.loadMass,
         };
       }),
     };

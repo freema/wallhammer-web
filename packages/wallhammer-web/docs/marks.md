@@ -225,6 +225,11 @@ The folder is `--dir`, else `WH_MARKS_DIR`, else `.marks` in the working folder;
 of `list`) is `--url`, else `WH_MARKS_URL`, else `http://localhost:5173`. An agent sets `seen`, `working`, `fixed`
 (with an after-picture of the same view) or `wontfix`; `accepted` and `reopened` are the developer's, in the panel.
 
+The panel asks everything in itself and opens no dialog of the browser, so a page driven by a script is never blocked
+by one: `reopen` and `wontfix` put a text field for the reason into the mark's row (or into the bar of the comparison;
+Enter saves, also with no text, Escape drops it), and `×` turns into `delete` and `keep` in the row before a mark is
+removed.
+
 ## In this repository
 
 `node tools/marks/list.mjs` and `set.mjs` run the same tool from the package's source with this repository's defaults

@@ -35,8 +35,10 @@ the place. Each mark has a status and an append-only log. The full description i
 ## The developer's part
 
 Move to the fault, press N, click it, type a note, Enter. The panel lists the marks with `go` (back to the view),
-`compare` (the picture beside the newest after-picture), `accept`, `reopen`, `wontfix` and delete. The panel reads
-the store every few seconds, so the agent's changes show without a reload.
+`compare` (the picture beside the newest after-picture), `accept`, `reopen`, `wontfix` and delete. `reopen` and
+`wontfix` ask for the reason in a text field of the row (Enter saves, also empty; Escape drops it), delete asks once
+more in the row; no dialog of the browser opens. The panel reads the store every few seconds, so the agent's changes
+show without a reload.
 
 ## The agent's part
 

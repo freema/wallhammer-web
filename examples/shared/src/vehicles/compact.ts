@@ -11,9 +11,12 @@
 // height, so the wheels drawn at their rest places touch the ground and sit in their arches. The vertex colour's fourth
 // number is a material of `CAR_MAT`: a page's car material tints the paint per car, lets the glass reflect the sky and
 // lights the lamps from a per-car number (braking, reversing).
+//
+// A load for the roof is a mesh of its own in the same frame (`compactRoofLoadMesh`): a rack on four feet with three
+// crates and a rolled bundle strapped on it; `COMPACT_ROOF_LOAD` tells a page where its mass is.
 
 import type { MeshData } from 'wallhammer-web/base';
-import { FigureMesh, rgb } from '../figures/mesh.ts';
+import { FigureMesh, rgb, ringOn } from '../figures/mesh.ts';
 import type { P, RGB } from '../figures/mesh.ts';
 
 /** Materials of the car's vertices (`a_color.w`). */
@@ -49,6 +52,18 @@ export const COMPACT_CAR = {
   doorSpot: [-1.42, 0.02] as const,
 } as const;
 
+/**
+ * The load of `compactRoofLoadMesh` for a page's physics: where its mass is, over the ground at rest (how heavy it is
+ * is the page's to say).
+ */
+export const COMPACT_ROOF_LOAD = {
+  /**
+   * Centre of mass of the rack, the crates and the bundle: x, y over the ground, z (the larger crate is on the right,
+   * across from the driver; the heavy things lie low in the crates).
+   */
+  centre: [0.06, 1.66, 0.48] as P,
+} as const;
+
 /** The meshes of one car: the body, the left front door (mirror it for the right) and one wheel. */
 export interface CompactCarMeshes {
   body: MeshData;
@@ -71,6 +86,15 @@ const TREAD = rgb('#222225');
 const RIM = rgb('#b9bcc2');
 const RIM_DARK = rgb('#55585e');
 const HUB_HOLE = rgb('#0e0e10');
+const RACK = rgb('#2f3035');
+const RACK_SLAT = rgb('#3d3e44');
+const PLANK = rgb('#a9763f');
+const PLANK_PALE = rgb('#c08c4f');
+const BATTEN = rgb('#7d4f2e');
+const CANVAS = rgb('#e2cfa0');
+const CANVAS_DARK = rgb('#b99f6e');
+const STRAP = rgb('#5a3722');
+const BRASS = rgb('#d6a84a');
 
 const C = COMPACT_CAR;
 /** Ground clearance of the sills. */
@@ -355,8 +379,9 @@ export function compactCarMeshes(restHeight: number, seed = 5): CompactCarMeshes
   framedPane(body, [L.ab, Rg.ab, Rg.at, L.at], 0.06, inside);
   framedPane(body, [Rg.cb, L.cb, L.ct, Rg.ct], 0.06, inside);
   const ridge = (p: P, lift: number): P => [0, p[1] + lift, p[2]];
-  body.paint(PAINT, 1, 0.05);
   for (const g of [L, Rg]) {
+    // The paint again for each side: the quarter window at the loop's end leaves the glass selected.
+    body.paint(PAINT, 1, 0.05);
     body.quad(ridge(g.at, 0), g.at, g.bt, ridge(g.bt, 0.03), inside);
     body.quad(ridge(g.bt, 0.03), g.bt, g.ct, ridge(g.ct, 0), inside);
     // The windscreen pillar in front of the door, and the rear quarter window behind it.
@@ -423,6 +448,133 @@ export function compactCarMeshes(restHeight: number, seed = 5): CompactCarMeshes
   buildDoor(door, rings, zs);
   buildWheel(wheel, C.wheelRadius, C.tyreHalfWidth);
   return { body: body.mesh(), door: door.mesh(), wheel: wheel.mesh() };
+}
+
+/** A point written in a part's own axes, the part turned by `yaw` about the upright through (cx, cz). */
+type Place = (x: number, y: number, z: number) => P;
+function turned(cx: number, cz: number, yaw: number): Place {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  return (x, y, z) => [cx + c * x + s * z, y, cz - s * x + c * z];
+}
+
+/** A board between two opposite corners in a part's own axes. */
+function board(m: FigureMesh, at: Place, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void {
+  m.loft([
+    [at(x0, y0, z0), at(x1, y0, z0), at(x1, y0, z1), at(x0, y0, z1)],
+    [at(x0, y1, z0), at(x1, y1, z0), at(x1, y1, z1), at(x0, y1, z1)],
+  ]);
+}
+
+/**
+ * A wooden crate standing on `y0`, `w` wide (x), `h` high and `d` deep (z), turned by `yaw`: planked sides in a frame
+ * of battens, a brace across each side, a lid with two cleats, and a strap over it with a buckle.
+ */
+function crate(m: FigureMesh, cx: number, y0: number, cz: number, yaw: number, w: number, h: number, d: number, pale: boolean): void {
+  const at = turned(cx, cz, yaw);
+  const hw = w / 2, hd = d / 2;
+  /** Thickness and width of a batten. */
+  const t = 0.02, bw = 0.055;
+  const top = y0 + h;
+  m.paint(pale ? PLANK_PALE : PLANK, CAR_MAT.flat, 0.12);
+  board(m, at, -hw, y0, -hd, hw, top, hd);
+  // The four sides, each in its own turn of the crate: the face at +z of that turn, `half` wide.
+  m.paint(BATTEN, CAR_MAT.flat, 0.1);
+  for (let k = 0; k < 4; k++) {
+    const side = turned(cx, cz, yaw + (k * Math.PI) / 2);
+    const half = k % 2 === 0 ? hw : hd;
+    const z = k % 2 === 0 ? hd : hw;
+    board(m, side, -half - t, y0, z, half + t, y0 + bw, z + t);
+    board(m, side, -half - t, top - bw, z, half + t, top, z + t);
+    board(m, side, -half - t, y0 + bw, z, -half + bw, top - bw, z + t);
+    board(m, side, half - bw, y0 + bw, z, half + t, top - bw, z + t);
+    // The brace from the lower left to the upper right corner of the frame.
+    const lean = 1.3 * bw;
+    m.loft([
+      [side(-half + bw, y0 + bw, z), side(-half + bw + lean, y0 + bw, z), side(half - bw, top - bw, z), side(half - bw - lean, top - bw, z)],
+      [side(-half + bw, y0 + bw, z + 0.7 * t), side(-half + bw + lean, y0 + bw, z + 0.7 * t), side(half - bw, top - bw, z + 0.7 * t), side(half - bw - lean, top - bw, z + 0.7 * t)],
+    ]);
+  }
+  // The lid, a little wider than the box, and two cleats across it.
+  m.paint(pale ? PLANK : PLANK_PALE, CAR_MAT.flat, 0.12);
+  board(m, at, -hw - 1.5 * t, top, -hd - 1.5 * t, hw + 1.5 * t, top + 0.026, hd + 1.5 * t);
+  m.paint(BATTEN, CAR_MAT.flat, 0.1);
+  for (const s of [-1, 1]) board(m, at, s * 0.62 * hw - bw / 2, top + 0.026, -hd - 1.5 * t, s * 0.62 * hw + bw / 2, top + 0.044, hd + 1.5 * t);
+  // A strap over the lid and down both long sides to the deck, with a buckle on top.
+  const sx = 0.5 * bw, o = 2 * t + 0.006, lid = top + 0.05;
+  m.paint(STRAP, CAR_MAT.flat, 0.08);
+  board(m, at, -sx, lid - 0.006, -hd - o, sx, lid + 0.006, hd + o);
+  for (const s of [-1, 1]) board(m, at, -sx, y0, s * (hd + o - 0.012), sx, lid + 0.006, s * (hd + o));
+  m.paint(BRASS, CAR_MAT.flat, 0.05);
+  board(m, at, -sx - 0.012, lid + 0.004, -0.035, sx + 0.012, lid + 0.02, 0.035);
+}
+
+/**
+ * A rolled bundle of canvas lying along x between `x0` and `x1` on `y0`, about `r` thick, sagging a little flat, with
+ * its darker rolled ends and two straps round it.
+ */
+function bundle(m: FigureMesh, x0: number, x1: number, y0: number, z: number, r: number): void {
+  const u: P = [0, 0, 1], v: P = [0, 1, 0];
+  const flat = 0.84;
+  const cy = y0 + r * flat;
+  const N = 7;
+  const len = x1 - x0;
+  // Rings along the roll: tucked in at the ends, fuller between, a little out of line so it reads as cloth.
+  const at = (f: number, k: number, dy: number, dz: number): P[] => ringOn([x0 + len * f, cy + dy, z + dz], u, v, r * k, r * k * flat, N, 0.25);
+  const rings = [at(0, 0.9, 0, 0), at(0.06, 1, 0, 0), at(0.33, 1.05, 0.004, 0.012), at(0.67, 0.98, -0.004, -0.01), at(0.94, 1.03, 0, 0), at(1, 0.9, 0, 0)];
+  m.paint(CANVAS, CAR_MAT.flat, 0.1);
+  m.loft(rings, false, false);
+  // The ends: the roll's inner layers, standing a little out of the outer one.
+  m.paint(CANVAS_DARK, CAR_MAT.flat, 0.08);
+  m.loft([rings[0]!, ringOn([x0 - 0.02, cy, z], u, v, r * 0.6, r * 0.6 * flat, N, 0.25)], false, true);
+  m.loft([rings[5]!, ringOn([x1 + 0.02, cy, z], u, v, r * 0.6, r * 0.6 * flat, N, 0.25)], false, true);
+  m.paint(STRAP, CAR_MAT.flat, 0.08);
+  for (const f of [0.24, 0.76]) {
+    const x = x0 + len * f;
+    m.loft([ringOn([x - 0.024, cy, z], u, v, r * 1.09, r * 1.09 * flat, N, 0.25), ringOn([x + 0.024, cy, z], u, v, r * 1.09, r * 1.09 * flat, N, 0.25)], true, true);
+    m.paint(BRASS, CAR_MAT.flat, 0.05);
+    m.box([x, cy + r * 1.09 * flat + 0.004, z], [0.06, 0.016, 0.05]);
+    m.paint(STRAP, CAR_MAT.flat, 0.08);
+  }
+}
+
+/**
+ * A load for the compact car's roof, in the body's frame (`restHeight` as for `compactCarMeshes`; draw it with the
+ * body's transform): a rack on four feet across the roof (two cross bars, a deck of slats, a low rail round it), three
+ * wooden crates of different sizes set down a little askew and a rolled bundle of canvas in front of them, each
+ * strapped. About 1.3 m wide, 1.3 m long and 0.55 m over the roof; the centre of its mass is `COMPACT_ROOF_LOAD`'s.
+ * Every material is `CAR_MAT.flat`. `seed` varies the facets' brightness.
+ */
+export function compactRoofLoadMesh(restHeight: number, seed = 5): MeshData {
+  const m = new FigureMesh(seed * 7 + 4);
+  m.origin([0, restHeight, 0]);
+  const here: Place = (x, y, z) => [x, y, z];
+  /** The deck's ends along the length, its half width, and the heights of the bars, the deck's top and the rail. */
+  const z0 = -0.22, z1 = 1.07, half = 0.6;
+  const bar = 1.49, deck = 1.55, rail = 1.665;
+  // The rack: feet on the roof's edges, two cross bars, slats along the length, and a rail on corner posts.
+  m.paint(RACK, CAR_MAT.flat, 0.1);
+  for (const z of [0, 0.86]) {
+    for (const s of [-1, 1]) m.box([s * 0.57, 1.445, z], [0.08, 0.11, 0.13], 0.75);
+    board(m, here, -half - 0.04, bar, z - 0.035, half + 0.04, bar + 0.035, z + 0.035);
+  }
+  m.paint(RACK_SLAT, CAR_MAT.flat, 0.1);
+  for (let k = 0; k < 5; k++) {
+    const x = -0.5 + k * 0.25;
+    board(m, here, x - 0.05, bar + 0.035, z0, x + 0.05, deck, z1);
+  }
+  m.paint(RACK, CAR_MAT.flat, 0.1);
+  const posts: P[] = [[-half, rail, z0], [half, rail, z0], [half, rail, z1], [-half, rail, z1]];
+  for (let k = 0; k < 4; k++) {
+    const p = posts[k]!, q = posts[(k + 1) % 4]!;
+    m.limb([p[0], bar + 0.03, p[2]], p, 0.02, 0.017, 5);
+    m.limb(p, q, 0.017, 0.017, 5);
+  }
+  // The load: the bundle across the front, two crates side by side behind it, a low one across the back.
+  bundle(m, -0.34, 0.52, deck, -0.04, 0.14);
+  crate(m, 0.27, deck, 0.45, -0.07, 0.56, 0.4, 0.6, false);
+  crate(m, -0.31, deck, 0.47, 0.1, 0.46, 0.3, 0.5, true);
+  crate(m, 0.06, deck, 0.92, -0.04, 0.72, 0.22, 0.26, true);
+  return m.mesh();
 }
 
 /**

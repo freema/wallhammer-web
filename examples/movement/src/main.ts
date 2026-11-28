@@ -79,7 +79,7 @@ import { Figure, shiftedXZ, solidsMesh } from './meshes.ts';
 import { FigureMotion } from './pose.ts';
 import type { MotionSample } from './pose.ts';
 import { CAR_MATERIAL, FIGURE_MATERIAL, GROUND_MATERIAL, PATHFINDER_MATERIAL, SOLID_MATERIAL, TRACE_MATERIAL, WIRE_MATERIAL } from './shaders.ts';
-import { CAR_EXIT_SPEED_MS, CAR_REACH_M, Cars } from './car.ts';
+import { CAR_EXIT_SPEED_MS, CAR_REACH_M, Cars, ROOF_LOAD_KG } from './car.ts';
 import type { CarPlace, DriveStatus } from './car.ts';
 import { CarView } from './car-view.ts';
 import { Traces } from './traces.ts';
@@ -276,7 +276,8 @@ function fitBounds(): void {
 }
 
 // The cars (src/car.ts, drawn by src/car-view.ts): car 0 beside the steed, its driver's door toward the start, car 1
-// parked further on; `car0`, `car1` put them elsewhere, `drive=i` starts in car i. The box figure does not get in.
+// parked further on; `car0`, `car1` put them elsewhere, `drive=i` starts in car i, `roof=0` (or `roof=0,1`) starts
+// with the roof load on those cars. The box figure does not get in.
 const CAR_PLACES: readonly CarPlace[] = [
   [66, 54.5, 90],
   [51, 50, 0],
@@ -286,6 +287,14 @@ const carPlace = (k: string, d: CarPlace): CarPlace => {
   return v.length === 3 && v.every((x) => Number.isFinite(x)) ? [v[0]!, v[1]!, v[2]!] : d;
 };
 const cars = new Cars(world, body, walker, CAR_PLACES.map((p, i) => carPlace(`car${i}`, p)), traces.trail);
+for (const k of (q.get('roof') ?? '').split(',')) {
+  const i = k === '' ? -1 : Number(k);
+  if (!Number.isInteger(i) || i < 0 || i >= cars.bodies.length) continue;
+  // Put down again, so it starts at rest under the load.
+  cars.setRoofLoad(i, true);
+  const c = cars.place(i);
+  cars.put(i, c[0], c[1], c[2] * DEG);
+}
 const carView = new CarView(renderer, renderer.material(CAR_MATERIAL), cars);
 engine.add(carView.layer);
 engine.add(traces.dust);
@@ -316,10 +325,9 @@ function followDriven(a: number, ca = 1, ga = 1): void {
   }
   const c = cars.car >= 0 ? cars.weight(ca) : 0;
   if (c > 0) {
-    const b = cars.bodies[cars.car]!;
-    b.renderMatrix(carM, ca);
+    cars.bodies[cars.car]!.renderMatrix(carM, ca);
     x += (carM[9]! - x) * c;
-    y += (carM[10]! - b.restHeight - y) * c;
+    y += (carM[10]! - cars.restHeight - y) * c;
     z += (carM[11]! - z) * c;
   }
   // The rig keeps the extra apart from the user's own boom (`distance`), so on foot the boom is the user's again
@@ -578,6 +586,16 @@ function hud(): string {
     s.speed = Math.hypot(v[0]!, v[2]!);
     s.grounded = glide.body.grounded;
     s.steep = false;
+  } else if (cars.mode === 'on') {
+    // The car driven: its place on the ground under it and its speed; on the ground while a wheel touches.
+    const b = cars.bodies[cars.car]!;
+    const p = b.position, v = b.velocity;
+    s.x = p[0]!;
+    s.y = p[1]! - cars.restHeight;
+    s.z = p[2]!;
+    s.speed = Math.hypot(v[0]!, v[2]!);
+    s.grounded = b.groundedWheels > 0;
+    s.steep = false;
   }
   const st = stationAt(s.x, s.z);
   const ft = frameTimes();
@@ -599,7 +617,7 @@ function hud(): string {
     ...(driving ? [driving] : riding ? [riding] : gliding ? [gliding] : []),
     `x ${s.x.toFixed(2)}  y ${s.y.toFixed(2)}  z ${s.z.toFixed(2)}  speed ${s.speed.toFixed(2)} m/s  ${s.grounded ? (s.steep ? 'on a steep slope, sliding' : 'on the ground') : 'in the air'}  view ${mode}${wireOn ? '  collision solids' : ''}`,
     cars.mode === 'on'
-      ? `W/S throttle, brake and reverse · A/D steer · space handbrake · E get out (stopped) · R right the car · drag turn · wheel camera · F first person · C solids`
+      ? `W/S throttle, brake and reverse · A/D steer · space handbrake · L roof load ${cars.roofLoad(cars.car) ? 'off' : 'on'} · E get out (stopped) · R right the car · drag turn · wheel camera · F first person · C solids`
       : glide.mode === 'on'
         ? glide.body.grounded
           ? `W/S crawl · A/D turn · space ${glide.flownByAssist ? 'take off' : 'leap, hold to beat'} · E get off (stopped) · drag turn · wheel camera · F first person · C solids`
@@ -611,11 +629,19 @@ function hud(): string {
   ].join('\n');
 }
 
+/** What the glider's line says of getting off on the ground: the key, or why it is refused. */
+const GLIDE_OFF = {
+  free: 'E get off',
+  air: 'land to get off',
+  moving: 'stop to get off',
+  edge: "no getting off here: the spots behind the wings are too near the course's edge, crawl further in",
+} as const;
+
 /** The HUD's line of the glider. */
 function glidingLine(): string {
   const g = glide.status();
   if (g.mode !== 'on') return g.mode === 'mounting' ? 'Getting on the glider…' : 'Getting off the glider…';
-  if (g.grounded) return `Glider: crawling ${g.speed.toFixed(1)} m/s${glide.canDismount() ? ' · E get off' : ''}`;
+  if (g.grounded) return `Glider: crawling ${g.speed.toFixed(1)} m/s · ${GLIDE_OFF[g.offRefused ?? 'free']}`;
   const state = g.stalled ? 'stalling' : g.flare > 0.3 ? 'flaring' : g.beat > 0.3 ? 'beating' : g.climb < -0.3 ? 'gliding down' : 'gliding';
   if (glide.flownByAssist) {
     const w = g.wantedSpeed;
@@ -632,7 +658,8 @@ function drivingLine(): string {
   const v = b.forwardSpeed;
   const up = b.rotation[4]!;
   const state = up < 0.5 ? 'overturned, R puts it back on its wheels' : b.wheels.every((w) => !w.grounded) ? 'in the air' : Math.abs(v) < CAR_EXIT_SPEED_MS ? 'E get out' : v < 0 ? 'reversing' : 'driving';
-  return `Car ${cars.car + 1}: ${(Math.abs(v) * 3.6).toFixed(0)} km/h${v < -0.3 ? ' back' : ''} · steer ${(b.steerAngle / DEG).toFixed(0)}° · ${state}`;
+  const load = cars.roofLoad(cars.car) ? ` · roof load ${ROOF_LOAD_KG} kg` : '';
+  return `Car ${cars.car + 1}: ${(Math.abs(v) * 3.6).toFixed(0)} km/h${v < -0.3 ? ' back' : ''} · steer ${(b.steerAngle / DEG).toFixed(0)}°${load} · ${state}`;
 }
 
 // --- Keys -------------------------------------------------------------------------------------------------------------------
@@ -691,6 +718,10 @@ const KEYS: Record<string, () => void> = {
     place(course.start[0], course.start[1], course.start[2]);
   },
   e: useNearest,
+  // The roof load of the car driven: on or off.
+  l: () => {
+    if (cars.mode === 'on') cars.setRoofLoad(cars.car, !cars.roofLoad(cars.car));
+  },
   t: () => ride.setTrot(!ride.trot),
   p: () => setMoveProfile(PROFILES[(PROFILES.indexOf(moveProfile) + 1) % PROFILES.length]!),
 };
@@ -755,6 +786,8 @@ interface DriveScene {
   at?: [number, number, number];
   /** The figure starts this far out from the driver's door and gets in (instead of sitting in already), m. */
   getIn?: number;
+  /** The driven car carries the roof load (default: no car does). */
+  roof?: boolean;
   /** Inputs held one after the other. */
   holds: { input: HoldInput; seconds: number }[];
   /** The camera's heading against the car's at the end (degrees; 0 behind it, −90 on its left, the driver's side). */
@@ -774,7 +807,9 @@ const PRESETS: ViewState[] = [
   { name: 'ride-steps', ride: { at: [86.5, 16, -90], holds: [{ input: { forward: 1 }, seconds: 5.6 }], yawRel: 80 }, pitchDeg: 8, distance: 7 },
   // Driving car 0: standing, pulling away (the nose up), braking (the nose down), a left turn (rolled outward), a
   // handbrake turn (sliding, laying tyre marks), up the 20° ramp, off the end of the ramps' plateau (in the air), a slow
-  // knock into the parked car 1 (touching it), and getting in (half way).
+  // knock into the parked car 1 (touching it), and getting in (half way). Then the same car with the roof load:
+  // standing (lower on its springs), pulling away (the nose higher, less ground covered) and the same left turn
+  // (rolled further).
   { name: 'car-stand', drive: { holds: [{ input: {}, seconds: 1.5 }], yawRel: -60 }, pitchDeg: 12, distance: 9 },
   { name: 'car-accelerate', drive: { at: [56, 47, 180], holds: [{ input: { throttle: 1 }, seconds: 1 }], yawRel: -90 }, pitchDeg: 8, distance: 9 },
   { name: 'car-brake', drive: { at: [56, 47, 180], holds: [{ input: { throttle: 1 }, seconds: 2.4 }, { input: { brake: 1 }, seconds: 0.35 }], yawRel: -90 }, pitchDeg: 8, distance: 9 },
@@ -784,6 +819,9 @@ const PRESETS: ViewState[] = [
   { name: 'car-jump', drive: { at: [108, 70, 0], holds: [{ input: { throttle: 1 }, seconds: 3.8 }], yawRel: -90 }, pitchDeg: 6, distance: 12 },
   { name: 'car-bump', drive: { at: [51, 57.8, 0], holds: [{ input: { throttle: 0.6 }, seconds: 1 }, { input: {}, seconds: 1.6 }], yawRel: -70 }, pitchDeg: 14, distance: 10 },
   { name: 'car-get-in', drive: { getIn: 1.2, holds: [{ input: {}, seconds: 1.35 }], yawRel: -60 }, pitchDeg: 10, distance: 6 },
+  { name: 'car-load-stand', drive: { roof: true, holds: [{ input: {}, seconds: 1.5 }], yawRel: -60 }, pitchDeg: 14, distance: 4.5 },
+  { name: 'car-load-accelerate', drive: { roof: true, at: [56, 47, 180], holds: [{ input: { throttle: 1 }, seconds: 1 }], yawRel: -90 }, pitchDeg: 8, distance: 5.5 },
+  { name: 'car-load-turn', drive: { roof: true, at: [56, 47, 180], holds: [{ input: { throttle: 1 }, seconds: 2.4 }, { input: { throttle: 0.6, steer: -1 }, seconds: 0.9 }], yawRel: 180 }, pitchDeg: 10, distance: 5.5 },
   // Traces on the patch of loose ground in front of the start: the steed trotting and galloping across it (prints and
   // dust), a car driven across it (ruts and dust) and one turned on it with the handbrake (sliding).
   { name: 'trace-trot', ride: { at: [60, 58, 0], trot: true, holds: [{ input: { forward: 1 }, seconds: 3.4 }], yawRel: 120 }, pitchDeg: 18, distance: 7 },
@@ -856,8 +894,11 @@ function driveScene(d: DriveScene): void {
   ride.setTrot(false);
   ride.put(STEED_PLACE[0], STEED_PLACE[1], STEED_PLACE[2] * DEG);
   cars.stopDriving();
-  CAR_PLACES.forEach((p, i) => cars.put(i, p[0], p[1], p[2] * DEG));
   const i = d.car ?? 0;
+  CAR_PLACES.forEach((p, k) => {
+    cars.setRoofLoad(k, k === i && d.roof === true);
+    cars.put(k, p[0], p[1], p[2] * DEG);
+  });
   if (d.at) cars.put(i, d.at[0], d.at[1], d.at[2] * DEG);
   const spot = cars.doorSpot(i, 1);
   const yaw = spot[3]!;
@@ -905,7 +946,10 @@ function glideScene(g: GlideScene): void {
   if (ride.riding) ride.dismount(true);
   ride.setTrot(false);
   ride.put(STEED_PLACE[0], STEED_PLACE[1], STEED_PLACE[2] * DEG);
-  CAR_PLACES.forEach((p, i) => cars.put(i, p[0], p[1], p[2] * DEG));
+  CAR_PLACES.forEach((p, i) => {
+    cars.setRoofLoad(i, false);
+    cars.put(i, p[0], p[1], p[2] * DEG);
+  });
   if (glide.mode !== 'off') glide.dismount(true);
   const yaw = g.at[2] * DEG;
   if (g.air) glide.launch(g.at[0], world.groundAt(g.at[0], g.at[1], 1e4, 0) + g.air.height, g.at[1], yaw, g.air.speed);
@@ -938,7 +982,8 @@ function hash(): string {
     const c = cars.place(i);
     return `&car${i}=${r(c[0])},${r(c[1])},${r(c[2], 1)}`;
   });
-  const drive = `${cars.mode === 'on' ? `&drive=${cars.car}` : ''}${carPlaces.join('')}`;
+  const roofs = cars.bodies.map((_, i) => i).filter((i) => cars.roofLoad(i));
+  const drive = `${cars.mode === 'on' ? `&drive=${cars.car}` : ''}${carPlaces.join('')}${roofs.length > 0 ? `&roof=${roofs.join(',')}` : ''}`;
   const gp = glide.body.position;
   const glider = boxes ? '' : `${glide.riding ? '&glide=1' : ''}&gx=${r(gp[0]!)}&gz=${r(gp[2]!)}&gyaw=${r(glide.body.yaw / DEG, 1)}`;
   return `seed=${seed}&x=${r(p[0]!)}&z=${r(p[2]!)}&yaw=${r(walker.yaw / DEG, 1)}&fp=${rig.distance <= 0 ? 1 : 0}&c=${wireOn ? 1 : 0}${looks}${steed}${drive}${glider}${extra}`;
@@ -1197,9 +1242,21 @@ const ready = new Promise<void>((resolve) => (resolveReady = resolve));
     return { ...cars.status(), reachM: CAR_REACH_M } as DriveStatus;
   },
   /**
+   * Puts the roof load on car `car` (default: the car driven, else 0) or takes it off, or toggles it (no `on`), as
+   * the key L does for the car driven. Returns `driving()`.
+   */
+  roofLoad: (on?: boolean, car?: number): DriveStatus | null => {
+    if (boxes) return null;
+    const i = car ?? Math.max(0, cars.car);
+    cars.setRoofLoad(i, on ?? !cars.roofLoad(i));
+    engine.renderNow();
+    return { ...cars.status(), reachM: CAR_REACH_M } as DriveStatus;
+  },
+  /**
    * The drive: mode (off, entering, on, exiting), the car the figure is in, the side it gets in or out at, the camera
    * weight, the tyre marks laid, and per car its place, heading, forward speed, up axis, asleep, steer angle, per wheel
-   * (front left, front right, rear left, rear right) compression, slip and grounded, the doors' opening and the lamps.
+   * (front left, front right, rear left, rear right) compression, slip and grounded, the doors' opening, the lamps,
+   * whether it carries the roof load and the mass of its loads (the figure in the seat, the roof load).
    */
   driving: (): (DriveStatus & { reachM: number }) | null => (boxes ? null : { ...cars.status(), reachM: CAR_REACH_M }),
   figure: () =>

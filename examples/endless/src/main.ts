@@ -425,10 +425,10 @@ function overlayText(): string {
     free ? FREE_HELP : `WASD fly · Shift fast · drag orbit · wheel height · [ ] hour · L levels · H hide`,
   ].join('\n');
 }
-/** The URL hash of the current view. */
+/** The URL hash of the current view; it keeps `marks=` of the address the page was opened with. */
 function viewHash(): string {
   const v = view.state();
-  return `seed=${seed}&${free ? freeHash(free) : `x=${pos.x.toFixed(1)}&z=${pos.z.toFixed(1)}&yaw=${v.yawDeg.toFixed(1)}&pitch=${v.pitchDeg.toFixed(1)}&dist=${v.distance.toFixed(0)}`}&hour=${env.day.time.toFixed(2)}&w=${weatherName}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${smooth ? `&lod=smooth${q.has('px') ? `&px=${q.get('px')}` : ''}${q.has('cells') ? `&cells=${q.get('cells')}` : ''}` : ''}${precision.hash}${shadowMode ? `&shadows=${shadowMode}` : ''}${stripOn ? '&strip=1' : ''}${dmgOn ? `&dmg=1${q.has('cap') ? `&cap=${dmgCap}` : ''}${store.structures > 0 ? `&d=${store.text()}` : ''}` : ''}${volOn ? '' : '&vol=0'}`;
+  return `seed=${seed}&${free ? freeHash(free) : `x=${pos.x.toFixed(1)}&z=${pos.z.toFixed(1)}&yaw=${v.yawDeg.toFixed(1)}&pitch=${v.pitchDeg.toFixed(1)}&dist=${v.distance.toFixed(0)}`}&hour=${env.day.time.toFixed(2)}&w=${weatherName}${src !== 'workers' ? `&src=${src}` : ''}${showLevels ? '&levels=1' : ''}${smooth ? `&lod=smooth${q.has('px') ? `&px=${q.get('px')}` : ''}${q.has('cells') ? `&cells=${q.get('cells')}` : ''}` : ''}${precision.hash}${shadowMode ? `&shadows=${shadowMode}` : ''}${stripOn ? '&strip=1' : ''}${dmgOn ? `&dmg=1${q.has('cap') ? `&cap=${dmgCap}` : ''}${store.structures > 0 ? `&d=${store.text()}` : ''}` : ''}${volOn ? '' : '&vol=0'}${q.has('marks') ? `&marks=${q.get('marks')}` : ''}`;
 }
 let lastHash = '';
 setInterval(() => {

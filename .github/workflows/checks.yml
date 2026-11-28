@@ -45,8 +45,9 @@ jobs:
   # The shader check (README.md, section "Shader check"): every program the example pages make is compiled and linked
   # in headless Chromium on the software renderer. It runs as on a developer's machine, through docker-compose.yml:
   # `shaders` builds its image and the dev image, starts `dev` (which installs the dependencies and serves the
-  # examples) and waits until it is healthy. A job of its own, so the other checks do not wait for it; about a minute
-  # of pages after the images and the install.
+  # examples) and waits until it is healthy. A job of its own, so the other checks do not wait for it; about two
+  # minutes of pages after the images and the install. `--variants` adds the pages and hashes of
+  # tools/shot/shader-variants.mjs, whose programs the default pages do not make.
   shaders:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -55,7 +56,7 @@ jobs:
       # The containers run as uid 1000 and pnpm sets the mode of the package's bin file in the mounted tree, which only
       # the file's owner may do; the runner checks the tree out under another uid.
       - run: sudo chown -R 1000:1000 .
-      - run: docker compose run --rm shaders
+      - run: docker compose run --rm shaders --variants
       - if: failure()
         run: docker compose logs --tail 200 dev
       - if: always()

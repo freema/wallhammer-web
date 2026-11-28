@@ -49,4 +49,6 @@ Each example keeps its own layer that draws the figures (its `cast.ts`), because
   front door to be mirrored for the right, and a wheel (tyre, five-spoke rim, hub) with its outer face at +x; the
   materials `CAR_MAT` (flat, paint, glass, head, tail and reversing lamps); `COMPACT_CAR`, its sizes, the axles and track
   the wheels are set at, the door's hinge, the seat and the spot beside the door; `doorHinge`, the door's turn about
-  its hinge. Meshes only: the example that drives it chooses the physics and draws it.
+  its hinge; `compactRoofLoadMesh`, a load for its roof in the body's frame (a rack on four feet with three strapped
+  wooden crates and a rolled bundle of canvas), and `COMPACT_ROOF_LOAD`, where that load's mass is. Meshes only: the
+  example that drives it chooses the physics and draws it.

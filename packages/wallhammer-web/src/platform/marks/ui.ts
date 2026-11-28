@@ -5,7 +5,9 @@
 // (go to one, edit its note, set its category, accept, reopen, wontfix, delete, compare a fixed one with its
 // after-picture), filtered (open, fixed and waiting for a look, all) and read again from the store every few seconds
 // while the mode is on, so a change an agent makes shows without a reload. The pins show the marks in the scene,
-// coloured by status.
+// coloured by status. Everything is asked in the panel itself (a text field in the mark's row for a note or for the
+// reason of a reopen or a wontfix, two buttons for a delete): no dialog of the browser opens, so a page driven by a
+// script is never blocked by one.
 //
 // `installMarking` is the whole of it; it returns the script interface (`MarkingApi`). A developer tool of the engine:
 // its labels are its own, in English; it shows nothing of the page it is installed in.
@@ -35,8 +37,9 @@ const STYLE = `
 .mk-row { display: flex; gap: 5px; align-items: center; }
 .mk-row b { color: #ff8a80; min-width: 26px; }
 .mk-row span.mk-note { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mk-row input { flex: 1; min-width: 0; padding: 1px 4px; border: 1px solid #888; border-radius: 3px; background: #fff;
-  color: #111; font: 12px system-ui, sans-serif; }
+.mk-row input, .mk-cmp-bar input { flex: 1; min-width: 0; padding: 1px 4px; border: 1px solid #888; border-radius: 3px;
+  background: #fff; color: #111; font: 12px system-ui, sans-serif; }
+.mk-panel button.mk-danger { background: #b3261e; }
 .mk-last { margin: 1px 0 0 31px; opacity: 0.7; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mk-acts { display: flex; flex-wrap: wrap; gap: 3px; margin: 2px 0 0 31px; }
 .mk-panel button, .mk-compare button { font: inherit; padding: 0 5px; border: 0; border-radius: 3px;
@@ -56,7 +59,7 @@ const STYLE = `
 .mk-compare img { max-width: 100%; max-height: 42vh; border-radius: 3px; background: #000; }
 .mk-compare figcaption { opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mk-compare .mk-cmp-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
-.mk-compare .mk-cmp-bar span { flex: 1; }
+.mk-compare .mk-cmp-bar span:first-child { flex: 1; }
 `;
 
 /** How often the panel reads the store again while the mode is on. */
@@ -71,6 +74,9 @@ interface Pending {
 }
 
 type Filter = 'open' | 'fixed' | 'all';
+/** The changes of status the panel asks a reason for. */
+type AskedStatus = 'reopened' | 'wontfix';
+const QUESTION: Record<AskedStatus, string> = { reopened: 'what is still wrong? (optional)', wontfix: 'why leave it? (optional)' };
 const OPEN: readonly MarkStatus[] = ['new', 'seen', 'working', 'reopened'];
 const inFilter = (f: Filter, s: MarkStatus): boolean => (f === 'all' ? true : f === 'fixed' ? s === 'fixed' : OPEN.includes(s));
 
@@ -139,8 +145,13 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
   let pending: Pending | null = null;
   let status = '';
   let filter: Filter = 'all';
-  /** The mark whose note is being edited in the panel, and the text typed so far. */
-  let editing: { id: string; text: string } | null = null;
+  /**
+   * The mark a text is being typed for and the text so far: its note, or with `status` the reason of that change of
+   * status. The field is in the mark's row of the panel, or in the bar of the comparison when asked from there.
+   */
+  let editing: { id: string; text: string; status?: AskedStatus; where: 'panel' | 'compare' } | null = null;
+  /** The mark whose delete waits for a second click. */
+  let confirming: string | null = null;
   let poll: ReturnType<typeof setInterval> | null = null;
   let polling = false;
   let comparing: string | null = null;
@@ -237,32 +248,16 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     n.textContent = `#${m.seq}`;
     row.append(n, chip(st, '', MARK_STATUS_COLOURS[st].bg, MARK_STATUS_COLOURS[st].fg));
     if (m.category) row.append(chip(m.category, 'mk-cat'));
-    if (editing?.id === m.id) {
-      const ed = document.createElement('input');
-      ed.type = 'text';
-      ed.maxLength = 2000;
-      ed.value = editing.text;
-      ed.oninput = () => {
-        if (editing) editing.text = ed.value;
-      };
-      ed.onkeydown = (e) => {
-        if (e.code === 'Escape') {
-          e.preventDefault();
-          editing = null;
-          renderPanel();
-        } else if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-          e.preventDefault();
-          const text = ed.value.trim();
-          editing = null;
+    const typed = editing?.id === m.id && editing.where === 'panel' ? editing : null;
+    if (typed?.status) {
+      row.append(...asked(m, typed.status));
+    } else if (typed) {
+      row.append(
+        field('the note', (text) => {
           if (text !== m.note) void act(m, { by: DEVELOPER, note: text }, `note of #${m.seq} saved`);
           else renderPanel();
-        }
-      };
-      row.append(ed);
-      queueMicrotask(() => {
-        ed.focus();
-        ed.setSelectionRange(ed.value.length, ed.value.length);
-      });
+        }),
+      );
     } else {
       const t = document.createElement('span');
       t.className = 'mk-note';
@@ -270,12 +265,32 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
       t.title = `${m.note}\n${m.point ? `${m.point.surface}, ${fmtM(m.point.distanceM)} from the eye` : 'no point (the ray met nothing)'}\n#${m.view.hash}`;
       row.append(t);
     }
-    row.append(
-      button('go', 'put the camera at this mark’s view', () => api.goto(m.id)),
-      button('×', 'delete this mark', () => {
-        if (window.confirm(`Delete mark #${m.seq}?`)) void api.remove(m.id);
-      }),
-    );
+    const go = (): HTMLButtonElement => button('go', 'put the camera at this mark’s view', () => api.goto(m.id));
+    if (typed) {
+      // A row with a text field keeps its width for the text: the buttons come back when the edit ends.
+    } else if (confirming === m.id) {
+      const del = button('delete', `delete mark #${m.seq} for good`, () => {
+        confirming = null;
+        api.remove(m.id).catch((err: unknown) => say(`NOT deleted: ${String(err)}`));
+      });
+      del.className = 'mk-danger';
+      row.append(
+        go(),
+        del,
+        button('keep', 'do not delete', () => {
+          confirming = null;
+          renderPanel();
+        }),
+      );
+    } else {
+      row.append(
+        go(),
+        button('×', 'delete this mark (asks once more)', () => {
+          confirming = m.id;
+          renderPanel();
+        }),
+      );
+    }
     el.append(row);
 
     const last = lastLog(m);
@@ -291,7 +306,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     acts.className = 'mk-acts';
     acts.append(
       button('note', 'edit the note (Enter saves, Esc cancels)', () => {
-        editing = { id: m.id, text: m.note };
+        editing = { id: m.id, text: m.note, where: 'panel' };
         renderPanel();
       }),
     );
@@ -311,17 +326,64 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     };
     acts.append(cat);
     if (st !== 'accepted') acts.append(button('accept', 'the fault is solved (the developer’s call)', () => void act(m, { by: DEVELOPER, status: 'accepted' }, `#${m.seq} accepted`)));
-    if (st !== 'new' && st !== 'reopened') acts.append(button('reopen', 'not solved: back to the agents', () => ask(m, 'reopened', 'What is still wrong? (optional)')));
-    if (st !== 'wontfix') acts.append(button('wontfix', 'leave it as it is', () => ask(m, 'wontfix', 'Why leave it? (optional)')));
+    if (st !== 'new' && st !== 'reopened') acts.append(button('reopen', 'not solved: back to the agents (asks what is still wrong)', () => ask(m, 'reopened', 'panel')));
+    if (st !== 'wontfix') acts.append(button('wontfix', 'leave it as it is (asks why)', () => ask(m, 'wontfix', 'panel')));
     if (lastAfterPicture(m)) acts.append(button(st === 'fixed' ? 'compare ◂' : 'compare', 'go to the view; the picture beside the newest after-picture', () => api.compare(m.id)));
     el.append(acts);
     return el;
   }
 
-  function ask(m: Mark, s: MarkStatus, question: string): void {
-    const text = window.prompt(`#${m.seq} → ${s}. ${question}`, '');
-    if (text === null) return;
-    void act(m, { by: DEVELOPER, status: s, ...(text.trim() ? { text: text.trim() } : {}) }, `#${m.seq} ${s}`);
+  /** Opens the text field for the reason of a change of status, in the mark's row or in the comparison's bar. */
+  function ask(m: Mark, s: AskedStatus, where: 'panel' | 'compare'): void {
+    editing = { id: m.id, text: '', status: s, where };
+    redraw();
+  }
+
+  /** What stands for the question of `ask`: the status asked for and the field (Enter saves, also empty; Esc drops). */
+  function asked(m: Mark, s: AskedStatus): HTMLElement[] {
+    return [
+      chip(`→ ${s}`, '', MARK_STATUS_COLOURS[s].bg, MARK_STATUS_COLOURS[s].fg),
+      field(QUESTION[s], (text) => void act(m, { by: DEVELOPER, status: s, ...(text ? { text } : {}) }, `#${m.seq} ${s}`)),
+    ];
+  }
+
+  /**
+   * The text field of `editing`: it keeps the text typed so far (so a rebuilt panel shows it again), gives the trimmed
+   * text to `done` on Enter and drops the edit on Escape.
+   */
+  function field(placeholder: string, done: (text: string) => void): HTMLInputElement {
+    const ed = document.createElement('input');
+    ed.type = 'text';
+    ed.maxLength = 2000;
+    ed.placeholder = placeholder;
+    ed.title = 'Enter saves, Esc cancels';
+    ed.value = editing?.text ?? '';
+    ed.oninput = () => {
+      if (editing) editing.text = ed.value;
+    };
+    ed.onkeydown = (e) => {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        editing = null;
+        redraw();
+      } else if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        const text = ed.value.trim();
+        editing = null;
+        done(text);
+      }
+    };
+    queueMicrotask(() => {
+      ed.focus();
+      ed.setSelectionRange(ed.value.length, ed.value.length);
+    });
+    return ed;
+  }
+
+  /** Builds the panel and the comparison again from the state (after an edit began or was dropped). */
+  function redraw(): void {
+    if (on) renderPanel();
+    if (comparing) showCompare(comparing);
   }
 
   async function act(m: Mark, patch: MarkPatch, done: string): Promise<void> {
@@ -337,7 +399,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
 
   function say(text: string): void {
     status = text;
-    // While a note is being edited the panel is not rebuilt (that would take the text field away): only the line.
+    // While a text is being typed the panel is not rebuilt (that would take the text field away): only the line.
     if (editing && statusEl) {
       statusEl.textContent = text;
       statusEl.style.display = text ? '' : 'none';
@@ -356,8 +418,13 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     const st = statusOf(m);
     title.textContent = `#${m.seq} · ${st} · ${m.note || '(no note)'}`;
     bar.append(title);
-    if (st !== 'accepted') bar.append(button('accept', 'the fault is solved', () => void act(m, { by: DEVELOPER, status: 'accepted' }, `#${m.seq} accepted`)));
-    if (st !== 'reopened') bar.append(button('reopen', 'not solved', () => ask(m, 'reopened', 'What is still wrong? (optional)')));
+    const typed = editing?.id === m.id && editing.where === 'compare' ? editing.status : undefined;
+    if (typed) {
+      bar.append(...asked(m, typed));
+    } else {
+      if (st !== 'accepted') bar.append(button('accept', 'the fault is solved', () => void act(m, { by: DEVELOPER, status: 'accepted' }, `#${m.seq} accepted`)));
+      if (st !== 'reopened') bar.append(button('reopen', 'not solved (asks what is still wrong)', () => ask(m, 'reopened', 'compare')));
+    }
     bar.append(button('close', 'close (Esc)', closeCompare));
     const pair = document.createElement('div');
     pair.className = 'mk-pair';
@@ -385,6 +452,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
   }
 
   function closeCompare(): void {
+    if (editing?.where === 'compare') editing = null;
     comparing = null;
     cmp.style.display = 'none';
     cmp.replaceChildren();
@@ -415,6 +483,7 @@ export function installMarking(host: MarkHost, options: MarkingOptions): Marking
     if (!on) {
       cancel();
       editing = null;
+      confirming = null;
       closeCompare();
     }
     layer.style.display = on ? 'block' : 'none';

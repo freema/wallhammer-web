@@ -1490,7 +1490,7 @@ function climateLine(): string {
  * whole tens of seconds while it runs, so the address does not change with every frame.
  */
 function viewHash(exact = false): string {
-  const keep = ['pace', 'px', 'cells', 'gpu', 'cover', 'volume'].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
+  const keep = ['pace', 'px', 'cells', 'gpu', 'cover', 'volume', ...(exact ? [] : ['marks'])].filter((k) => q.has(k)).map((k) => `&${k}=${q.get(k)}`).join('');
   const s = home();
   let where = '';
   if (s) {

@@ -9,7 +9,10 @@
 // sub-step, so a gap that would close is found before it does and no wall is passed through, however thin. A body that
 // has stood still for a while sleeps (no drift, no jitter) until the intent or the ground under its wheels changes.
 // Other wheeled bodies are met through sphere-pair impulses (`collideWheeledBodies`, `WheeledGroup`); walkers meet a
-// box kept round the hull (`syncObstacle`).
+// box kept round the hull (`syncObstacle`). The body may carry loads, masses at points of its frame (`setLoad`): a
+// step then runs about the centre of mass of the body and its loads together, while `position` and `velocity` stay
+// those of the frame's origin, the centre of mass of the body alone. A force at a point may be asked for a step
+// (`applyForce`).
 //
 // Only + − × ÷, Math.sqrt and the reproducible detAtan2 and detSinCos run in a step, so the same inputs give the same
 // bits; a step allocates nothing.
@@ -321,9 +324,18 @@ const MIN_NORMAL_UP = 0.3;
 const WAKE_COMPRESSION = 0.01;
 /** Most wheels of one body. */
 const MAX_WHEELS = 64;
-const STATE_VERSION = 1;
+/** Version 1 had no loads: the header and the wheels only. */
+const STATE_VERSION = 2;
 const HEADER = 30;
 const PER_WHEEL = 20;
+/** Numbers of one load: mass, then its point in the body's frame. */
+const PER_LOAD = 4;
+const GROUP_STATE_VERSION = 1;
+/** Numbers before the bodies in a group's state: version, number of bodies, leftover time. */
+const GROUP_HEADER = 3;
+
+/** Loads one body may carry (`WheeledBody.setLoad`). */
+export const WHEELED_LOAD_SLOTS = 8;
 
 /**
  * A rigid body carried on wheel rays over a `CollisionWorld` (see the file comment). `position` is the centre of mass,
@@ -362,8 +374,30 @@ export class WheeledBody {
   hullContacts = 0;
 
   private readonly dt: number;
-  private readonly invMass: number;
+  /** Inverse of the total mass (the body's and its loads'). */
+  private invMass: number;
+  /** Inverse of the inertia about the body's axes through the centre of mass of the body and its loads (point masses). */
   private readonly invI = new Float64Array(3);
+  /** Inertia of the body alone about its axes. */
+  private readonly ownI = new Float64Array(3);
+  /** Loads, `PER_LOAD` numbers a slot: mass (0: empty), x, y, z in the body's frame. */
+  private readonly loads = new Float64Array(WHEELED_LOAD_SLOTS * PER_LOAD);
+  private loadSum = 0;
+  /** One past the last slot in use; 0: no loads, and nothing below differs from a body that never had one. */
+  private loadEnd = 0;
+  /** Centre of mass of the body and its loads in the body's frame, and its distance from the origin. */
+  private readonly com = new Float64Array(3);
+  private comReach = 0;
+  /**
+   * The point of the body's frame that `position` and `velocity` stand for right now: the origin, except inside a step
+   * (and an impulse or a meeting of two bodies) of a body with loads, where it is `com` (`toCom`, `toOrigin`).
+   */
+  private readonly at = new Float64Array(3);
+  /** `com` in the world's axes, as `toCom` left it. */
+  private readonly comWorld = new Float64Array(3);
+  /** Force and torque about the centre of mass waiting for the next step (`applyForce`). */
+  private readonly due = new Float64Array(6);
+  private forced = false;
   private readonly hullReach: number;
   private readonly sleepSteps: number;
   private readonly nDriven: number;
@@ -372,6 +406,7 @@ export class WheeledBody {
   private readonly fixed: FixedSteps;
   /** The intent of the steps `advance` runs. */
   private dueIntent: WheeledIntent | null = null;
+  private dueAfter: (() => void) | null = null;
   private sleepCount = 0;
   private heldAsleep = false;
   private obstacle = -1;
@@ -420,9 +455,12 @@ export class WheeledBody {
     const h2 = 4 * s.halfHeight * s.halfHeight;
     const l2 = 4 * s.halfLength * s.halfLength;
     const k = (s.mass / 12) * (s.inertiaScale > 0 ? s.inertiaScale : 1);
-    this.invI[0] = 1 / (k * (h2 + l2));
-    this.invI[1] = 1 / (k * (w2 + l2));
-    this.invI[2] = 1 / (k * (w2 + h2));
+    this.ownI[0] = k * (h2 + l2);
+    this.ownI[1] = k * (w2 + l2);
+    this.ownI[2] = k * (w2 + h2);
+    this.invI[0] = 1 / this.ownI[0];
+    this.invI[1] = 1 / this.ownI[1];
+    this.invI[2] = 1 / this.ownI[2];
     this.wheels = s.wheels.map((w) => new WheelState(w));
     const n = s.wheels.length;
     this.prevLen = new Float64Array(n);
@@ -477,7 +515,7 @@ export class WheeledBody {
     this.hullSpheres = spheres;
     this.hullReach = reach;
     this.worldSpheres = new Float64Array(spheres.length);
-    this.stateScratch = new Float64Array(HEADER + PER_WHEEL * n);
+    this.stateScratch = new Float64Array(HEADER + PER_WHEEL * n + PER_LOAD * WHEELED_LOAD_SLOTS);
     this.stateView = new Uint8Array(this.stateScratch.buffer);
   }
 
@@ -514,12 +552,33 @@ export class WheeledBody {
     return detAtan2(R[6]!, R[8]!);
   }
 
-  /** Kinetic energy (linear and angular), J. */
+  /** Mass of the loads the body carries (`setLoad`), kg. */
+  get loadMass(): number {
+    return this.loadSum;
+  }
+
+  /** Mass of the body and its loads, kg. */
+  get totalMass(): number {
+    return this.setup.mass + this.loadSum;
+  }
+
+  /** Kinetic energy (linear and angular) of the body and its loads, J. */
   get kineticEnergy(): number {
     const v = this.velocity;
     const w = this.angularVelocity;
     const R = this.rotation;
-    let e = 0.5 * this.setup.mass * (v[0]! * v[0]! + v[1]! * v[1]! + v[2]! * v[2]!);
+    let vx = v[0]!;
+    let vy = v[1]!;
+    let vz = v[2]!;
+    if (this.loadEnd > 0) {
+      // The velocity of the centre of mass of the body and its loads.
+      const c = this.com;
+      this.local(c[0]!, c[1]!, c[2]!);
+      vx += w[1]! * this.oz - w[2]! * this.oy;
+      vy += w[2]! * this.ox - w[0]! * this.oz;
+      vz += w[0]! * this.oy - w[1]! * this.ox;
+    }
+    let e = 0.5 * (this.setup.mass + this.loadSum) * (vx * vx + vy * vy + vz * vz);
     for (let k = 0; k < 3; k++) {
       const b = w[0]! * R[k * 3]! + w[1]! * R[k * 3 + 1]! + w[2]! * R[k * 3 + 2]!;
       e += (0.5 * b * b) / this.invI[k]!;
@@ -527,10 +586,13 @@ export class WheeledBody {
     return e;
   }
 
-  /** Height of the centre of mass above flat ground when the body rests on its wheels, metres (for `teleport`). */
+  /**
+   * Height of the centre of mass above flat ground when the body rests on its wheels, metres (for `teleport`); with
+   * loads, as if their weight were shared evenly by the wheels.
+   */
   get restHeight(): number {
     const s = this.setup;
-    const load = (s.mass * s.gravity) / s.wheels.length;
+    const load = ((s.mass + this.loadSum) * s.gravity) / s.wheels.length;
     let sum = 0;
     for (const w of s.wheels) {
       let c = load / w.stiffness;
@@ -575,6 +637,8 @@ export class WheeledBody {
     this.prevQ.set(q);
     this.velocity.fill(0);
     this.angularVelocity.fill(0);
+    this.due.fill(0);
+    this.forced = false;
     this.fixed.reset();
     this.steps = 0;
     this.steerAngle = 0;
@@ -621,25 +685,98 @@ export class WheeledBody {
   applyImpulse(px: number, py: number, pz: number, jx: number, jy: number, jz: number): void {
     this.wake();
     const p = this.position;
+    const loaded = this.loadEnd > 0;
+    if (loaded) {
+      this.updateRotation();
+      this.toCom();
+    }
     this.push(this.velocity, this.angularVelocity, px - p[0]!, py - p[1]!, pz - p[2]!, jx, jy, jz);
+    if (loaded) this.toOrigin();
+  }
+
+  /**
+   * Adds a force (N, world) at a world point to the body's next step, and only to that one: call it before every step
+   * the force lasts (from `afterStep` of `advance`, which runs before the next step). Forces of several calls add up.
+   * Wakes the body, so a force that never ends keeps it awake; a weight carried along is a load (`setLoad`) instead.
+   */
+  applyForce(px: number, py: number, pz: number, fx: number, fy: number, fz: number): void {
+    this.wake();
+    const p = this.position;
+    let rx = px - p[0]!;
+    let ry = py - p[1]!;
+    let rz = pz - p[2]!;
+    if (this.loadEnd > 0) {
+      // The arm from the centre of mass of the body and its loads.
+      const c = this.com;
+      this.updateRotation();
+      this.local(c[0]!, c[1]!, c[2]!);
+      rx -= this.ox;
+      ry -= this.oy;
+      rz -= this.oz;
+    }
+    const d = this.due;
+    d[0] = d[0]! + fx;
+    d[1] = d[1]! + fy;
+    d[2] = d[2]! + fz;
+    d[3] = d[3]! + (ry * fz - rz * fy);
+    d[4] = d[4]! + (rz * fx - rx * fz);
+    d[5] = d[5]! + (rx * fy - ry * fx);
+    this.forced = true;
+  }
+
+  /**
+   * Sets the load of a slot (0 to `WHEELED_LOAD_SLOTS` − 1): `mass` kg carried at a point of the body's frame (origin
+   * the centre of mass of the body alone, +x right, +y up, −z forward); mass 0 empties the slot. The loads are point
+   * masses fixed to the body: the steps run about the centre of mass of the body and its loads together, with their
+   * mass and inertia, so the springs sink under a load, the body leans to it, and a load high up leans the body out
+   * of a turn and back under drive. The body's frame stays where it is: `position` and `velocity` are still those of
+   * the centre of mass of the body alone, and the wheels and the hull do not move in it. Wakes the body when the slot
+   * changes; the loads are part of the saved state.
+   */
+  setLoad(slot: number, mass: number, x = 0, y = 0, z = 0): void {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= WHEELED_LOAD_SLOTS) throw new Error(`WheeledBody.setLoad: slot 0 to ${WHEELED_LOAD_SLOTS - 1}`);
+    if (!(mass >= 0) || !Number.isFinite(mass) || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new Error('WheeledBody.setLoad: a finite mass of 0 or more at a finite point');
+    const L = this.loads;
+    const b = slot * PER_LOAD;
+    if (mass === 0) x = y = z = 0;
+    if (L[b] === mass && L[b + 1] === x && L[b + 2] === y && L[b + 3] === z) return;
+    L[b] = mass;
+    L[b + 1] = x;
+    L[b + 2] = y;
+    L[b + 3] = z;
+    this.sumLoads();
+    this.wake();
+  }
+
+  /** Empties every load slot (wakes the body when there was a load). */
+  clearLoads(): void {
+    if (this.loadEnd === 0) return;
+    this.loads.fill(0);
+    this.sumLoads();
+    this.wake();
   }
 
   /**
    * Advances by real seconds in fixed steps; returns the number of steps taken. Leftover time carries to the next call,
-   * so one call of 1/30 s and two of 1/60 s end in the same place.
+   * so one call of 1/30 s and two of 1/60 s end in the same place. `afterStep`, when given, is called after every
+   * step: the place for what has to follow each step (a force for the next one, an obstacle in the collision world, a
+   * timeline). It may change `intent` for the next step.
    */
-  advance(dt: number, intent: WheeledIntent): number {
+  advance(dt: number, intent: WheeledIntent, afterStep?: () => void): number {
     if (GROUP_OF.has(this)) throw new Error('WheeledBody.advance: the body is in a WheeledGroup; advance the group');
     if (!(dt > 0)) return 0;
     this.dueIntent = intent;
+    this.dueAfter = afterStep ?? null;
     const n = this.fixed.advance(dt, this.stepDue, this.setup.maxStepsPerAdvance);
     this.dueIntent = null;
+    this.dueAfter = null;
     return n;
   }
 
-  /** One step due in `advance`. */
+  /** One step due in `advance`, then its hook. */
   private readonly stepDue = (): void => {
     this.step(this.dueIntent!);
+    if (this.dueAfter) this.dueAfter();
   };
 
   /** One fixed step (for scripts, tests and `WheeledGroup`). */
@@ -710,14 +847,27 @@ export class WheeledBody {
       else drive = throttle * driveCurve(fwdSpeed < 0 ? -fwdSpeed : 0, s.reverseForce, s.reverseSpeed);
     }
 
-    // Phase A: gravity, drag and the springs, as forces over the step.
+    // Phase A: gravity, drag, the springs and a force asked for this step, as forces over the step.
+    const loaded = this.loadEnd > 0;
+    if (loaded) this.toCom();
     this.castWheels(h);
     let fx = 0;
-    let fy = -s.gravity * s.mass; // UP: gravity would be along the local down.
+    let fy = -s.gravity * (s.mass + this.loadSum); // UP: gravity would be along the local down.
     let fz = 0;
     let tx = 0;
     let ty = 0;
     let tz = 0;
+    if (this.forced) {
+      const d = this.due;
+      fx += d[0]!;
+      fy += d[1]!;
+      fz += d[2]!;
+      tx += d[3]!;
+      ty += d[4]!;
+      tz += d[5]!;
+      d.fill(0);
+      this.forced = false;
+    }
     if (s.drag > 0) {
       const sp = Math.sqrt(v[0]! * v[0]! + v[1]! * v[1]! + v[2]! * v[2]!);
       fx -= s.drag * sp * v[0]!;
@@ -732,7 +882,7 @@ export class WheeledBody {
       const sp = ws.spec;
       const n = ws.normal;
       // Velocity of the mount; the rate of compression is its approach to the ground along the ray.
-      this.local(sp.x, sp.y, sp.z);
+      this.point(sp.x, sp.y, sp.z);
       const ax = this.ox;
       const ay = this.oy;
       const az = this.oz;
@@ -773,7 +923,7 @@ export class WheeledBody {
 
     // Phase C: the hull against the world, and the motion, in sub-steps.
     const ws2 = w[0]! * w[0]! + w[1]! * w[1]! + w[2]! * w[2]!;
-    const reachSpeed = Math.sqrt(v[0]! * v[0]! + v[1]! * v[1]! + v[2]! * v[2]!) + Math.sqrt(ws2) * this.hullReach;
+    const reachSpeed = Math.sqrt(v[0]! * v[0]! + v[1]! * v[1]! + v[2]! * v[2]!) + Math.sqrt(ws2) * (this.hullReach + this.comReach);
     let subs = Math.ceil((reachSpeed * h) / (0.5 * this.hullRadius));
     if (!(subs >= 1)) subs = 1;
     if (subs > MAX_SUBSTEPS) subs = MAX_SUBSTEPS;
@@ -795,6 +945,7 @@ export class WheeledBody {
     }
     this.hullContacts = contacts;
     this.updateRotation();
+    if (loaded) this.toOrigin();
 
     // Wheels: spin and droop.
     for (let i = 0; i < nw; i++) {
@@ -957,7 +1108,8 @@ export class WheeledBody {
 
   /**
    * Writes the whole moving state (pose, velocities, the previous pose for drawing, leftover time, steering, sleep,
-   * every wheel's outputs) into `out` (at least `stateBytes` from `offset`; default a new array) and returns it.
+   * every wheel's outputs, the loads) into `out` (at least `stateBytes` from `offset`; default a new array) and
+   * returns it. A force waiting for the next step (`applyForce`) is an input and not part of it.
    */
   saveState(out?: Uint8Array, offset = 0): Uint8Array {
     const f = this.stateScratch;
@@ -997,19 +1149,33 @@ export class WheeledBody {
       f[b + 18] = ws.surface;
       f[b + 19] = ws.surfaceTag;
     }
+    f.set(this.loads, HEADER + this.wheels.length * PER_WHEEL);
     const o = out ?? new Uint8Array(this.stateBytes);
     if (o.length < offset + this.stateBytes) throw new Error('WheeledBody.saveState: the output is too short');
     o.set(this.stateView, offset);
     return o;
   }
 
-  /** Restores a state written by `saveState` of a body with the same setup. */
+  /**
+   * Restores a state written by `saveState` of a body with the same setup. A state of the format before loads (the
+   * shorter one, without them) is read too and leaves the body without loads. Drops a force waiting for the next step.
+   */
   loadState(bytes: Uint8Array, offset = 0): void {
-    const nb = this.stateBytes;
-    if (bytes.length < offset + nb) throw new Error('WheeledBody.loadState: too few bytes');
     const f = this.stateScratch;
+    if (bytes.length < offset + 8) throw new Error('WheeledBody.loadState: too few bytes');
+    this.stateView.set(bytes.subarray(offset, offset + 8));
+    const version = f[0]!;
+    if (version !== STATE_VERSION && version !== 1) throw new Error('WheeledBody.loadState: not a state of this body');
+    const loadsAt = HEADER + this.wheels.length * PER_WHEEL;
+    const nb = version === 1 ? loadsAt * 8 : this.stateBytes;
+    if (bytes.length < offset + nb) throw new Error('WheeledBody.loadState: too few bytes');
     this.stateView.set(bytes.subarray(offset, offset + nb));
-    if (f[0] !== STATE_VERSION || f[26] !== this.wheels.length) throw new Error('WheeledBody.loadState: not a state of this body');
+    if (f[26] !== this.wheels.length) throw new Error('WheeledBody.loadState: not a state of this body');
+    if (version === 1) this.loads.fill(0);
+    else this.loads.set(f.subarray(loadsAt, loadsAt + PER_LOAD * WHEELED_LOAD_SLOTS));
+    this.sumLoads();
+    this.due.fill(0);
+    this.forced = false;
     this.position.set(f.subarray(1, 4));
     this.orientation.set(f.subarray(4, 8));
     this.velocity.set(f.subarray(8, 11));
@@ -1128,6 +1294,29 @@ export class WheeledBody {
     if (n === 0) return false;
     this.wake();
     other.wake();
+    // Bodies with loads meet about the centres of mass of the body and its loads: the arms move there with them.
+    const la = this.loadEnd > 0;
+    const lb = other.loadEnd > 0;
+    if (la) {
+      this.toCom();
+      const o = this.comWorld;
+      for (let k = 0; k < n; k++) {
+        const b = k * 12;
+        c[b] = c[b]! - o[0]!;
+        c[b + 1] = c[b + 1]! - o[1]!;
+        c[b + 2] = c[b + 2]! - o[2]!;
+      }
+    }
+    if (lb) {
+      other.toCom();
+      const o = other.comWorld;
+      for (let k = 0; k < n; k++) {
+        const b = k * 12;
+        c[b + 3] = c[b + 3]! - o[0]!;
+        c[b + 4] = c[b + 4]! - o[1]!;
+        c[b + 5] = c[b + 5]! - o[2]!;
+      }
+    }
     const e = this.setup.restitution < other.setup.restitution ? this.setup.restitution : other.setup.restitution;
     const mu = this.setup.hullFriction < other.setup.hullFriction ? this.setup.hullFriction : other.setup.hullFriction;
     const bounceMin = this.setup.bounceSpeed > other.setup.bounceSpeed ? this.setup.bounceSpeed : other.setup.bounceSpeed;
@@ -1185,6 +1374,8 @@ export class WheeledBody {
       pb[1] = pb[1]! - dny * sb;
       pb[2] = pb[2]! - dnz * sb;
     }
+    if (la) this.toOrigin();
+    if (lb) other.toOrigin();
     return true;
   }
 
@@ -1267,6 +1458,118 @@ export class WheeledBody {
     ang[2] = ang[2]! + this.oz;
   }
 
+  /**
+   * A point of the body's frame as an arm from what `position` stands for now (the origin, or the common centre of
+   * mass inside a step of a body with loads), in the world's axes, into ox, oy, oz.
+   */
+  private point(x: number, y: number, z: number): void {
+    const a = this.at;
+    this.local(x - a[0]!, y - a[1]!, z - a[2]!);
+  }
+
+  /** The total mass, the common centre of mass and the inertia about it with the loads as they are now. */
+  private sumLoads(): void {
+    const L = this.loads;
+    const c = this.com;
+    const own = this.setup.mass;
+    let sum = 0;
+    let end = 0;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (let k = 0; k < WHEELED_LOAD_SLOTS; k++) {
+      const b = k * PER_LOAD;
+      const m = L[b]!;
+      if (!(m > 0)) continue;
+      sum += m;
+      cx += m * L[b + 1]!;
+      cy += m * L[b + 2]!;
+      cz += m * L[b + 3]!;
+      end = k + 1;
+    }
+    this.loadSum = sum;
+    this.loadEnd = end;
+    this.invMass = 1 / (own + sum);
+    if (end === 0) {
+      c.fill(0);
+      this.comReach = 0;
+      this.invI[0] = 1 / this.ownI[0]!;
+      this.invI[1] = 1 / this.ownI[1]!;
+      this.invI[2] = 1 / this.ownI[2]!;
+      return;
+    }
+    cx /= own + sum;
+    cy /= own + sum;
+    cz /= own + sum;
+    c[0] = cx;
+    c[1] = cy;
+    c[2] = cz;
+    this.comReach = Math.sqrt(cx * cx + cy * cy + cz * cz);
+    // The body's own inertia moved to the common centre, plus every load as a point mass there (the diagonal only).
+    let ix = own * (cy * cy + cz * cz);
+    let iy = own * (cx * cx + cz * cz);
+    let iz = own * (cx * cx + cy * cy);
+    for (let k = 0; k < end; k++) {
+      const b = k * PER_LOAD;
+      const m = L[b]!;
+      if (!(m > 0)) continue;
+      const x = L[b + 1]! - cx;
+      const y = L[b + 2]! - cy;
+      const z = L[b + 3]! - cz;
+      ix += m * (y * y + z * z);
+      iy += m * (x * x + z * z);
+      iz += m * (x * x + y * y);
+    }
+    this.invI[0] = 1 / (this.ownI[0]! + ix);
+    this.invI[1] = 1 / (this.ownI[1]! + iy);
+    this.invI[2] = 1 / (this.ownI[2]! + iz);
+  }
+
+  /**
+   * `position` and `velocity` from the frame's origin to the centre of mass of the body and its loads (the rotation
+   * must be current). Only for a body with loads; `toOrigin` takes them back.
+   */
+  private toCom(): void {
+    const c = this.com;
+    const p = this.position;
+    const v = this.velocity;
+    const w = this.angularVelocity;
+    const o = this.comWorld;
+    this.local(c[0]!, c[1]!, c[2]!);
+    const rx = this.ox;
+    const ry = this.oy;
+    const rz = this.oz;
+    o[0] = rx;
+    o[1] = ry;
+    o[2] = rz;
+    p[0] = p[0]! + rx;
+    p[1] = p[1]! + ry;
+    p[2] = p[2]! + rz;
+    v[0] = v[0]! + (w[1]! * rz - w[2]! * ry);
+    v[1] = v[1]! + (w[2]! * rx - w[0]! * rz);
+    v[2] = v[2]! + (w[0]! * ry - w[1]! * rx);
+    this.at.set(c);
+  }
+
+  /** `position` and `velocity` back from the common centre of mass to the frame's origin (the rotation must be current). */
+  private toOrigin(): void {
+    const c = this.com;
+    const p = this.position;
+    const v = this.velocity;
+    const w = this.angularVelocity;
+    this.local(c[0]!, c[1]!, c[2]!);
+    const rx = this.ox;
+    const ry = this.oy;
+    const rz = this.oz;
+    p[0] = p[0]! - rx;
+    p[1] = p[1]! - ry;
+    p[2] = p[2]! - rz;
+    v[0] = v[0]! - (w[1]! * rz - w[2]! * ry);
+    v[1] = v[1]! - (w[2]! * rx - w[0]! * rz);
+    v[2] = v[2]! - (w[0]! * ry - w[1]! * rx);
+    this.at.fill(0);
+  }
+
   /** Casts every wheel's ray and fills its contact, normal, compression and length. */
   private castWheels(h: number): void {
     const p = this.position;
@@ -1280,7 +1583,7 @@ export class WheeledBody {
     for (let i = 0; i < this.wheels.length; i++) {
       const ws = this.wheels[i]!;
       const sp = ws.spec;
-      this.local(sp.x, sp.y, sp.z);
+      this.point(sp.x, sp.y, sp.z);
       const mx = p[0]! + this.ox;
       const my = p[1]! + this.oy;
       const mz = p[2]! + this.oz;
@@ -1483,7 +1786,7 @@ export class WheeledBody {
     const o = this.worldSpheres;
     const p = this.position;
     for (let i = 0; i < S.length; i += 4) {
-      this.local(S[i]!, S[i + 1]!, S[i + 2]!);
+      this.point(S[i]!, S[i + 1]!, S[i + 2]!);
       o[i] = p[0]! + this.ox;
       o[i + 1] = p[1]! + this.oy;
       o[i + 2] = p[2]! + this.oz;
@@ -1505,7 +1808,7 @@ export class WheeledBody {
     let n = 0;
     for (let i = 0; i < S.length && n < MAX_CONTACTS; i += 4) {
       const r = S[i + 3]!;
-      this.local(S[i]!, S[i + 1]!, S[i + 2]!);
+      this.point(S[i]!, S[i + 1]!, S[i + 2]!);
       const cx = p[0]! + this.ox;
       const cy = p[1]! + this.oy;
       const cz = p[2]! + this.oz;
@@ -1712,6 +2015,8 @@ export class WheeledGroup {
   /** The group's fixed steps (one clock for all its bodies). */
   readonly fixed: FixedSteps;
   private readonly idle = newWheeledIntent();
+  private readonly head = new Float64Array(GROUP_HEADER);
+  private readonly headView = new Uint8Array(this.head.buffer);
   private dueIntents: readonly (WheeledIntent | null | undefined)[] = [];
   private dueAfter: ((touching: number) => void) | null = null;
 
@@ -1766,6 +2071,61 @@ export class WheeledGroup {
       for (let j = i + 1; j < bs.length; j++) if (bs[i]!.collide(bs[j]!)) touching++;
     }
     return touching;
+  }
+
+  /** Bytes of one saved state of the group: its own leftover time and every body's state. */
+  get stateBytes(): number {
+    let n = GROUP_HEADER * 8;
+    for (const b of this.bodies) n += b.stateBytes;
+    return n;
+  }
+
+  /**
+   * Writes the group's leftover time and every body's whole state, in the order of `bodies`, into `out` (at least
+   * `stateBytes` from `offset`; default a new array) and returns it.
+   */
+  saveState(out?: Uint8Array, offset = 0): Uint8Array {
+    const o = out ?? new Uint8Array(this.stateBytes);
+    if (o.length < offset + this.stateBytes) throw new Error('WheeledGroup.saveState: the output is too short');
+    const h = this.head;
+    h[0] = GROUP_STATE_VERSION;
+    h[1] = this.bodies.length;
+    h[2] = this.fixed.leftover;
+    o.set(this.headView, offset);
+    let at = offset + GROUP_HEADER * 8;
+    for (const b of this.bodies) {
+      b.saveState(o, at);
+      at += b.stateBytes;
+    }
+    return o;
+  }
+
+  /** Restores a state written by `saveState` of a group of bodies with the same setups in the same order. */
+  loadState(bytes: Uint8Array, offset = 0): void {
+    if (bytes.length < offset + this.stateBytes) throw new Error('WheeledGroup.loadState: too few bytes');
+    const h = this.head;
+    this.headView.set(bytes.subarray(offset, offset + GROUP_HEADER * 8));
+    if (h[0] !== GROUP_STATE_VERSION || h[1] !== this.bodies.length) throw new Error('WheeledGroup.loadState: not a state of this group');
+    const leftover = h[2]!;
+    let at = offset + GROUP_HEADER * 8;
+    for (const b of this.bodies) {
+      b.loadState(bytes, at);
+      at += b.stateBytes;
+    }
+    this.fixed.leftover = leftover;
+  }
+
+  /** This group as a part of a simulation's state (`Simulation.addState`), like `WheeledBody.simState`. */
+  simState(name: string): WalkerSimState {
+    const buf = new Uint8Array(this.stateBytes);
+    return {
+      name,
+      save: (w) => w.bytes(this.saveState(buf)),
+      load: (r) => {
+        r.into(buf);
+        this.loadState(buf);
+      },
+    };
   }
 }
 
